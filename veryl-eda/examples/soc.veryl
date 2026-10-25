@@ -38,6 +38,7 @@ module RiscvSoc (
     var imem_inst : logic<32>;
     var dmem_addr : logic<32>;
     var dmem_wdata: logic<32>;
+    var dmem_wstrb: logic<4>;
     var dmem_rdata: logic<32>;
     var dmem_we   : logic;
     var dmem      : logic<32> [16];
@@ -45,6 +46,7 @@ module RiscvSoc (
 
     // 0x000-0x03f: data RAM, 0x100: LED register
     let is_led: logic = dmem_addr[8];
+    let wmask : logic<32> = {dmem_wstrb[3] repeat 8, dmem_wstrb[2] repeat 8, dmem_wstrb[1] repeat 8, dmem_wstrb[0] repeat 8};
 
     inst u_rom: ProgRom (
         i_addr: imem_addr,
@@ -58,6 +60,7 @@ module RiscvSoc (
         i_imem_inst : imem_inst  ,
         o_dmem_addr : dmem_addr  ,
         o_dmem_wdata: dmem_wdata ,
+        o_dmem_wstrb: dmem_wstrb ,
         i_dmem_rdata: dmem_rdata ,
         o_dmem_we   : dmem_we    ,
     );
@@ -66,7 +69,7 @@ module RiscvSoc (
     always_ff (i_clk, i_rst) {
         if_reset {
         } else if dmem_we && !is_led {
-            dmem[dmem_addr[5:2]] = dmem_wdata;
+            dmem[dmem_addr[5:2]] = (dmem[dmem_addr[5:2]] & ~wmask) | (dmem_wdata & wmask);
         }
     }
     assign dmem_rdata = dmem[dmem_addr[5:2]];
@@ -74,7 +77,7 @@ module RiscvSoc (
     always_ff (i_clk, i_rst) {
         if_reset {
             led = 8'd0;
-        } else if dmem_we && is_led {
+        } else if dmem_we && is_led && dmem_wstrb[0] {
             led = dmem_wdata[7:0];
         }
     }

@@ -8,6 +8,11 @@ package RiscvTypes {
         And,
         Or,
         Slt,
+        Sltu,
+        Xor,
+        Sll,
+        Srl,
+        Sra,
     }
 
     enum Opcode: logic<7> {
@@ -17,6 +22,9 @@ package RiscvTypes {
         Store  = 7'b0100011,
         Branch = 7'b1100011,
         Jal    = 7'b1101111,
+        Jalr   = 7'b1100111,
+        Lui    = 7'b0110111,
+        Auipc  = 7'b0010111,
     }
 }
 
@@ -24,30 +32,28 @@ package RiscvTypes {
 // 2. 算術邏輯單元（ALU）
 // ==========================================
 module Alu (
-    i_op  : input  RiscvTypes::AluOp,
-    i_a   : input  logic<32>,
-    i_b   : input  logic<32>,
-    o_res : output logic<32>,
-    o_zero: output logic,
+    i_op : input  RiscvTypes::AluOp,
+    i_a  : input  logic<32>,
+    i_b  : input  logic<32>,
+    o_res: output logic<32>,
 ) {
     import RiscvTypes::*;
 
     always_comb {
         case i_op {
-            AluOp::Add: o_res = i_a + i_b;
-            AluOp::Sub: o_res = i_a - i_b;
-            AluOp::And: o_res = i_a & i_b;
-            AluOp::Or : o_res = i_a | i_b;
-            AluOp::Slt: {
-                if $signed(i_a) <: $signed(i_b) {
-                    o_res = 32'd1;
-                } else {
-                    o_res = 32'd0;
-                }
-            }
-            default: o_res = 32'd0;
+            AluOp::Add : o_res = i_a + i_b;
+            AluOp::Sub : o_res = i_a - i_b;
+            AluOp::And : o_res = i_a & i_b;
+            AluOp::Or  : o_res = i_a | i_b;
+            AluOp::Xor : o_res = i_a ^ i_b;
+            AluOp::Slt : o_res = {31'd0, $signed(i_a) <: $signed(i_b)};
+            AluOp::Sltu: o_res = {31'd0, i_a <: i_b};
+            // 移位量只取 i_b 的低 5 bit
+            AluOp::Sll: o_res = i_a << i_b[4:0];
+            AluOp::Srl: o_res = i_a >> i_b[4:0];
+            AluOp::Sra: o_res = $signed(i_a) >>> i_b[4:0];
+            default   : o_res = 32'd0;
         }
-        o_zero = (o_res == 32'd0);
     }
 }
 
@@ -91,8 +97,11 @@ module RegFile (
 }
 
 // ==========================================
-// 4. CPU 頂層模組
+// 4. CPU 頂層模組（單週期 RV32I，不含 fence/ecall/ebreak/CSR）
 // ==========================================
+// 資料記憶體介面：o_dmem_addr 為位元組位址；寫入時 o_dmem_wdata 已對齊到
+// 32 bit 字中的位置，o_dmem_wstrb 指出要寫的位元組；讀取時 i_dmem_rdata
+// 是 o_dmem_addr 所在的整個字（由 CPU 取出 byte/halfword 並做符號擴展）。
 module RiscvCore (
     i_clk       : input  clock,
     i_rst       : input  reset,
@@ -100,6 +109,7 @@ module RiscvCore (
     i_imem_inst : input  logic<32>,
     o_dmem_addr : output logic<32>,
     o_dmem_wdata: output logic<32>,
+    o_dmem_wstrb: output logic<4>,
     i_dmem_rdata: input  logic<32>,
     o_dmem_we   : output logic,
 ) {
@@ -114,11 +124,15 @@ module RiscvCore (
     var rs2_data  : logic<32>;
     var alu_src_b : logic<32>;
     var alu_out   : logic<32>;
-    var alu_zero  : logic;
     var imm       : logic<32>;
     var wb_data   : logic<32>;
+    var load_data : logic<32>;
+    var store_data: logic<32>;
+    var store_strb: logic<4>;
+    var take      : logic;
 
     var alu_op    : AluOp;
+    var arith_op  : AluOp;
     var reg_write : logic;
     var dmem_write: logic;
 
@@ -132,67 +146,100 @@ module RiscvCore (
     // --- 立即數解碼 ---
     always_comb {
         case opcode {
-            Opcode::IType, Opcode::Load: 
+            Opcode::IType, Opcode::Load, Opcode::Jalr:
                 imm = {i_imem_inst[31] repeat 20, i_imem_inst[31:20]};
-            Opcode::Store: 
+            Opcode::Store:
                 imm = {i_imem_inst[31] repeat 20, i_imem_inst[31:25], i_imem_inst[11:7]};
-            Opcode::Branch: 
+            Opcode::Branch:
                 imm = {i_imem_inst[31] repeat 20, i_imem_inst[7], i_imem_inst[30:25], i_imem_inst[11:8], 1'b0};
-            Opcode::Jal: 
+            Opcode::Jal:
                 imm = {i_imem_inst[31] repeat 12, i_imem_inst[19:12], i_imem_inst[20], i_imem_inst[30:21], 1'b0};
-            default: 
+            Opcode::Lui, Opcode::Auipc:
+                imm = {i_imem_inst[31:12], 12'd0};
+            default:
                 imm = 32'd0;
         }
     }
 
     // --- 控制邏輯 ---
+    // funct7[5] 選 sub / sra；I-type 只有 srai 使用（addi 沒有減法版本）
+    let alt: logic = funct7[5] && (opcode == Opcode::RType || funct3 == 3'b101);
+
+    always_comb {
+        case funct3 {
+            3'b000 : arith_op = if alt ? AluOp::Sub : AluOp::Add;
+            3'b001 : arith_op = AluOp::Sll;
+            3'b010 : arith_op = AluOp::Slt;
+            3'b011 : arith_op = AluOp::Sltu;
+            3'b100 : arith_op = AluOp::Xor;
+            3'b101 : arith_op = if alt ? AluOp::Sra : AluOp::Srl;
+            3'b110 : arith_op = AluOp::Or;
+            default: arith_op = AluOp::And;
+        }
+    }
+
     always_comb {
         reg_write  = 1'b0;
         dmem_write = 1'b0;
         alu_op     = AluOp::Add;
 
         case opcode {
-            Opcode::RType: {
+            Opcode::RType, Opcode::IType: {
                 reg_write = 1'b1;
-                case funct3 {
-                    3'b000: {
-                        if funct7[5] {
-                            alu_op = AluOp::Sub;
-                        } else {
-                            alu_op = AluOp::Add;
-                        }
-                    }
-                    3'b111 : alu_op = AluOp::And;
-                    3'b110 : alu_op = AluOp::Or;
-                    3'b010 : alu_op = AluOp::Slt;
-                    default: alu_op = AluOp::Add;
-                }
+                alu_op    = arith_op;
             }
-            Opcode::IType: {
+            Opcode::Load, Opcode::Jal, Opcode::Jalr, Opcode::Lui, Opcode::Auipc: {
                 reg_write = 1'b1;
-                case funct3 {
-                    3'b000 : alu_op = AluOp::Add;
-                    3'b111 : alu_op = AluOp::And;
-                    3'b110 : alu_op = AluOp::Or;
-                    3'b010 : alu_op = AluOp::Slt;
-                    default: alu_op = AluOp::Add;
-                }
-            }
-            Opcode::Load: {
-                reg_write = 1'b1;
-                alu_op    = AluOp::Add;
             }
             Opcode::Store: {
                 dmem_write = 1'b1;
-                alu_op     = AluOp::Add;
-            }
-            Opcode::Branch: {
-                alu_op = AluOp::Sub;
-            }
-            Opcode::Jal: {
-                reg_write = 1'b1;
             }
             default: {}
+        }
+    }
+
+    // --- 分支條件（獨立的比較器，不經過 ALU）---
+    always_comb {
+        case funct3 {
+            3'b000 : take = rs1_data == rs2_data;                     // beq
+            3'b001 : take = rs1_data != rs2_data;                     // bne
+            3'b100 : take = $signed(rs1_data) <: $signed(rs2_data);   // blt
+            3'b101 : take = $signed(rs1_data) >= $signed(rs2_data);   // bge
+            3'b110 : take = rs1_data <: rs2_data;                     // bltu
+            3'b111 : take = rs1_data >= rs2_data;                     // bgeu
+            default: take = 1'b0;
+        }
+    }
+
+    // --- 載入：從整個字取出 byte / halfword ---
+    let byte_off : logic<2>  = alu_out[1:0];
+    let load_word: logic<32> = i_dmem_rdata >> {byte_off, 3'b000};
+
+    always_comb {
+        case funct3 {
+            3'b000 : load_data = {load_word[7] repeat 24, load_word[7:0]};   // lb
+            3'b001 : load_data = {load_word[15] repeat 16, load_word[15:0]}; // lh
+            3'b100 : load_data = {24'd0, load_word[7:0]};                    // lbu
+            3'b101 : load_data = {16'd0, load_word[15:0]};                   // lhu
+            default: load_data = load_word;                                  // lw
+        }
+    }
+
+    // --- 儲存：把資料複製到每個位元組位置，並產生 byte strobe ---
+    always_comb {
+        case funct3 {
+            3'b000: {
+                store_data = {rs2_data[7:0] repeat 4};
+                store_strb = 4'b0001 << byte_off;
+            }
+            3'b001: {
+                store_data = {rs2_data[15:0] repeat 2};
+                store_strb = 4'b0011 << byte_off;
+            }
+            default: {
+                store_data = rs2_data;
+                store_strb = 4'b1111;
+            }
         }
     }
 
@@ -205,9 +252,11 @@ module RiscvCore (
         }
 
         case opcode {
-            Opcode::Load: wb_data = i_dmem_rdata;
-            Opcode::Jal : wb_data = pc_plus_4;
-            default     : wb_data = alu_out;
+            Opcode::Load            : wb_data = load_data;
+            Opcode::Jal, Opcode::Jalr: wb_data = pc_plus_4;
+            Opcode::Lui             : wb_data = imm;
+            Opcode::Auipc           : wb_data = branch_tgt;
+            default                 : wb_data = alu_out;
         }
     }
 
@@ -225,11 +274,10 @@ module RiscvCore (
     );
 
     inst u_alu: Alu (
-        i_op  : alu_op,
-        i_a   : rs1_data,
-        i_b   : alu_src_b,
-        o_res : alu_out,
-        o_zero: alu_zero,
+        i_op : alu_op,
+        i_a  : rs1_data,
+        i_b  : alu_src_b,
+        o_res: alu_out,
     );
 
     // --- PC 計算 ---
@@ -237,13 +285,11 @@ module RiscvCore (
     assign branch_tgt = pc + imm;
 
     always_comb {
-        let is_branch_taken: logic = (opcode == Opcode::Branch && funct3 == 3'b000 && alu_zero);
-        let is_jump        : logic = (opcode == Opcode::Jal);
-
-        if (is_branch_taken || is_jump) {
-            next_pc = branch_tgt;
-        } else {
-            next_pc = pc_plus_4;
+        case opcode {
+            Opcode::Jal   : next_pc = branch_tgt;
+            Opcode::Jalr  : next_pc = {alu_out[31:1], 1'b0}; // (rs1 + imm) & ~1
+            Opcode::Branch: next_pc = if take ? branch_tgt : pc_plus_4;
+            default       : next_pc = pc_plus_4;
         }
     }
 
@@ -258,16 +304,16 @@ module RiscvCore (
     // --- 輸出埠綁定 ---
     assign o_imem_addr  = pc;
     assign o_dmem_addr  = alu_out;
-    assign o_dmem_wdata = rs2_data;
+    assign o_dmem_wdata = store_data;
+    assign o_dmem_wstrb = store_strb;
     assign o_dmem_we    = dmem_write;
 }
 
 // ==========================================
 // 5. RISC-V 核心整合測試（Testbench）
 // ==========================================
-// ==========================================
-// 5. RISC-V 核心整合測試（Testbench）
-// ==========================================
+// 程式在 examples/sw/rv32i_test.S（ROM 由 examples/sw/build.sh 產生成
+// rv32i_rom.veryl），涵蓋全部 RV32I 運算指令；結果寫入 dmem[0..47]。
 #[test(test_riscv_cpu)]
 module TestRiscvCore {
     // 官方 testbench 元件：clk 本身即 clock 訊號，rst 綁定 clk
@@ -278,31 +324,29 @@ module TestRiscvCore {
     var imem_inst : logic<32>;
     var dmem_addr : logic<32>;
     var dmem_wdata: logic<32>;
+    var dmem_wstrb: logic<4>;
     var dmem_rdata: logic<32>;
     var dmem_we   : logic;
 
-    // 模擬 Data RAM
-    var dmem: logic<32> [16];
+    // 模擬 Data RAM：64 字（256 bytes），依 byte strobe 寫入
+    var dmem: logic<32> [64];
+
+    let wmask: logic<32> = {dmem_wstrb[3] repeat 8, dmem_wstrb[2] repeat 8, dmem_wstrb[1] repeat 8, dmem_wstrb[0] repeat 8};
 
     #[allow(missing_reset_statement)]
     always_ff (clk, rst) {
         if_reset {
         } else if dmem_we {
-            dmem[dmem_addr[5:2]] = dmem_wdata;
+            dmem[dmem_addr[7:2]] = (dmem[dmem_addr[7:2]] & ~wmask) | (dmem_wdata & wmask);
         }
     }
-    assign dmem_rdata = dmem[dmem_addr[5:2]];
+    assign dmem_rdata = dmem[dmem_addr[7:2]];
 
-    // 模擬 ROM
-    always_comb {
-        case imem_addr[7:0] {
-            8'h00  : imem_inst = 32'h00a00093; // addi x1, x0, 10
-            8'h04  : imem_inst = 32'h01400113; // addi x2, x0, 20
-            8'h08  : imem_inst = 32'h002081b3; // add  x3, x1, x2 (30)
-            8'h0c  : imem_inst = 32'h00302023; // sw   x3, 0(x0)
-            default: imem_inst = 32'h00000013; // nop
-        }
-    }
+    // 程式 ROM
+    inst u_rom: RiscvTestRom (
+        i_addr: imem_addr,
+        o_inst: imem_inst,
+    );
 
     // 例化 CPU
     inst dut: RiscvCore (
@@ -312,6 +356,7 @@ module TestRiscvCore {
         i_imem_inst : imem_inst,
         o_dmem_addr : dmem_addr,
         o_dmem_wdata: dmem_wdata,
+        o_dmem_wstrb: dmem_wstrb,
         i_dmem_rdata: dmem_rdata,
         o_dmem_we   : dmem_we,
     );
@@ -320,12 +365,51 @@ module TestRiscvCore {
         // 1. 重設後釋放，開始執行
         rst.assert();
 
-        // 2. 執行 10 個時鐘週期
-        clk.next(10);
+        // 2. 執行到程式結束（停在 halt 迴圈）
+        clk.next(200);
 
-        // 3. 斷言驗證
-        $assert(imem_addr != 32'd0, "PC should have advanced");
-        $assert(dmem[0] == 32'd30, "10 + 20 = 30 should be stored");
+        // 3. 斷言驗證（期望值與 rv32i_test.S 的註解相同）
+        $assert(dmem[47] == 32'h00000001, "program finished");
+        $assert(dmem[0] == 32'h12345678, "lui + addi");
+        $assert(dmem[1] == 32'h00000010, "auipc");
+        $assert(dmem[2] == 32'hffffffff, "lui + srai");
+        $assert(dmem[3] == 32'hfffffffb, "add");
+        $assert(dmem[4] == 32'h0000000b, "sub");
+        $assert(dmem[5] == 32'hffffffc0, "sll");
+        $assert(dmem[6] == 32'h1fffffff, "srl");
+        $assert(dmem[7] == 32'hffffffff, "sra");
+        $assert(dmem[8] == 32'hc0000000, "slli");
+        $assert(dmem[9] == 32'h0000000f, "srli");
+        $assert(dmem[10] == 32'hfffffffc, "srai");
+        $assert(dmem[11] == 32'hedcba980, "xor");
+        $assert(dmem[12] == 32'hfffffffc, "xori");
+        $assert(dmem[13] == 32'h1234567b, "or");
+        $assert(dmem[14] == 32'h000007f3, "ori");
+        $assert(dmem[15] == 32'h12345678, "and");
+        $assert(dmem[16] == 32'h00000078, "andi");
+        $assert(dmem[17] == 32'h00000001, "slt");
+        $assert(dmem[18] == 32'h00000000, "sltu");
+        $assert(dmem[19] == 32'h00000000, "slti");
+        $assert(dmem[20] == 32'h00000001, "sltiu");
+        $assert(dmem[21] == 32'h00000006, "sll uses rs2[4:0]");
+        $assert(dmem[22] == 32'h000000aa, "beq/bne/blt/bge");
+        $assert(dmem[23] == 32'h0000000a, "bltu/bgeu");
+        $assert(dmem[24] == 32'h0000000f, "backward branch loop");
+        $assert(dmem[25] == 32'h00000000, "jal/jalr skip");
+        $assert(dmem[26] == 32'h00000008, "jalr link");
+        $assert(dmem[27] == 32'hfffffffc, "jal link");
+        $assert(dmem[28] == 32'h00000078, "lb");
+        $assert(dmem[29] == 32'h00000012, "lb offset 3");
+        $assert(dmem[30] == 32'hfffffff8, "lb sign");
+        $assert(dmem[31] == 32'h000000f8, "lbu");
+        $assert(dmem[32] == 32'h00001234, "lh");
+        $assert(dmem[33] == 32'hfffffff8, "lh sign");
+        $assert(dmem[34] == 32'h0000ffff, "lhu");
+        $assert(dmem[35] == 32'h00005678, "lhu offset 0");
+        $assert(dmem[36] == 32'h12f80378, "sb");
+        $assert(dmem[37] == 32'h0003fff8, "sh");
+        $assert(dmem[38] == 32'h56785678, "sh both halves");
+        $assert(dmem[39] == 32'h00000000, "x0 is zero");
 
         $finish();
     }

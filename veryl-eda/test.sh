@@ -23,7 +23,7 @@ BIN=$ROOT/target/release/veryl-eda
 DESIGNS="adder:Adder:comb max3:Max3:comb alu_pkg:AluUnit:comb gen_rev:BitRev:comb gen_rev:GrayConv:comb
 rv32i:Alu:comb seq101:Seq101:ind pkt_reg:PktReg:ind ram:Ram:bmc8 rv32i:RegFile:bmc2 rv32i:RiscvCore:bmc2
 features:Shifter:comb features:Funcs:comb features:Ranges:comb features:Counter:ind features:Top:bmc20
-soc:ProgRom:comb soc:RiscvSoc:bmc80"
+soc:ProgRom:comb soc:RiscvSoc:bmc80 rv32i_rom:RiscvTestRom:comb"
 src() { if [ -f "$EX/src/$1.veryl" ]; then echo "$EX/src/$1.veryl"; else echo "$ROOT/examples/$1.veryl"; fi; }
 
 echo "== synthesis (outputs in $OUT)"

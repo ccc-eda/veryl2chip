@@ -14,18 +14,31 @@ Veryl 的邏輯合成與 FPGA 流程（類似 yosys `synth` / `synth_ice40`，�
 - `./test.sh`：單元測試 + 合成全部範例 + yosys `read_json; check -assert` + FPGA 流程 +
   對 `veryl build` 產生的 SystemVerilog 做**形式等價驗證**（需要有 slang 前端的 yosys，例如 oss-cad-suite，路徑用 `YOSYS_SLANG` 指定）。
 
+## RV32I CPU
+`examples/src/rv32i.veryl` 的 `RiscvCore` 是單週期 RV32I（不含 fence/ecall/ebreak/CSR）：
+`lui auipc jal jalr`、六種分支、`lb lh lw lbu lhu sb sh sw`、全部 R/I 型運算（含移位、`xor`、`sltu`）。
+資料記憶體介面以 `o_dmem_wstrb` 表示要寫的位元組，讀取由 CPU 從整個字取出 byte/halfword 並做符號擴展。
+
+測試程式 `examples/sw/rv32i_test.S` 用真正的組譯器產生 ROM（`examples/sw/build.sh` → `examples/src/rv32i_rom.veryl`），
+把 41 個結果寫進記憶體，`TestRiscvCore` 逐字 `$assert`。期望值同時以 RISC-V 官方參考模擬器 **spike** 交叉比對（`build.sh` 自動做）。
+通過的地方：spike、官方 `veryl test`、veryl-sim、veryl-eda 合成後的閘級 netlist、以及 iCE40 映射後的 netlist（`cargo test`）。
+
+完整（未被常數 ROM 修剪）的 RiscvCore 映射後需要 5401 個 LUT，超過 UP5K 的 5280 LC——主因是用正反器做的 32×32 暫存器檔；
+要把整套 ISA 測試搬上 FPGA，需要先做 Block RAM（`SB_RAM40_4K`）推論。
+
 ## RISC-V CPU 上 FPGA
 `examples/soc.veryl` 的 `RiscvSoc` = `examples/src/rv32i.veryl` 的 `RiscvCore` + 程式 ROM + 16 字資料 RAM + LED 暫存器（位址 0x100）。
 程式以 `beq`/`jal` 迴圈算 Fibonacci(10)，把 55 寫到 RAM[0] 與 LED。頂層只有 clock、reset、8 顆 LED。
+程式 ROM 是常數，合成時會把這個程式用不到的硬體（未用的暫存器、移位器、byte 載入等）整個消掉，所以位元流只驗證了這個程式用到的指令。
 
     ./fpga/flow.sh          # 合成 → 映射 → nextpnr → icepack → 兩種閘級模擬
     iceprog fpga/build/soc.bin
 
 | 項目 | 結果（iCE40UP5K-SG48，iCEBreaker 腳位 `examples/icebreaker.pcf`） |
 |---|---|
-| cells | 1156 SB_LUT4、84 SB_CARRY、232 DFF |
-| 佈局 | 1289 / 5280 LC（24%） |
-| 時序 | 約 13.7 MHz（板上時脈 12 MHz，通過） |
+| cells | 1168 SB_LUT4、85 SB_CARRY、232 DFF |
+| 佈局 | 1279 / 5280 LC（24%） |
+| 時序 | 約 17 MHz（板上時脈 12 MHz，通過） |
 | 映射後 netlist 模擬（yosys iCE40 cell 模型） | 第 70 個 cycle LED = 55 |
 | **繞線後位元流**模擬（`icebox_vlog` 轉回 Verilog） | 第 70 個 cycle LED = 55 |
 
@@ -70,6 +83,7 @@ interface/modport、`inout`、遞迴、非常數的除法、latch（不完整賦
 | Seq101 / PktReg | k-induction 證明 |
 | Ram / RegFile / RiscvCore | 有界模型檢查 8 / 2 / 2 cycles |
 | RiscvSoc | 有界模型檢查 80 cycles（整個程式跑完） |
+| RiscvTestRom（rv32i 測試程式 ROM） | SAT 完整證明 |
 | `examples/features.veryl`：Shifter / Funcs / Ranges / Counter / Top | SAT / SAT / SAT / k-induction / BMC 20 |
 
-另外 `cargo test` 在閘級 netlist **與** iCE40 映射後的 netlist 上都跑各範例的 testbench 情境（RiscvCore 執行 `addi/addi/add/sw` 並寫入 30、RiscvSoc 在 LED 顯示 55）。
+另外 `cargo test` 在閘級 netlist **與** iCE40 映射後的 netlist 上都跑各範例的 testbench 情境（RiscvCore 跑完整的 RV32I 測試程式並比對 41 個結果、ALU 每種運算對 Rust 參考值、RiscvSoc 在 LED 顯示 55）。

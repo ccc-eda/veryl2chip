@@ -135,47 +135,97 @@ fn ram() {
     });
 }
 
-/// the program from TestRiscvCore: x1 = 10, x2 = 20, x3 = x1 + x2, sw x3, 0(x0)
+/// synthesize `top` from files in examples/src
+fn netlist(files: &[&str], top: &str) -> crate::netlist::Netlist {
+    let mut parsers = vec![];
+    for f in files {
+        let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), f);
+        let src = std::fs::read_to_string(&path).unwrap();
+        parsers.push(Parser::parse(&src, &path).unwrap());
+    }
+    let mut lib = Lib::new();
+    for p in &parsers { lib.add(&p.veryl); }
+    synthesize(&lib, top).unwrap_or_else(|e| panic!("{}: {}", top, e)).0
+}
+
+/// (word index, value) pairs from the `$assert(dmem[i] == 32'h..)` lines of TestRiscvCore
+fn rv32i_expected() -> Vec<(usize, u128)> {
+    let src = std::fs::read_to_string(format!("{}/../examples/src/rv32i.veryl", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut v = vec![];
+    for l in src.lines() {
+        let Some(rest) = l.trim().strip_prefix("$assert(dmem[") else { continue };
+        let (idx, rest) = rest.split_once("] == 32'h").unwrap();
+        let hex: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        v.push((idx.parse().unwrap(), u128::from_str_radix(&hex, 16).unwrap()));
+    }
+    assert!(v.len() > 40);
+    v
+}
+
+/// TestRiscvCore's RV32I program (examples/sw/rv32i_test.S) on the synthesized
+/// core: the ROM is its own synthesized netlist, the data RAM is modelled here
 #[test]
 fn rv32i_core() {
+    let rom_nl = netlist(&["rv32i_rom.veryl"], "RiscvTestRom");
+    let expected = rv32i_expected();
     synth(&["rv32i.veryl"], "RiscvCore", |s| {
-        let rom = |pc: u128| match pc & 0xff { 0x00 => 0x00a00093, 0x04 => 0x01400113, 0x08 => 0x002081b3, 0x0c => 0x00302023, _ => 0x00000013 };
-        let mut dmem = [0u128; 16];
+        let mut rom = NetSim::new(&rom_nl);
+        let mut dmem = [0u128; 64];
         s.set("i_rst", 0);
-        s.set("i_imem_inst", rom(0));
         s.step();
         s.set("i_rst", 1);
-        for _ in 0..10 {
-            s.set("i_imem_inst", rom(s.get("o_imem_addr")));
-            s.set("i_dmem_rdata", dmem[((s.get("o_dmem_addr") >> 2) & 15) as usize]);
-            if s.get("o_dmem_we") == 1 { dmem[((s.get("o_dmem_addr") >> 2) & 15) as usize] = s.get("o_dmem_wdata"); }
+        for _ in 0..200 {
+            rom.set("i_addr", s.get("o_imem_addr"));
+            s.set("i_imem_inst", rom.get("o_inst"));
+            let a = ((s.get("o_dmem_addr") >> 2) & 63) as usize;
+            s.set("i_dmem_rdata", dmem[a]);
+            if s.get("o_dmem_we") == 1 {
+                let strb = s.get("o_dmem_wstrb");
+                let mask = (0..4).filter(|i| (strb >> i) & 1 == 1).fold(0u128, |m, i| m | (0xff << (8 * i)));
+                dmem[a] = (dmem[a] & !mask) | (s.get("o_dmem_wdata") & mask);
+            }
             s.step();
         }
-        assert_ne!(s.get("o_imem_addr"), 0, "PC should have advanced");
-        assert_eq!(dmem[0], 30, "10 + 20 = 30 should be stored");
+        for (i, want) in &expected {
+            assert_eq!(dmem[*i], *want, "dmem[{}]", i);
+        }
     });
 }
 
+/// every ALU operation against a Rust reference
 #[test]
-fn rv32i_alu_slt_is_signed() {
+fn rv32i_alu() {
     synth(&["rv32i.veryl"], "Alu", |s| {
-        s.set("i_op", 4); // Slt
-        for (a, b) in [(-1i32, 1i32), (1, -1), (-5, -3), (3, 3), (i32::MIN, i32::MAX)] {
-            s.set("i_a", a as u32 as u128);
-            s.set("i_b", b as u32 as u128);
-            assert_eq!(s.get("o_res"), (a < b) as u128, "{} < {}", a, b);
+        let ops: [(u128, fn(u32, u32) -> u32); 10] = [
+            (0, |a, b| a.wrapping_add(b)),
+            (1, |a, b| a.wrapping_sub(b)),
+            (2, |a, b| a & b),
+            (3, |a, b| a | b),
+            (4, |a, b| ((a as i32) < (b as i32)) as u32),
+            (5, |a, b| (a < b) as u32),
+            (6, |a, b| a ^ b),
+            (7, |a, b| a << (b & 31)),
+            (8, |a, b| a >> (b & 31)),
+            (9, |a, b| ((a as i32) >> (b & 31)) as u32),
+        ];
+        let vals = [0u32, 1, 7, 31, 32, 0x7fff_ffff, 0x8000_0000, 0xffff_fff8, 0x1234_5678];
+        for (op, f) in ops {
+            s.set("i_op", op);
+            for a in vals {
+                for b in vals {
+                    s.set("i_a", a as u128);
+                    s.set("i_b", b as u128);
+                    assert_eq!(s.get("o_res"), f(a, b) as u128, "op {} a {:#x} b {:#x}", op, a, b);
+                }
+            }
         }
-        s.set("i_op", 1); // Sub
-        s.set("i_a", 7);
-        s.set("i_b", 7);
-        assert_eq!((s.get("o_res"), s.get("o_zero")), (0, 1));
     });
 }
 
 /// the FPGA SoC: Fibonacci(10) in a loop, result on the LED register
 #[test]
 fn riscv_soc_fib() {
-    synth(&["rv32i.veryl", "soc.veryl"], "RiscvSoc", |s| {
+    synth(&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"], "RiscvSoc", |s| {
         reset(s, "i_rst");
         let mut cycles = 0;
         while s.get("o_led") == 0 && cycles < 200 {

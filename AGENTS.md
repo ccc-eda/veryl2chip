@@ -15,6 +15,7 @@ cargo run --release -- [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.
 - Always use `--release`; simulation performance matters.
 - Default top: all modules with a `#[test(...)]` attribute; if none, the last declared module. `--list` shows modules and which are tests.
 - Exit code 1 on assertion failure; `--vcd` writes GTKWave-viewable waveforms.
+- `examples/src/rv32i.veryl` is a full single-cycle RV32I core (no fence/ecall/ebreak/CSR). Its `TestRiscvCore` runs `examples/sw/rv32i_test.S` from the generated `examples/src/rv32i_rom.veryl`, so veryl-sim needs both files: `veryl-sim ../examples/src/rv32i.veryl ../examples/src/rv32i_rom.veryl`. After editing the program run `examples/sw/build.sh` (riscv64-unknown-elf toolchain); it regenerates the ROM and checks every `$assert(dmem[i] == ...)` against spike. The `$assert` lines are also parsed by veryl-eda's `rv32i_core` test, so keep their format.
 - Official `veryl` CLI 0.22.0 is installed (`~/.cargo/bin/veryl`, see `install.md`). Run `veryl check` (from `examples/`, which has Veryl.toml) as the syntax/semantic ground truth; `veryl-sim` is a deliberately smaller simulator and its "not supported" errors are not language errors.
 
 ```sh
