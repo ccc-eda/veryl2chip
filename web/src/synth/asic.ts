@@ -10,7 +10,7 @@ export interface AsicResult {
   lib: { name: string; ins: string[]; width: number; delay: number; load: number; setup: number; area: number; verilog: string }[];
   counts: [string, number][];
   area: number;
-  die: { w: number; h: number; rows: number; sites: number; util: number; row_h: number; site_w: number };
+  die: { w: number; h: number; rows: number; sites: number; util: number; row_h: number; site_w: number; max_density: number; target_density: number };
   /** per mapped cell: row, site, width (sites), arrival (ns), on the critical path, height (rows; SRAM macros > 1) */
   cells: [number, number, number, number, number, number][];
   pins: { name: string; dir: 'in' | 'out'; x: number; y: number }[];

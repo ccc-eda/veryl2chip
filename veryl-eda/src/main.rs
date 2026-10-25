@@ -92,7 +92,7 @@ fn main() {
     for (t, n) in st { println!("    {:14} {}", t, n); }
     if let Some(o) = &asic_out {
         let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
-        println!("asic: area {:.1} µm² (cells), die {:.1} × {:.1} µm, {} rows, utilization {:.0}%", o.area, pl.w, pl.h, pl.rows, pl.util * 100.0);
+        println!("asic: area {:.1} µm² (cells), die {:.1} × {:.1} µm, {} rows, utilization {:.0}%, fullest 16 µm bin {:.0}% (target {:.0}%)", o.area, pl.w, pl.h, pl.rows, pl.util * 100.0, pl.max_density * 100.0, pl.target_density * 100.0);
         println!("asic: wirelength {:.0} µm, {} vias, overflow {} after {} routing iterations", rt.wirelength, rt.vias, rt.overflow, rt.iters.len());
         let pw = &o.power;
         println!("power: {:.3} mW at {:.1} MHz = dynamic {:.3} + leakage {:.4}; per cycle {:.2} pJ (nets {:.2}, clock {:.2}, internal {:.2}, SRAM {:.2}); IR drop worst {:.2} mV ({} random cycles)",

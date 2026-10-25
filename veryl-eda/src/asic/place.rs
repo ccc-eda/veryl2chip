@@ -1,5 +1,7 @@
 //! Row placement: standard cells in rows of sites, simulated annealing on
-//! half-perimeter wirelength. Every move keeps the placement legal (a cell
+//! half-perimeter wirelength plus a density penalty (bins of 16 × 16 µm may
+//! not be fuller than a target density, so cells do not pile up next to the
+//! IO pins and leave the rest of the die empty). Every move keeps the placement legal (a cell
 //! moves into a free run of sites, or two cells swap places).
 
 use super::lib::{ROW_H, SITE_W};
@@ -33,7 +35,13 @@ pub struct RowPlacement {
     pub pins: Vec<Pin>,
     pub history: Vec<Frame>,
     pub util: f64,
+    /// fullest 16 × 16 µm bin (fraction of its free sites); `target` is what the penalty allows
+    pub max_density: f64,
+    pub target_density: f64,
 }
+
+/// µm of wirelength one site of bin overflow costs
+pub const DENSITY_WEIGHT: f64 = 1.0;
 
 /// a net for wirelength: cells and pins it connects
 pub struct PNet { pub cells: Vec<usize>, pub pins: Vec<usize>, pub bit: Bit }
@@ -195,10 +203,22 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         ((x1 - x0) + (y1 - y0)) * weights.get(&pnets[k].bit).copied().unwrap_or(1.0)
     };
     let mut ncost: Vec<f64> = (0..pnets.len()).map(|k| hpwl(k, &pos)).collect();
-    let mut cost: f64 = ncost.iter().sum();
+    // ---- density bins: (std cell sites in the bin, free sites of the bin) ----
+    let (bw, bh) = (32u32, 4u32);
+    let (nbx, nby) = (sites.div_ceil(bw), rows.div_ceil(bh));
+    let bin_at = |c: usize, (r, x): (u32, u32)| -> usize { ((r / bh) * nbx + ((x + widths[c] / 2) / bw).min(nbx - 1)) as usize };
+    let bin_of = |c: usize, pos: &Vec<(u32, u32)>| -> usize { bin_at(c, pos[c]) };
+    let mut bin_cap = vec![0f64; (nbx * nby) as usize];
+    for r in 0..rows { for x in 0..sites { let o = occ[r as usize][x as usize]; if o < 0 || !fixed[o as usize] { bin_cap[((r / bh) * nbx + x / bw) as usize] += 1.0; } } }
+    let mut bin_used = vec![0f64; bin_cap.len()];
+    for c in 0..n { if !fixed[c] { bin_used[bin_of(c, &pos)] += widths[c] as f64; } }
+    let target = (util + 0.15).min(0.9);
+    let lambda = DENSITY_WEIGHT;
+    let pen = |used: f64, cap: f64| lambda * (used - target * cap).max(0.0);
+    let mut cost: f64 = ncost.iter().sum::<f64>() + (0..bin_cap.len()).map(|b| pen(bin_used[b], bin_cap[b])).sum::<f64>();
     let mut history = vec![Frame { temp: 0.0, cost, accept: 1.0, pos: pos.clone() }];
     if n < 2 || pnets.is_empty() {
-        return RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64 };
+        return RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64, max_density: 0.0, target_density: target };
     }
     let mut rng = Rng::new(seed);
     let mut temp = {
@@ -255,11 +275,19 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
             for (c, _, _) in &plan { for &k in &cell_nets[*c] { if stamp[k] != gen { stamp[k] = gen; touched.push(k); } } }
             let mut delta = 0.0;
             let newc: Vec<f64> = touched.iter().map(|&k| { let v = hpwl(k, &pos); delta += v - ncost[k]; v }).collect();
+            // density: bins the moved cells leave and enter
+            let mut bins: Vec<(usize, f64)> = vec![];
+            for (i, &(c, _, _)) in plan.iter().enumerate() {
+                let (from, to) = (bin_at(c, old[i].1), bin_of(c, &pos));
+                if from != to { bins.push((from, -(widths[c] as f64))); bins.push((to, widths[c] as f64)); }
+            }
+            for &(b, dw) in &bins { delta += pen(bin_used[b] + dw, bin_cap[b]) - pen(bin_used[b], bin_cap[b]); bin_used[b] += dw; }
             if delta <= 0.0 || rng.unit() < (-delta / temp).exp() {
                 for (i, &k) in touched.iter().enumerate() { ncost[k] = newc[i]; }
                 cost += delta;
                 accepted += 1;
             } else {
+                for &(b, dw) in bins.iter().rev() { bin_used[b] -= dw; }
                 for (c, _, _) in &plan { let (r, x) = pos[*c]; for s in x..x + widths[*c] { occ[r as usize][s as usize] = -1; } }
                 for &(c, p) in &old { pos[c] = p; let (r, x) = p; for s in x..x + widths[c] { occ[r as usize][s as usize] = c as i32; } }
             }
@@ -270,10 +298,11 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         rlim = (rlim * (1.0 - 0.44 + rate)).clamp(1.0, rows.max(sites / 8) as f64);
         if temp < 0.005 * cost.max(1.0) / pnets.len() as f64 { break; }
     }
+    let max_density = (0..bin_cap.len()).filter(|&b| bin_cap[b] > 0.0).map(|b| bin_used[b] / bin_cap[b]).fold(0.0, f64::max);
     if history.len() > 40 {
         let m = history.len();
         let keep: std::collections::HashSet<usize> = (0..40).map(|i| i * (m - 1) / 39).collect();
         history = history.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|x| x.1).collect();
     }
-    RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64 }
+    RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64, max_density, target_density: target }
 }

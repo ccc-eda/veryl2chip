@@ -498,7 +498,8 @@ export class SynthOverlay {
       const h = a.history;
       return [
         `A ⑤ Row Placement 退火（晶粒 ${a.die.w.toFixed(1)} × ${a.die.h.toFixed(1)} µm，${a.die.rows} 列 × ${a.die.sites} site）`,
-        '依目標利用率 65% 決定晶粒大小，IO 腳平均放在四周（輸入：左、上；輸出：右、下）。初始依網表順序蛇形填列，再以模擬退火最小化 HPWL：每一步把元件移到空位或與另一個元件交換，永遠保持合法（不重疊、對齊 site）。',
+        `依目標利用率決定晶粒大小（${(a.die.util * 100).toFixed(0)}%；太擠繞不通就自動放大），IO 腳平均放在四周（輸入：左、上；輸出：右、下）。初始依網表順序蛇形填列，再以模擬退火最小化 HPWL + 密度懲罰：每一步把元件移到空位或與另一個元件交換，永遠保持合法（不重疊、對齊 site）；16 × 16 µm 的格子超過目標密度 ${(a.die.target_density * 100).toFixed(0)}% 的部分要付代價，元件才不會全擠到 IO 腳旁邊、留下局部繞不通的熱點。`,
+        `最滿的格子 ${(a.die.max_density * 100).toFixed(0)}%`,
         '',
         `${a.cells.length} 個元件，列利用率 ${(a.die.util * 100).toFixed(1)}%；HPWL：初始 ${(h[0].cost / 1000).toFixed(2)} mm → 退火後 ${(h[h.length - 1].cost / 1000).toFixed(2)} mm　按「▶ 退火動畫」重播`,
         '顏色：橘＝DFF、黃＝MUX2、藍＝AND/OR 類、紫＝XOR/AOI/OAI、綠＝INV、青＝BUF；綠/紅小方塊＝輸入/輸出腳',

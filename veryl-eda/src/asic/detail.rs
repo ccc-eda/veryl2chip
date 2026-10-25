@@ -9,7 +9,10 @@
 //! over several iterations. Cell pins are reached from M1 through a via at
 //! a fixed access point inside the cell (macro pins along its top edge);
 //! SRAM macros block M2/M3 above them; IO pins are on M5 at the die edge.
-//! A net still in conflict after a few iterations gets a wider corridor.
+//! A net still in conflict after a few iterations gets a wider corridor; at
+//! the end, nets still in conflict are rerouted strictly around everything
+//! else (whole die, occupied nodes forbidden), keeping the old route if that
+//! fails.
 
 use super::lib::{dims, ROW_H, SITE_W};
 use super::place::{nets, RowPlacement};
@@ -153,18 +156,22 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
     let mut order: Vec<usize> = (0..terms.len()).collect();
     order.sort_by_key(|i| terms[*i].1.len());
     let mut opens = vec![0usize; terms.len()];
-    for it in 0..40 {
+    const NEGOTIATE: usize = 60;
+    for it in 0..NEGOTIATE + 3 {
+        // the last rounds: strict rip-up and reroute of what is still in conflict
+        let hard = it >= NEGOTIATE;
         for &ni in &order {
             if terms[ni].1.len() < 2 { continue; }
             let conflicted = paths[ni].iter().any(|&n| occ[n as usize] > 1);
             if it > 0 && !conflicted && opens[ni] == 0 { continue; }
             // still stuck after a few rounds: give it more room
-            if it >= 4 && it % 4 == 0 { widen(&mut terms[ni].2); }
+            if !hard && ((it >= 4 && it % 4 == 0) || (it >= 16 && it % 2 == 0)) { widen(&mut terms[ni].2); }
             let (_, t, gc) = &terms[ni];
             let cmark = (it * terms.len() + ni) as u32;
-            for g in gc { gc_mark[*g as usize] = cmark; }
-            for &n in &paths[ni] { occ[n as usize] -= 1; }
-            paths[ni].clear();
+            if hard { gc_mark.iter_mut().for_each(|g| *g = cmark); } else { for g in gc { gc_mark[*g as usize] = cmark; } }
+            let old = std::mem::take(&mut paths[ni]);
+            for &n in &old { occ[n as usize] -= 1; }
+            let old_opens = opens[ni];
             opens[ni] = 0;
             let mark = (it * terms.len() + ni) as u32;
             // Prim order of the terminals
@@ -212,6 +219,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                         // another net's pin access point is off limits
                         let o = pin_owner[v as usize];
                         if o != u32::MAX && o != ni as u32 { continue; }
+                        if hard && occ[v as usize] > 0 { continue; }
                         let c = step * (1.0 + hist[v as usize]) * (1.0 + pres * occ[v as usize] as f32);
                         let nd = du + c;
                         if seen[v as usize] != gen || nd < dist[v as usize] {
@@ -233,6 +241,8 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                 in_tree[src as usize] = mark;
                 if !nodes.contains(&src) { nodes.push(src); }
             }
+            // a strict reroute that cannot connect everything keeps the old route
+            let nodes = if hard && opens[ni] > 0 { opens[ni] = old_opens; old } else { nodes };
             for &n in &nodes { occ[n as usize] += 1; }
             paths[ni] = nodes;
         }
@@ -241,7 +251,9 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("  detail iteration {}: {} conflicts, {} opens", it + 1, conflicts, opens.iter().sum::<usize>()); }
         if conflicts == 0 && opens.iter().all(|o| *o == 0) { break; }
         for (n, o) in occ.iter().enumerate() { if *o > 1 { hist[n] += 0.4 * (*o - 1) as f32; } }
-        pres *= 1.7;
+        if hard { continue; }
+        // capped: beyond this the costs stop being comparable in f32
+        pres = (pres * 1.7).min(1000.0);
     }
     // node sets -> wire pieces and vias
     let mut out = vec![];

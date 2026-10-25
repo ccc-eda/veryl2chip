@@ -94,7 +94,7 @@ fn asic(v: &Value) -> R<Value> {
         "lib": asic::lib::LIB.iter().map(|c| json!({ "name": c.name, "ins": c.ins, "width": c.width, "delay": c.delay, "load": c.load, "setup": c.setup, "area": asic::lib::area(c.name), "verilog": c.verilog })).collect::<Vec<_>>(),
         "counts": o.counts,
         "area": o.area,
-        "die": { "w": pl.w, "h": pl.h, "rows": pl.rows, "sites": pl.sites, "util": pl.util, "row_h": asic::lib::ROW_H, "site_w": asic::lib::SITE_W },
+        "die": { "w": pl.w, "h": pl.h, "rows": pl.rows, "sites": pl.sites, "util": pl.util, "max_density": pl.max_density, "target_density": pl.target_density, "row_h": asic::lib::ROW_H, "site_w": asic::lib::SITE_W },
         "cells": o.mapped.cells.iter().enumerate().map(|(i, c)| { let (w, h) = asic::lib::dims(c); json!([pl.pos[i].0, pl.pos[i].1, w, (tm.arrival[i] * 1000.0).round() / 1000.0, crit.contains(&i) as u8, h]) }).collect::<Vec<_>>(),
         "pins": pl.pins.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "x": p.x, "y": p.y })).collect::<Vec<_>>(),
         "history": frames.iter().map(|&k| { let f = &pl.history[k]; json!({ "temp": f.temp, "cost": f.cost, "accept": f.accept, "pos": f.pos.iter().flat_map(|p| [p.0, p.1]).collect::<Vec<_>>() }) }).collect::<Vec<_>>(),
