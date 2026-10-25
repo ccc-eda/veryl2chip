@@ -1,0 +1,61 @@
+module Alu (
+    i_a  : input  logic<8>,
+    i_b  : input  logic<8>,
+    i_op : input  logic<2>,
+    o_y  : output logic<8>,
+    o_zero: output logic,
+) {
+    always_comb {
+        case i_op {
+            0: o_y = i_a + i_b;
+            1: o_y = i_a - i_b;
+            2: o_y = i_a & i_b;
+            default: o_y = i_a ^ i_b;
+        }
+    }
+    assign o_zero = o_y == 0;
+}
+
+module PopCount (
+    i_d: input  logic<8>,
+    o_n: output logic<4>,
+) {
+    always_comb {
+        o_n = 0;
+        for i in 0..8 {
+            o_n += i_d[i];
+        }
+    }
+}
+
+#[test(alu_test)]
+module tb_alu {
+    inst clk: $tb::clock_gen;
+    var a: logic<8>;
+    var b: logic<8>;
+    var op: logic<2>;
+    var y: logic<8>;
+    var z: logic;
+    var n: logic<4>;
+    inst u_alu: Alu (i_a: a, i_b: b, i_op: op, o_y: y, o_zero: z);
+    inst u_pc: PopCount (i_d: a, o_n: n);
+
+    initial {
+        a = 8'd200; b = 8'd100; op = 0;
+        clk.next(1);
+        $display("200+100 = %d (wraps)", y);
+        $assert(y == 44);
+        op = 1; clk.next(1);
+        $display("200-100 = %d", y);
+        $assert(y == 100);
+        op = 2; a = 8'hF0; b = 8'h3C; clk.next(1);
+        $display("F0&3C = %h popcount(a)=%d", y, n);
+        $assert(y == 8'h30);
+        $assert(n == 4);
+        op = 3; b = a; clk.next(1);
+        $display("a^a = %d zero=%b", y, z);
+        $assert(z == 1'b1);
+        $assert(y == 99, "this one should fail on purpose");
+        $finish();
+    }
+}

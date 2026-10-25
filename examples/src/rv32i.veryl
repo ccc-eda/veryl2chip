@@ -1,0 +1,345 @@
+// ==========================================
+// 1. 定義常數與列舉
+// ==========================================
+package RiscvTypes {
+    enum AluOp: logic<4> {
+        Add,
+        Sub,
+        And,
+        Or,
+        Slt,
+    }
+
+    enum Opcode: logic<7> {
+        RType  = 7'b0110011,
+        IType  = 7'b0010011,
+        Load   = 7'b0000011,
+        Store  = 7'b0100011,
+        Branch = 7'b1100011,
+        Jal    = 7'b1101111,
+    }
+}
+
+// ==========================================
+// 2. 算術邏輯單元（ALU）
+// ==========================================
+module Alu (
+    i_op  : input  RiscvTypes::AluOp,
+    i_a   : input  logic<32>,
+    i_b   : input  logic<32>,
+    o_res : output logic<32>,
+    o_zero: output logic,
+) {
+    import RiscvTypes::*;
+
+    always_comb {
+        case i_op {
+            AluOp::Add: o_res = i_a + i_b;
+            AluOp::Sub: o_res = i_a - i_b;
+            AluOp::And: o_res = i_a & i_b;
+            AluOp::Or : o_res = i_a | i_b;
+            AluOp::Slt: {
+                if $signed(i_a) <: $signed(i_b) {
+                    o_res = 32'd1;
+                } else {
+                    o_res = 32'd0;
+                }
+            }
+            default: o_res = 32'd0;
+        }
+        o_zero = (o_res == 32'd0);
+    }
+}
+
+// ==========================================
+// 3. 通用暫存器堆（Register File）
+// ==========================================
+module RegFile (
+    i_clk    : input  clock,
+    i_rst    : input  reset,
+    i_rs1_idx: input  logic<5>,
+    i_rs2_idx: input  logic<5>,
+    i_rd_idx : input  logic<5>,
+    i_rd_data: input  logic<32>,
+    i_rd_we  : input  logic,
+    o_rs1_val: output logic<32>,
+    o_rs2_val: output logic<32>,
+) {
+    var rf: logic<32> [32];
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+        } else if (i_rd_we && (i_rd_idx != 5'd0)) {
+            rf[i_rd_idx] = i_rd_data;
+        }
+    }
+
+    always_comb {
+        if i_rs1_idx == 5'd0 {
+            o_rs1_val = 32'd0;
+        } else {
+            o_rs1_val = rf[i_rs1_idx];
+        }
+
+        if i_rs2_idx == 5'd0 {
+            o_rs2_val = 32'd0;
+        } else {
+            o_rs2_val = rf[i_rs2_idx];
+        }
+    }
+}
+
+// ==========================================
+// 4. CPU 頂層模組
+// ==========================================
+module RiscvCore (
+    i_clk       : input  clock,
+    i_rst       : input  reset,
+    o_imem_addr : output logic<32>,
+    i_imem_inst : input  logic<32>,
+    o_dmem_addr : output logic<32>,
+    o_dmem_wdata: output logic<32>,
+    i_dmem_rdata: input  logic<32>,
+    o_dmem_we   : output logic,
+) {
+    import RiscvTypes::*;
+
+    var pc        : logic<32>;
+    var next_pc   : logic<32>;
+    var pc_plus_4 : logic<32>;
+    var branch_tgt: logic<32>;
+
+    var rs1_data  : logic<32>;
+    var rs2_data  : logic<32>;
+    var alu_src_b : logic<32>;
+    var alu_out   : logic<32>;
+    var alu_zero  : logic;
+    var imm       : logic<32>;
+    var wb_data   : logic<32>;
+
+    var alu_op    : AluOp;
+    var reg_write : logic;
+    var dmem_write: logic;
+
+    let opcode : logic<7> = i_imem_inst[6:0];
+    let rd_idx : logic<5> = i_imem_inst[11:7];
+    let funct3 : logic<3> = i_imem_inst[14:12];
+    let rs1_idx: logic<5> = i_imem_inst[19:15];
+    let rs2_idx: logic<5> = i_imem_inst[24:20];
+    let funct7 : logic<7> = i_imem_inst[31:25];
+
+    // --- 立即數解碼 ---
+    always_comb {
+        case opcode {
+            Opcode::IType, Opcode::Load: 
+                imm = {i_imem_inst[31] repeat 20, i_imem_inst[31:20]};
+            Opcode::Store: 
+                imm = {i_imem_inst[31] repeat 20, i_imem_inst[31:25], i_imem_inst[11:7]};
+            Opcode::Branch: 
+                imm = {i_imem_inst[31] repeat 20, i_imem_inst[7], i_imem_inst[30:25], i_imem_inst[11:8], 1'b0};
+            Opcode::Jal: 
+                imm = {i_imem_inst[31] repeat 12, i_imem_inst[19:12], i_imem_inst[20], i_imem_inst[30:21], 1'b0};
+            default: 
+                imm = 32'd0;
+        }
+    }
+
+    // --- 控制邏輯 ---
+    always_comb {
+        reg_write  = 1'b0;
+        dmem_write = 1'b0;
+        alu_op     = AluOp::Add;
+
+        case opcode {
+            Opcode::RType: {
+                reg_write = 1'b1;
+                case funct3 {
+                    3'b000: {
+                        if funct7[5] {
+                            alu_op = AluOp::Sub;
+                        } else {
+                            alu_op = AluOp::Add;
+                        }
+                    }
+                    3'b111 : alu_op = AluOp::And;
+                    3'b110 : alu_op = AluOp::Or;
+                    3'b010 : alu_op = AluOp::Slt;
+                    default: alu_op = AluOp::Add;
+                }
+            }
+            Opcode::IType: {
+                reg_write = 1'b1;
+                case funct3 {
+                    3'b000 : alu_op = AluOp::Add;
+                    3'b111 : alu_op = AluOp::And;
+                    3'b110 : alu_op = AluOp::Or;
+                    3'b010 : alu_op = AluOp::Slt;
+                    default: alu_op = AluOp::Add;
+                }
+            }
+            Opcode::Load: {
+                reg_write = 1'b1;
+                alu_op    = AluOp::Add;
+            }
+            Opcode::Store: {
+                dmem_write = 1'b1;
+                alu_op     = AluOp::Add;
+            }
+            Opcode::Branch: {
+                alu_op = AluOp::Sub;
+            }
+            Opcode::Jal: {
+                reg_write = 1'b1;
+            }
+            default: {}
+        }
+    }
+
+    // --- 多工器選擇 ---
+    always_comb {
+        if (opcode == Opcode::RType || opcode == Opcode::Branch) {
+            alu_src_b = rs2_data;
+        } else {
+            alu_src_b = imm;
+        }
+
+        case opcode {
+            Opcode::Load: wb_data = i_dmem_rdata;
+            Opcode::Jal : wb_data = pc_plus_4;
+            default     : wb_data = alu_out;
+        }
+    }
+
+    // --- 模組例化 ---
+    inst u_rf: RegFile (
+        i_clk    : i_clk,
+        i_rst    : i_rst,
+        i_rs1_idx: rs1_idx,
+        i_rs2_idx: rs2_idx,
+        i_rd_idx : rd_idx,
+        i_rd_data: wb_data,
+        i_rd_we  : reg_write,
+        o_rs1_val: rs1_data,
+        o_rs2_val: rs2_data,
+    );
+
+    inst u_alu: Alu (
+        i_op  : alu_op,
+        i_a   : rs1_data,
+        i_b   : alu_src_b,
+        o_res : alu_out,
+        o_zero: alu_zero,
+    );
+
+    // --- PC 計算 ---
+    assign pc_plus_4  = pc + 32'd4;
+    assign branch_tgt = pc + imm;
+
+    always_comb {
+        let is_branch_taken: logic = (opcode == Opcode::Branch && funct3 == 3'b000 && alu_zero);
+        let is_jump        : logic = (opcode == Opcode::Jal);
+
+        if (is_branch_taken || is_jump) {
+            next_pc = branch_tgt;
+        } else {
+            next_pc = pc_plus_4;
+        }
+    }
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            pc = 32'd0;
+        } else {
+            pc = next_pc;
+        }
+    }
+
+    // --- 輸出埠綁定 ---
+    assign o_imem_addr  = pc;
+    assign o_dmem_addr  = alu_out;
+    assign o_dmem_wdata = rs2_data;
+    assign o_dmem_we    = dmem_write;
+}
+
+// ==========================================
+// 5. RISC-V 核心整合測試（Testbench）
+// ==========================================
+// ==========================================
+// 5. RISC-V 核心整合測試（Testbench）
+// ==========================================
+#[test(test_riscv_cpu)]
+module TestRiscvCore {
+    // 引入 Veryl 官方模擬步進推進引擎
+    inst u_clock: $tb::clock_gen;
+
+    var clk       : clock;
+    var rst       : reset;
+    var imem_addr : logic<32>;
+    var imem_inst : logic<32>;
+    var dmem_addr : logic<32>;
+    var dmem_wdata: logic<32>;
+    var dmem_rdata: logic<32>;
+    var dmem_we   : logic;
+
+    // 模擬 Data RAM
+    var dmem: logic<32> [16];
+
+    always_ff (clk, rst) {
+        if_reset {
+        } else if dmem_we {
+            dmem[dmem_addr[5:2]] = dmem_wdata;
+        }
+    }
+    assign dmem_rdata = dmem[dmem_addr[5:2]];
+
+    // 模擬 ROM
+    always_comb {
+        case imem_addr[7:0] {
+            8'h00  : imem_inst = 32'h00a00093; // addi x1, x0, 10
+            8'h04  : imem_inst = 32'h01400113; // addi x2, x0, 20
+            8'h08  : imem_inst = 32'h002081b3; // add  x3, x1, x2 (30)
+            8'h0c  : imem_inst = 32'h00302023; // sw   x3, 0(x0)
+            default: imem_inst = 32'h00000013; // nop
+        }
+    }
+
+    // 例化 CPU
+    inst dut: RiscvCore (
+        i_clk       : clk,
+        i_rst       : rst,
+        o_imem_addr : imem_addr,
+        i_imem_inst : imem_inst,
+        o_dmem_addr : dmem_addr,
+        o_dmem_wdata: dmem_wdata,
+        i_dmem_rdata: dmem_rdata,
+        o_dmem_we   : dmem_we,
+    );
+
+    initial {
+        // 1. 重設 CPU，每步都呼叫 u_clock.next(1) 讓電路反應
+        rst = 1'b0; // 進入 Reset
+        clk = 1'b0;
+        u_clock.next(1);
+
+        clk = 1'b1;
+        u_clock.next(1);
+
+        clk = 1'b0;
+        rst = 1'b1; // 釋放 Reset，開始執行
+        u_clock.next(1);
+
+        // 2. 執行 10 個時鐘週期（每次上下沿都要步進！）
+        for i in 0..10 {
+            clk = 1'b1;
+            u_clock.next(1); // 上升緣觸發，執行運算
+            clk = 1'b0;
+            u_clock.next(1); // 下降緣穩定
+        }
+
+        // 3. 斷言驗證
+        $assert(imem_addr != 32'd0); // 確認 PC 已經成功跑動
+        $assert(dmem[0] == 32'd30);  // 確認 10 + 20 = 30 已經存入記憶體！
+
+        $finish();
+    }
+}

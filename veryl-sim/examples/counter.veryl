@@ -1,0 +1,51 @@
+module Counter #(
+    param WIDTH: u32 = 8,
+) (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    i_en : input  logic,
+    o_cnt: output logic<WIDTH>,
+) {
+    var cnt: logic<WIDTH>;
+
+    always_ff {
+        if_reset {
+            cnt = 0;
+        } else if i_en {
+            cnt += 1;
+        }
+    }
+
+    assign o_cnt = cnt;
+}
+
+#[test(counter_basic)]
+module tb_counter {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen;
+
+    var en : logic;
+    var cnt: logic<4>;
+
+    inst dut: Counter #(WIDTH: 4) (
+        i_clk: clk,
+        i_rst: rst,
+        i_en : en,
+        o_cnt: cnt,
+    );
+
+    initial {
+        en = 1;
+        rst.assert(clk);
+        clk.next(5);
+        $display("t=%t cnt=%d (0x%h, 0b%b)", $time, cnt, cnt, cnt);
+        $assert(cnt == 5, "cnt should be 5");
+        clk.next(12);
+        $display("t=%t cnt=%d (wraps at 16)", $time, cnt);
+        $assert(cnt == 1);
+        en = 0;
+        clk.next(3);
+        $assert(cnt == 1, "cnt must hold when disabled");
+        $finish();
+    }
+}

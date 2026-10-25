@@ -1,0 +1,29 @@
+module Adder (
+    i_a: input  logic<8>,
+    i_b: input  logic<8>,
+    o_s: output logic<8>,
+) {
+    assign o_s = i_a + i_b;
+}
+
+#[test(test_adder)]
+module TestAdder {
+    var a: logic<8>;
+    var b: logic<8>;
+    var s: logic<8>;
+
+    inst uut: Adder (
+        i_a: a,
+        i_b: b,
+        o_s: s,
+    );
+
+    initial {
+        a = 8'd10;
+        b = 8'd20;
+
+        // 官方原生支援的斷言與結束
+        $assert(s == 8'd30);
+        $finish();
+    }
+}

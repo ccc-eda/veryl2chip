@@ -1,0 +1,8 @@
+[package]
+name = "veryl-sim"
+version = "0.1.0"
+edition = "2021"
+description = "A small Icarus-Verilog-like event-driven simulator for Veryl, built on veryl-parser"
+
+[dependencies]
+veryl-parser = "0.22"
