@@ -699,6 +699,7 @@
       $("synAnim").onclick = () => this.animate();
       $("synAsc").onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
       $("synPcf").onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
+      $("synBin").onclick = () => this.pnr && download(`${this.pnr.top}.bin`, fromBase64(this.pnr.bin));
       $("synTop").onchange = () => this.run($("synTop").value);
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !$("synOverlay").classList.contains("hidden")) this.close();
@@ -798,7 +799,7 @@
       const p = PNR.has(this.stage);
       $("synAnim").classList.toggle("hidden", this.stage !== "place");
       $("synAnim").disabled = !this.pnr;
-      for (const id of ["synAsc", "synPcf"]) {
+      for (const id of ["synAsc", "synPcf", "synBin"]) {
         $(id).classList.toggle("hidden", !p);
         $(id).disabled = !this.pnr;
       }
@@ -1159,9 +1160,9 @@
   function table(head, rows) {
     return `<table><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table>`;
   }
-  function download(name, text) {
+  function download(name, data) {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    a.href = URL.createObjectURL(new Blob([data], { type: typeof data === "string" ? "text/plain" : "application/octet-stream" }));
     a.download = name;
     document.body.appendChild(a);
     a.click();
@@ -1171,10 +1172,273 @@
     }, 1e3);
   }
 
+  // src/wave.ts
+  function parseVcd(text) {
+    const byId = /* @__PURE__ */ new Map();
+    const signals = [];
+    let t = 0;
+    let end = 0;
+    const lines = text.split("\n");
+    let i = 0;
+    for (; i < lines.length; i++) {
+      const l = lines[i].trim();
+      if (l.startsWith("$var")) {
+        const p = l.split(/\s+/);
+        const s = { id: p[3], name: p[4], width: +p[2], changes: [] };
+        signals.push(s);
+        byId.set(s.id, [...byId.get(s.id) ?? [], s]);
+      } else if (l.startsWith("$enddefinitions")) {
+        i++;
+        break;
+      }
+    }
+    for (; i < lines.length; i++) {
+      const l = lines[i].trim();
+      if (!l) continue;
+      if (l[0] === "#") {
+        t = +l.slice(1);
+        end = Math.max(end, t);
+        continue;
+      }
+      let v, id;
+      if (l[0] === "b" || l[0] === "B") {
+        const sp = l.indexOf(" ");
+        v = l.slice(1, sp);
+        id = l.slice(sp + 1);
+      } else {
+        v = l[0];
+        id = l.slice(1);
+      }
+      for (const s of byId.get(id) ?? []) s.changes.push([t, v]);
+    }
+    return { signals, end };
+  }
+  function fmt(v, width) {
+    if (width === 1) return v;
+    if (/[xz]/i.test(v)) return v.length > 8 ? "x" : v;
+    const n = BigInt("0b" + v);
+    return n.toString(16);
+  }
+  function valueAt(s, t) {
+    let lo = 0, hi = s.changes.length - 1, r = -1;
+    while (lo <= hi) {
+      const m = lo + hi >> 1;
+      if (s.changes[m][0] <= t) {
+        r = m;
+        lo = m + 1;
+      } else hi = m - 1;
+    }
+    return r < 0 ? void 0 : s.changes[r][1];
+  }
+  var NAME_W = 170;
+  var ROW = 22;
+  var TOP = 22;
+  var WaveView = class {
+    constructor(canvas, picker, filter) {
+      __publicField(this, "canvas", canvas);
+      __publicField(this, "picker", picker);
+      __publicField(this, "filter", filter);
+      __publicField(this, "vcd", null);
+      __publicField(this, "shown", []);
+      __publicField(this, "t0", 0);
+      __publicField(this, "scale", 1);
+      // px per time unit
+      __publicField(this, "cursor", null);
+      __publicField(this, "drag", null);
+      new ResizeObserver(() => this.draw()).observe(canvas.parentElement);
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        if (!this.vcd) return;
+        const x = e.offsetX - NAME_W;
+        const tAt = this.t0 + x / this.scale;
+        this.scale = Math.min(Math.max(this.scale * Math.exp(-e.deltaY * 2e-3), 1e-4), 200);
+        this.t0 = Math.max(0, tAt - x / this.scale);
+        this.draw();
+      }, { passive: false });
+      canvas.addEventListener("pointerdown", (e) => {
+        this.drag = { x: e.clientX, t0: this.t0 };
+        canvas.setPointerCapture(e.pointerId);
+      });
+      canvas.addEventListener("pointermove", (e) => {
+        if (this.drag) {
+          this.t0 = Math.max(0, this.drag.t0 - (e.clientX - this.drag.x) / this.scale);
+        }
+        this.cursor = e.offsetX > NAME_W ? this.t0 + (e.offsetX - NAME_W) / this.scale : null;
+        this.draw();
+      });
+      canvas.addEventListener("pointerup", () => {
+        this.drag = null;
+      });
+      canvas.addEventListener("dblclick", () => this.fit());
+      filter.addEventListener("input", () => this.fillPicker());
+    }
+    set(text) {
+      this.vcd = text ? parseVcd(text) : null;
+      this.shown = this.vcd ? this.vcd.signals.filter((s) => !s.name.includes(".")).slice(0, 16) : [];
+      this.fillPicker();
+      this.fit();
+    }
+    fit() {
+      if (!this.vcd) {
+        this.draw();
+        return;
+      }
+      const w = Math.max(this.canvas.parentElement.clientWidth - NAME_W - 10, 200);
+      this.t0 = 0;
+      this.scale = w / Math.max(this.vcd.end, 1);
+      this.draw();
+    }
+    fillPicker() {
+      this.picker.innerHTML = "";
+      if (!this.vcd) return;
+      const q = this.filter.value.toLowerCase();
+      for (const s of this.vcd.signals) {
+        if (q && !s.name.toLowerCase().includes(q)) continue;
+        const l = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = this.shown.includes(s);
+        cb.onchange = () => {
+          this.shown = cb.checked ? [...this.shown, s] : this.shown.filter((x) => x !== s);
+          this.draw();
+        };
+        l.append(cb, ` ${s.name}${s.width > 1 ? `[${s.width}]` : ""}`);
+        this.picker.appendChild(l);
+      }
+    }
+    draw() {
+      const c = this.canvas, r = c.parentElement.getBoundingClientRect();
+      if (r.width < NAME_W + 20 || !(this.scale > 0)) return;
+      const h = Math.max(r.height, TOP + ROW * this.shown.length + 10);
+      const dpr = window.devicePixelRatio || 1;
+      c.width = Math.round(r.width * dpr);
+      c.height = Math.round(h * dpr);
+      c.style.width = r.width + "px";
+      c.style.height = h + "px";
+      const g = c.getContext("2d");
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.fillStyle = "#171c24";
+      g.fillRect(0, 0, r.width, h);
+      g.font = "11px ui-monospace, Menlo, monospace";
+      g.textBaseline = "middle";
+      if (!this.vcd) {
+        g.fillStyle = "#9fb2c8";
+        g.fillText("\u6309\u300C\u25B6 \u6A21\u64EC\u300D\u5F8C\u986F\u793A\u6CE2\u5F62", 12, 20);
+        return;
+      }
+      const W = r.width - NAME_W;
+      const X = (t) => NAME_W + (t - this.t0) * this.scale;
+      const t1 = this.t0 + W / this.scale;
+      const step = Math.max(niceStep(80 / this.scale), (t1 - this.t0) / 200, 1e-9);
+      g.strokeStyle = "#2a3441";
+      g.fillStyle = "#9fb2c8";
+      for (let t = Math.ceil(this.t0 / step) * step; t <= t1; t += step) {
+        const x = X(t);
+        g.beginPath();
+        g.moveTo(x, TOP - 4);
+        g.lineTo(x, h);
+        g.stroke();
+        g.fillText(String(t), x + 2, 9);
+      }
+      this.shown.forEach((s, k) => {
+        const y = TOP + k * ROW, mid = y + ROW / 2, hi = y + 4, lo = y + ROW - 4;
+        const cv = this.cursor !== null ? valueAt(s, this.cursor) : void 0;
+        g.fillStyle = "#c9d4e2";
+        g.fillText(s.name + (cv !== void 0 ? ` = ${fmt(cv, s.width)}` : ""), 6, mid, NAME_W - 10);
+        g.strokeStyle = s.width === 1 ? "#57c27a" : "#7ec3ff";
+        g.lineWidth = 1.2;
+        const ch = s.changes;
+        for (let i = 0; i < ch.length; i++) {
+          const [ta, v] = ch[i];
+          const tb = i + 1 < ch.length ? ch[i + 1][0] : this.vcd.end;
+          if (tb < this.t0 || ta > t1) continue;
+          const xa = Math.max(X(ta), NAME_W), xb = Math.min(X(tb), r.width);
+          if (s.width === 1) {
+            const yv = v === "1" ? hi : v === "0" ? lo : mid;
+            g.strokeStyle = v === "1" || v === "0" ? "#57c27a" : "#e06c75";
+            g.beginPath();
+            g.moveTo(xa, yv);
+            g.lineTo(xb, yv);
+            if (i + 1 < ch.length && X(tb) <= r.width) {
+              const nv = ch[i + 1][1];
+              g.lineTo(xb, nv === "1" ? hi : nv === "0" ? lo : mid);
+            }
+            g.stroke();
+          } else {
+            g.strokeStyle = /[xz]/i.test(v) ? "#e06c75" : "#7ec3ff";
+            g.beginPath();
+            g.moveTo(xa, hi);
+            g.lineTo(xb - 2, hi);
+            g.lineTo(xb, mid);
+            g.lineTo(xb - 2, lo);
+            g.lineTo(xa, lo);
+            if (X(ta) >= NAME_W) {
+              g.lineTo(xa - 2 < NAME_W ? xa : xa - 0, mid);
+            }
+            g.stroke();
+            const label = fmt(v, s.width);
+            if (xb - xa > label.length * 7 + 6) {
+              g.fillStyle = "#dce1e8";
+              g.fillText(label, xa + 4, mid);
+            }
+          }
+        }
+        g.strokeStyle = "#232b36";
+        g.beginPath();
+        g.moveTo(0, y + ROW);
+        g.lineTo(r.width, y + ROW);
+        g.stroke();
+      });
+      g.strokeStyle = "#3a4a5e";
+      g.beginPath();
+      g.moveTo(NAME_W - 2, 0);
+      g.lineTo(NAME_W - 2, h);
+      g.stroke();
+      if (this.cursor !== null) {
+        const x = X(this.cursor);
+        g.strokeStyle = "#ffd479";
+        g.beginPath();
+        g.moveTo(x, 0);
+        g.lineTo(x, h);
+        g.stroke();
+        g.fillStyle = "#ffd479";
+        g.fillText(`t=${Math.round(this.cursor)}`, x + 3, TOP - 9);
+      }
+    }
+  };
+  function niceStep(raw) {
+    const p = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-9))));
+    for (const m of [1, 2, 5, 10]) if (m * p >= raw) return m * p;
+    return 10 * p;
+  }
+
   // src/main.ts
   var $2 = (id) => document.getElementById(id);
   var core = null;
   var synth = null;
+  var wave = null;
+  var vcds = [];
+  function showTab(t) {
+    $2("tabLog").classList.toggle("cur", t === "log");
+    $2("tabWave").classList.toggle("cur", t === "wave");
+    $2("log").classList.toggle("hidden", t !== "log");
+    $2("wavePane").classList.toggle("hidden", t !== "wave");
+    $2("waveTop").classList.toggle("hidden", t !== "wave" || vcds.length < 2);
+    $2("waveHint").textContent = t === "wave" ? "\u6EFE\u8F2A\u7E2E\u653E\u3001\u62D6\u66F3\u5E73\u79FB\u3001\u96D9\u64CA\u5168\u89BD" : "";
+    if (t === "wave") wave?.fit();
+  }
+  function showVcds(list) {
+    vcds = list;
+    const sel = $2("waveTop");
+    sel.innerHTML = "";
+    for (const v of list) {
+      const o = document.createElement("option");
+      o.value = o.textContent = v.top;
+      sel.appendChild(o);
+    }
+    wave?.set(list[0]?.text ?? null);
+    showTab($2("tabWave").classList.contains("cur") ? "wave" : "log");
+  }
   var st = null;
   function store() {
     try {
@@ -1273,6 +1537,7 @@
     $2("log").textContent = "";
     $2("msg").textContent = "";
     $2("banner").className = "hidden";
+    showVcds([]);
   }
   function jumpTo(name, line, col) {
     if (!st) return;
@@ -1319,7 +1584,8 @@
       const t0 = performance.now();
       const banner = $2("banner");
       try {
-        const r = await core.call({ cmd: "simulate", files: st.files, top, max_time: 1e6, vcd: false });
+        const r = await core.call({ cmd: "simulate", files: st.files, top, max_time: 1e6, vcd: true });
+        showVcds(r.vcd);
         $2("log").textContent = r.log;
         const fails = r.tops.reduce((a, t) => a + t.fails, 0);
         banner.className = fails ? "fail" : "pass";
@@ -1379,6 +1645,10 @@
       }
     });
     $2("run").onclick = runSim;
+    wave = new WaveView($2("waveCanvas"), $2("wavePick"), $2("waveFilter"));
+    $2("tabLog").onclick = () => showTab("log");
+    $2("tabWave").onclick = () => showTab("wave");
+    $2("waveTop").onchange = () => wave?.set(vcds.find((v) => v.top === $2("waveTop").value)?.text ?? null);
     $2("synth").onclick = () => {
       if (synth && st) synth.open(st.files, st.ex.synth, st.ex.pcf);
     };

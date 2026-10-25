@@ -36,6 +36,11 @@ for d in $DESIGNS; do
     if [ -n "$CHIPDB" ] && command -v icetime > /dev/null; then
         fmax=$(icetime -C "$CHIPDB" -d up5k -P sg48 -p $B/$m.pcf -t $B/$m.asc 2>/dev/null | sed -n 's/^Total path delay: .*(\(.*\) MHz)/\1 MHz/p')
     fi
+    # our .bin (own icepack port) must equal icepack's
+    if command -v icepack > /dev/null; then
+        icepack $B/$m.asc $B/$m.icepack.bin
+        cmp -s $B/$m.bin $B/$m.icepack.bin || { echo "$m: .bin differs from icepack"; fail=1; }
+    fi
     printf "%-10s %-38s %-11s " "$m" "$info" "$fmax"
     if res=$(python3 cosim.py $B/$m.json $B/$m.v $B/$m.asc $B/$m.pcf ${args[@]+"${args[@]}"} --cycles 1000 2>&1 | tail -1) && [[ $res == PASS* ]]; then
         echo "$res"

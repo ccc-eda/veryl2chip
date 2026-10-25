@@ -20,6 +20,8 @@ export interface PnrResult {
   globals: { net: string; glb: number }[];
   timing: { period: number; fmax: number; endpoints: number; path: { what: string; delay: number; at: number }[]; crit_lcs: number[] };
   pips: number;
+  /** bitstream (base64), byte-identical to icepack's */
+  bin: string;
   asc: string;
   pcf: string;
 }

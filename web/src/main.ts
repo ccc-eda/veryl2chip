@@ -4,6 +4,7 @@ import { fromBase64, ModuleInfo, SimResult, VFile } from './api';
 import { Core, startCore } from './client';
 import { Example, examples } from './examples';
 import { SynthOverlay } from './synth/overlay';
+import { WaveView } from './wave';
 
 declare const VERYL_WASM_B64: string;
 
@@ -17,6 +18,27 @@ interface State {
 
 let core: Core | null = null;
 let synth: SynthOverlay | null = null;
+let wave: WaveView | null = null;
+let vcds: { top: string; text: string }[] = [];
+
+function showTab(t: 'log' | 'wave'): void {
+  $('tabLog').classList.toggle('cur', t === 'log');
+  $('tabWave').classList.toggle('cur', t === 'wave');
+  $('log').classList.toggle('hidden', t !== 'log');
+  $('wavePane').classList.toggle('hidden', t !== 'wave');
+  $('waveTop').classList.toggle('hidden', t !== 'wave' || vcds.length < 2);
+  $('waveHint').textContent = t === 'wave' ? '滾輪縮放、拖曳平移、雙擊全覽' : '';
+  if (t === 'wave') wave?.fit();
+}
+
+function showVcds(list: { top: string; text: string }[]): void {
+  vcds = list;
+  const sel = $<HTMLSelectElement>('waveTop');
+  sel.innerHTML = '';
+  for (const v of list) { const o = document.createElement('option'); o.value = o.textContent = v.top; sel.appendChild(o); }
+  wave?.set(list[0]?.text ?? null);
+  showTab($('tabWave').classList.contains('cur') ? 'wave' : 'log');
+}
 let st: State | null = null;
 
 function store(): Storage | null {
@@ -107,6 +129,7 @@ function selectExample(id: string): void {
   $('log').textContent = '';
   $('msg').textContent = '';
   $('banner').className = 'hidden';
+  showVcds([]);
 }
 
 /** select `line` (1-based) of file `name` in the editor */
@@ -155,7 +178,8 @@ async function runSim(): Promise<void> {
     const t0 = performance.now();
     const banner = $('banner');
     try {
-      const r = await core.call<SimResult>({ cmd: 'simulate', files: st.files, top, max_time: 1_000_000, vcd: false });
+      const r = await core.call<SimResult>({ cmd: 'simulate', files: st.files, top, max_time: 1_000_000, vcd: true });
+      showVcds(r.vcd);
       $('log').textContent = r.log;
       const fails = r.tops.reduce((a, t) => a + t.fails, 0);
       banner.className = fails ? 'fail' : 'pass';
@@ -212,6 +236,10 @@ function wire(): void {
     }
   });
   $('run').onclick = runSim;
+  wave = new WaveView($<HTMLCanvasElement>('waveCanvas'), $('wavePick'), $<HTMLInputElement>('waveFilter'));
+  $('tabLog').onclick = () => showTab('log');
+  $('tabWave').onclick = () => showTab('wave');
+  $<HTMLSelectElement>('waveTop').onchange = () => wave?.set(vcds.find(v => v.top === $<HTMLSelectElement>('waveTop').value)?.text ?? null);
   $('synth').onclick = () => { if (synth && st) synth.open(st.files, st.ex.synth, st.ex.pcf); };
   $('revert').onclick = () => {
     if (!st) return;

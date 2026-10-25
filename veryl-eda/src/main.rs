@@ -102,6 +102,12 @@ fn main() {
             std::fs::write(&asc_path, &out.asc).unwrap();
             std::fs::write(asc_path.with_extension("pcf"), &out.pcf).unwrap();
             println!("wrote {} (+ .pcf)", asc_path.display());
+            if let Some(b) = &bin {
+                // own port of icepack (UP5K)
+                let bits = pnr::bitstream::asc_to_bin(&out.asc).unwrap_or_else(|e| { eprintln!("bitstream: {}", e); std::process::exit(1) });
+                std::fs::write(b, bits).unwrap();
+                println!("wrote {}", b);
+            }
         } else {
         let mut cmd = std::process::Command::new("nextpnr-ice40");
         cmd.arg(format!("--{}", device)).args(["--package", &package, "--json"]).arg(&mapped).arg("--asc").arg(&asc_path);
@@ -115,7 +121,7 @@ fn main() {
         if !out.status.success() { eprintln!("nextpnr-ice40 failed"); std::process::exit(1); }
         println!("wrote {}", asc_path.display());
         }
-        if let Some(b) = &bin {
+        if let (Some(b), false) = (&bin, pnr_tool == "veryl") {
             let st = std::process::Command::new("icepack").arg(&asc_path).arg(b).status()
                 .unwrap_or_else(|e| { eprintln!("cannot run icepack: {}", e); std::process::exit(1) });
             if !st.success() { eprintln!("icepack failed"); std::process::exit(1); }

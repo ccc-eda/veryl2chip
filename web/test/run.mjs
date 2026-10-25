@@ -21,7 +21,8 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   const t0 = Date.now();
   let line;
   try {
-    const r = core.simulate(ex.files);
+    const r = core.simulate(ex.files, undefined, { vcd: true });
+    if (r.vcd.length !== r.tops.length || !r.vcd.every((v) => v.text.includes('$enddefinitions'))) throw new Error('missing VCD');
     const fails = r.tops.reduce((a, t) => a + t.fails, 0);
     const ok = expectFail.has(ex.id) ? fails > 0 : fails === 0 && r.tops.length > 0;
     if (!ok) bad++;
@@ -75,6 +76,11 @@ for (const ex of ctx.VERYL_EXAMPLES) {
       if (ex.pcf) fs.writeFileSync(extra[1], ex.pcf);
       execFileSync(cli, ['--top', ex.synth, '--ice40', '--pnr', 'veryl', ...extra, '--asc', asc, ...paths]);
       if (fs.readFileSync(asc, 'utf8') !== r.asc) { bad++; note = ' .asc DIFFERS from CLI'; } else note = ', .asc = CLI';
+      try {
+        execFileSync('icepack', [asc, asc + '.bin']);
+        if (!fs.readFileSync(asc + '.bin').equals(Buffer.from(r.bin, 'base64'))) { bad++; note += ' .bin DIFFERS from icepack'; }
+        else note += ', .bin = icepack';
+      } catch { /* icepack not installed */ }
     }
     console.log(`${note.includes('DIFFERS') ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} pnr ${r.top}: ${r.lcs.length} LCs, ${r.pips} pips, Fmax ${r.timing.fmax.toFixed(1)} MHz, route ${r.route_iters.join('>')}${note}  (${Date.now() - t0} ms)`);
   } catch (e) {

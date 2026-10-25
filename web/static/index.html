@@ -32,8 +32,13 @@
     <h2>② 執行結果</h2>
     <div id="banner" class="hidden"></div>
     <div class="panel grow">
-      <h3>模擬輸出</h3>
+      <div class="rtabs"><button id="tabLog" class="cur">模擬輸出</button><button id="tabWave">波形</button>
+        <select id="waveTop" class="hidden" title="testbench"></select><span class="spacer"></span><span class="small" id="waveHint"></span></div>
       <pre id="log"></pre>
+      <div id="wavePane" class="hidden">
+        <div id="waveSide"><input id="waveFilter" placeholder="篩選訊號…"><div id="wavePick"></div></div>
+        <div id="waveWrap"><canvas id="waveCanvas"></canvas></div>
+      </div>
     </div>
     <div class="panel" id="msgpanel">
       <h3>錯誤 / 訊息</h3>
@@ -56,6 +61,7 @@
     <button id="synAnim" class="hidden">▶ 退火動畫</button>
     <button id="synAsc" class="hidden" title="下載 IceStorm .asc（icepack 可轉成位元流）">⬇ .asc</button>
     <button id="synPcf" class="hidden" title="下載腳位指定">⬇ .pcf</button>
+    <button id="synBin" class="hidden" title="下載位元流（iceprog 可燒錄；與 icepack 輸出相同）">⬇ .bin</button>
     <button id="synEdges">⌁ 連線：開</button>
   </div>
   <div id="synInfo"></div>

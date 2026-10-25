@@ -1,6 +1,6 @@
 // The synthesis overlay: stage bar, report, drawing, side panel.
 
-import type { VFile } from '../api';
+import { fromBase64, VFile } from '../api';
 import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
 import { deviceScene, heat, lcColor, PnrResult, routeLines } from './device';
@@ -50,6 +50,7 @@ export class SynthOverlay {
     $('synAnim').onclick = () => this.animate();
     $('synAsc').onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
     $('synPcf').onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
+    $('synBin').onclick = () => this.pnr && download(`${this.pnr.top}.bin`, fromBase64(this.pnr.bin));
     $<HTMLSelectElement>('synTop').onchange = () => this.run($<HTMLSelectElement>('synTop').value);
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('synOverlay').classList.contains('hidden')) this.close(); });
     this.chips();
@@ -148,7 +149,7 @@ export class SynthOverlay {
     const p = PNR.has(this.stage);
     $('synAnim').classList.toggle('hidden', this.stage !== 'place');
     $<HTMLButtonElement>('synAnim').disabled = !this.pnr;
-    for (const id of ['synAsc', 'synPcf']) { $(id).classList.toggle('hidden', !p); $<HTMLButtonElement>(id).disabled = !this.pnr; }
+    for (const id of ['synAsc', 'synPcf', 'synBin']) { $(id).classList.toggle('hidden', !p); $<HTMLButtonElement>(id).disabled = !this.pnr; }
     $('synEdges').classList.toggle('hidden', p && this.stage === 'place');
   }
 
@@ -497,9 +498,9 @@ function table(head: string[], rows: string[][]): string {
 }
 
 /** save text as a file (a Blob URL works from file:// too) */
-function download(name: string, text: string): void {
+function download(name: string, data: string | Uint8Array): void {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.href = URL.createObjectURL(new Blob([data as BlobPart], { type: typeof data === 'string' ? 'text/plain' : 'application/octet-stream' }));
   a.download = name;
   document.body.appendChild(a);
   a.click();

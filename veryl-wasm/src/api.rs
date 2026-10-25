@@ -134,6 +134,7 @@ fn pnr(v: &Value) -> R<Value> {
                 "crit_lcs": out.timing.crit_lcs,
             },
             "pips": out.wires,
+            "bin": base64(&veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?),
             "asc": out.asc,
             "pcf": out.pcf,
         }))
@@ -222,4 +223,17 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),
         c => Err(format!("unknown command '{}'", c)),
     }
+}
+
+fn base64(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        s.push(T[(n >> 18) as usize & 63] as char);
+        s.push(T[(n >> 12) as usize & 63] as char);
+        s.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        s.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    s
 }

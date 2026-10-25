@@ -80,3 +80,14 @@ label.inl { flex-direction: row; align-items: center; gap: 6px; font-size: 12px;
   #synSide { max-width: none; flex: 0 0 auto; border-left: none; border-top: 1px solid #3a4a5e; }
   #synInfo { max-height: 110px; }
 }
+
+.rtabs { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+.rtabs button { padding: 2px 10px; font-size: 12px; border-radius: 11px; color: #9fb2c8; background: #242e3a; }
+.rtabs button.cur { background: #3d6ea0; border-color: #6aa1d4; color: #fff; }
+#wavePane { flex: 1; display: flex; min-height: 0; gap: 6px; }
+#waveSide { flex: 0 0 170px; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+#waveFilter { background: #2a3441; color: #e6ecf4; border: 1px solid #435269; border-radius: 5px; font: inherit; font-size: 12px; padding: 3px 6px; }
+#wavePick { flex: 1; overflow: auto; font-size: 11px; color: #c9d4e2; }
+#wavePick label { display: block; white-space: nowrap; flex-direction: row; color: #c9d4e2; font-size: 11px; }
+#waveWrap { flex: 1; overflow: auto; min-width: 0; border: 1px solid #38445a; border-radius: 5px; }
+#waveCanvas { display: block; cursor: crosshair; }

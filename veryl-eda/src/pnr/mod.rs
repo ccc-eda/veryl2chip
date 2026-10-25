@@ -3,6 +3,7 @@
 //! (PathFinder), and write the `.asc` configuration that icepack turns into
 //! a bitstream.
 
+pub mod bitstream;
 pub mod chipdb;
 pub mod pack;
 pub mod place;
