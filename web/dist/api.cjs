@@ -21,7 +21,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var api_exports = {};
 __export(api_exports, {
   Veryl: () => Veryl,
-  fromBase64: () => fromBase64
+  fromBase64: () => fromBase64,
+  gunzip: () => gunzip
 });
 module.exports = __toCommonJS(api_exports);
 function fromBase64(s) {
@@ -40,9 +41,28 @@ var Veryl = class _Veryl {
   static async load(bytes) {
     return new _Veryl(await WebAssembly.compile(bytes));
   }
+  static fromModule(mod) {
+    return new _Veryl(mod);
+  }
+  chipdb = null;
+  /** chip database text (IceStorm chipdb-5k.txt) for place and route */
+  loadChipdb(text) {
+    this.chipdb = text;
+    this.pushChipdb();
+  }
+  pushChipdb() {
+    if (!this.chipdb) return;
+    const x = this.x;
+    const p = x.alloc(this.chipdb.length);
+    new Uint8Array(x.memory.buffer, p, this.chipdb.length).set(this.chipdb);
+    const r = x.load_chipdb(p, this.chipdb.length);
+    x.dealloc(p, this.chipdb.length);
+    if (r !== 0) throw new Error(this.text(x.panic_message()));
+  }
   /** a trap (Rust panic) leaves the instance unusable: start a fresh one */
   reset() {
     this.x = new WebAssembly.Instance(this.mod, {}).exports;
+    if (this.chipdb) this.pushChipdb();
   }
   text(ptr) {
     return new TextDecoder().decode(new Uint8Array(this.x.memory.buffer, ptr, this.x.result_len()).slice());
@@ -77,8 +97,14 @@ var Veryl = class _Veryl {
     return this.call({ cmd: "simulate", files, top: top || null, max_time: opts.maxTime ?? 1e6, vcd: !!opts.vcd });
   }
 };
+async function gunzip(gz) {
+  const ds = new DecompressionStream("gzip");
+  const stream = new Blob([gz]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   Veryl,
-  fromBase64
+  fromBase64,
+  gunzip
 });

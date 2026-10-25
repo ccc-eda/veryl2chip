@@ -38,15 +38,18 @@ export class CanvasView {
   onPick: (b: Box | null) => void = () => {};
   private drag: { x: number; y: number; tx: number; ty: number; moved: boolean } | null = null;
   private raf = 0;
+  /** keep fitting the scene to the canvas until the user pans or zooms */
+  private autoFit = true;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
-    new ResizeObserver(() => this.redraw()).observe(canvas.parentElement!);
+    new ResizeObserver(() => { if (this.autoFit) this.fit(); else this.redraw(); }).observe(canvas.parentElement!);
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const r = canvas.getBoundingClientRect();
       const mx = e.clientX - r.left, my = e.clientY - r.top;
       const f = Math.exp(-e.deltaY * 0.0015);
+      this.autoFit = false;
       this.zoomAt(mx, my, f);
     }, { passive: false });
     canvas.addEventListener('pointerdown', e => {
@@ -56,7 +59,7 @@ export class CanvasView {
     canvas.addEventListener('pointermove', e => {
       if (!this.drag) return;
       const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 3) this.drag.moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > 3) { this.drag.moved = true; this.autoFit = false; }
       this.tx = this.drag.tx + dx;
       this.ty = this.drag.ty + dy;
       this.redraw();
@@ -82,6 +85,7 @@ export class CanvasView {
   }
 
   zoom(f: number): void {
+    this.autoFit = false;
     const r = this.canvas.getBoundingClientRect();
     this.zoomAt(r.width / 2, r.height / 2, f);
   }
@@ -98,7 +102,9 @@ export class CanvasView {
   }
 
   fit(): void {
-    const r = this.canvas.getBoundingClientRect();
+    this.autoFit = true;
+    const r = this.canvas.parentElement!.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return;
     const [x0, y0, x1, y1] = this.bounds();
     const pad = 20;
     const s = Math.min((r.width - 2 * pad) / Math.max(x1 - x0, 1), (r.height - 2 * pad) / Math.max(y1 - y0, 1));

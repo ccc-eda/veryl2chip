@@ -15,14 +15,33 @@
     constructor(mod) {
       __publicField(this, "mod", mod);
       __publicField(this, "x");
+      __publicField(this, "chipdb", null);
       this.reset();
     }
     static async load(bytes) {
       return new _Veryl(await WebAssembly.compile(bytes));
     }
+    static fromModule(mod) {
+      return new _Veryl(mod);
+    }
+    /** chip database text (IceStorm chipdb-5k.txt) for place and route */
+    loadChipdb(text) {
+      this.chipdb = text;
+      this.pushChipdb();
+    }
+    pushChipdb() {
+      if (!this.chipdb) return;
+      const x = this.x;
+      const p = x.alloc(this.chipdb.length);
+      new Uint8Array(x.memory.buffer, p, this.chipdb.length).set(this.chipdb);
+      const r = x.load_chipdb(p, this.chipdb.length);
+      x.dealloc(p, this.chipdb.length);
+      if (r !== 0) throw new Error(this.text(x.panic_message()));
+    }
     /** a trap (Rust panic) leaves the instance unusable: start a fresh one */
     reset() {
       this.x = new WebAssembly.Instance(this.mod, {}).exports;
+      if (this.chipdb) this.pushChipdb();
     }
     text(ptr) {
       return new TextDecoder().decode(new Uint8Array(this.x.memory.buffer, ptr, this.x.result_len()).slice());
@@ -57,6 +76,79 @@
       return this.call({ cmd: "simulate", files, top: top || null, max_time: opts.maxTime ?? 1e6, vcd: !!opts.vcd });
     }
   };
+  async function gunzip(gz) {
+    const ds = new DecompressionStream("gzip");
+    const stream = new Blob([gz]).stream().pipeThrough(ds);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  // src/client.ts
+  async function startCore(wasm) {
+    const mod = await WebAssembly.compile(wasm);
+    try {
+      return await workerCore(mod);
+    } catch {
+      return directCore(mod);
+    }
+  }
+  function chipdbGz() {
+    if (typeof VERYL_CHIPDB_GZ_B64 === "undefined") throw new Error("chipdb.js (\u6676\u7247\u8CC7\u6599\u5EAB) \u6C92\u6709\u8F09\u5165");
+    return fromBase64(VERYL_CHIPDB_GZ_B64);
+  }
+  async function workerCore(mod) {
+    const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/api.ts\n  var Veryl = class _Veryl {\n    constructor(mod) {\n      __publicField(this, "mod", mod);\n      __publicField(this, "x");\n      __publicField(this, "chipdb", null);\n      this.reset();\n    }\n    static async load(bytes) {\n      return new _Veryl(await WebAssembly.compile(bytes));\n    }\n    static fromModule(mod) {\n      return new _Veryl(mod);\n    }\n    /** chip database text (IceStorm chipdb-5k.txt) for place and route */\n    loadChipdb(text) {\n      this.chipdb = text;\n      this.pushChipdb();\n    }\n    pushChipdb() {\n      if (!this.chipdb) return;\n      const x = this.x;\n      const p = x.alloc(this.chipdb.length);\n      new Uint8Array(x.memory.buffer, p, this.chipdb.length).set(this.chipdb);\n      const r = x.load_chipdb(p, this.chipdb.length);\n      x.dealloc(p, this.chipdb.length);\n      if (r !== 0) throw new Error(this.text(x.panic_message()));\n    }\n    /** a trap (Rust panic) leaves the instance unusable: start a fresh one */\n    reset() {\n      this.x = new WebAssembly.Instance(this.mod, {}).exports;\n      if (this.chipdb) this.pushChipdb();\n    }\n    text(ptr) {\n      return new TextDecoder().decode(new Uint8Array(this.x.memory.buffer, ptr, this.x.result_len()).slice());\n    }\n    call(req) {\n      const enc = new TextEncoder().encode(JSON.stringify(req));\n      const x = this.x;\n      const p = x.alloc(enc.length);\n      new Uint8Array(x.memory.buffer, p, enc.length).set(enc);\n      let out;\n      try {\n        out = x.call(p, enc.length);\n      } catch (e) {\n        let msg = String(e);\n        try {\n          msg = this.text(x.panic_message()) || msg;\n        } catch {\n        }\n        this.reset();\n        throw new Error(msg);\n      }\n      const s = this.text(out);\n      x.dealloc(p, enc.length);\n      const r = JSON.parse(s);\n      if (!r.ok) throw new Error(r.error);\n      return r;\n    }\n    list(files) {\n      return this.call({ cmd: "list", files }).modules;\n    }\n    simulate(files, top, opts = {}) {\n      return this.call({ cmd: "simulate", files, top: top || null, max_time: opts.maxTime ?? 1e6, vcd: !!opts.vcd });\n    }\n  };\n  async function gunzip(gz) {\n    const ds = new DecompressionStream("gzip");\n    const stream = new Blob([gz]).stream().pipeThrough(ds);\n    return new Uint8Array(await new Response(stream).arrayBuffer());\n  }\n\n  // src/worker.ts\n  var core = null;\n  self.onmessage = async (e) => {\n    const m = e.data;\n    try {\n      if (m.type === "init") {\n        core = Veryl.fromModule(m.module);\n        self.postMessage({ id: m.id, res: true });\n      } else if (m.type === "chipdb") {\n        core.loadChipdb(await gunzip(m.gz));\n        self.postMessage({ id: m.id, res: true });\n      } else {\n        self.postMessage({ id: m.id, res: core.call(m.req) });\n      }\n    } catch (err) {\n      self.postMessage({ id: m.id, error: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
+    const w = new Worker(url);
+    let next = 1;
+    const pending = /* @__PURE__ */ new Map();
+    w.onmessage = (e) => {
+      const p = pending.get(e.data.id);
+      if (!p) return;
+      pending.delete(e.data.id);
+      if (e.data.error !== void 0) p.fail(new Error(e.data.error));
+      else p.ok(e.data.res);
+    };
+    const send = (msg, transfer = []) => new Promise((ok, fail) => {
+      const id = next++;
+      pending.set(id, { ok, fail });
+      w.postMessage({ ...msg, id }, transfer);
+    });
+    w.onerror = () => {
+      for (const p of pending.values()) p.fail(new Error("worker \u932F\u8AA4"));
+      pending.clear();
+    };
+    await Promise.race([send({ type: "init", module: mod }), new Promise((_, f) => setTimeout(() => f(new Error("worker timeout")), 5e3))]);
+    let db = null;
+    return {
+      inWorker: true,
+      call: (req) => send({ type: "call", req }),
+      chipdb: () => {
+        if (!db) {
+          const gz = chipdbGz();
+          db = send({ type: "chipdb", gz }, [gz.buffer]).then(() => {
+          });
+          db.catch(() => {
+            db = null;
+          });
+        }
+        return db;
+      }
+    };
+  }
+  function directCore(mod) {
+    const v = Veryl.fromModule(mod);
+    let db = null;
+    return {
+      inWorker: false,
+      call: (req) => new Promise((ok, fail) => setTimeout(() => {
+        try {
+          ok(v.call(req));
+        } catch (e) {
+          fail(e);
+        }
+      }, 10)),
+      chipdb: () => db ?? (db = gunzip(chipdbGz()).then((t) => v.loadChipdb(t)))
+    };
+  }
 
   // src/examples.ts
   function examples() {
@@ -76,13 +168,19 @@
       });
       __publicField(this, "drag", null);
       __publicField(this, "raf", 0);
+      /** keep fitting the scene to the canvas until the user pans or zooms */
+      __publicField(this, "autoFit", true);
       this.ctx = canvas.getContext("2d");
-      new ResizeObserver(() => this.redraw()).observe(canvas.parentElement);
+      new ResizeObserver(() => {
+        if (this.autoFit) this.fit();
+        else this.redraw();
+      }).observe(canvas.parentElement);
       canvas.addEventListener("wheel", (e) => {
         e.preventDefault();
         const r = canvas.getBoundingClientRect();
         const mx = e.clientX - r.left, my = e.clientY - r.top;
         const f = Math.exp(-e.deltaY * 15e-4);
+        this.autoFit = false;
         this.zoomAt(mx, my, f);
       }, { passive: false });
       canvas.addEventListener("pointerdown", (e) => {
@@ -92,7 +190,10 @@
       canvas.addEventListener("pointermove", (e) => {
         if (!this.drag) return;
         const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
-        if (Math.abs(dx) + Math.abs(dy) > 3) this.drag.moved = true;
+        if (Math.abs(dx) + Math.abs(dy) > 3) {
+          this.drag.moved = true;
+          this.autoFit = false;
+        }
         this.tx = this.drag.tx + dx;
         this.ty = this.drag.ty + dy;
         this.redraw();
@@ -116,6 +217,7 @@
       this.redraw();
     }
     zoom(f) {
+      this.autoFit = false;
       const r = this.canvas.getBoundingClientRect();
       this.zoomAt(r.width / 2, r.height / 2, f);
     }
@@ -141,7 +243,9 @@
       return [x0, y0, x1, y1];
     }
     fit() {
-      const r = this.canvas.getBoundingClientRect();
+      this.autoFit = true;
+      const r = this.canvas.parentElement.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return;
       const [x0, y0, x1, y1] = this.bounds();
       const pad = 20;
       const s = Math.min((r.width - 2 * pad) / Math.max(x1 - x0, 1), (r.height - 2 * pad) / Math.max(y1 - y0, 1));
@@ -232,6 +336,99 @@
       }
     }
   };
+
+  // src/synth/device.ts
+  var T = 12;
+  var TILE_FILL = {
+    logic: "#222c38",
+    io: "#25352b",
+    ramb: "#33283f",
+    ramt: "#33283f",
+    dsp0: "#3a3026",
+    dsp1: "#3a3026",
+    dsp2: "#3a3026",
+    dsp3: "#3a3026",
+    ipcon: "#263340"
+  };
+  var KIND_COLOR = {
+    sp4: "rgba(94,159,214,0.75)",
+    sp12: "rgba(180,142,173,0.85)",
+    local: "rgba(160,170,185,0.6)",
+    in: "rgba(160,170,185,0.6)",
+    glb: "#57c27a",
+    g2l: "#57c27a",
+    ctrl: "#57c27a",
+    io: "#e5c07b",
+    carry: "#e5c07b",
+    fabout: "#57c27a",
+    out: "#9fb2c8",
+    other: "#9fb2c8"
+  };
+  function lcColor(lc) {
+    if (lc.carry) return "#e5c07b";
+    if (lc.ff && lc.init === "aaaa" && lc.ins.filter((x) => x).length <= 1) return "#d08770";
+    if (lc.ff) return "#c27ba0";
+    if (!lc.ins.some((x) => x)) return "#7f8c9a";
+    return "#5e9fd6";
+  }
+  function tileXY(dev, x, y) {
+    return [x * T, (dev.h - 1 - y) * T];
+  }
+  function lcRect(dev, x, y, z) {
+    const [tx, ty] = tileXY(dev, x, y);
+    const w = (T - 3) / 2, h = (T - 3) / 4;
+    return [tx + 1 + z % 2 * (w + 0.5), ty + 1 + (3 - Math.floor(z / 2)) * (h + 0.3), w, h];
+  }
+  function deviceScene(r, pos, colorOf) {
+    const dev = r.device;
+    const bg = dev.tiles.map(([x, y, t]) => {
+      const [tx, ty] = tileXY(dev, x, y);
+      return { x: tx, y: ty, w: T - 1, h: T - 1, fill: TILE_FILL[t] ?? "#1d232e" };
+    });
+    const boxes = r.lcs.map((lc, i) => {
+      const [x, y, z] = pos ? [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]] : [lc.x, lc.y, lc.z];
+      const [bx, by, w, h] = lcRect(dev, x, y, z);
+      return { id: i, x: bx, y: by, w, h, fill: colorOf ? colorOf(i) : lcColor(lc) };
+    });
+    const texts = [];
+    r.ios.forEach((io, k) => {
+      const [tx, ty] = tileXY(dev, io.x, io.y);
+      boxes.push({ id: r.lcs.length + k, x: tx + 1 + io.z * 5.5, y: ty + 3, w: 4.5, h: 5, fill: io.dir === "in" ? "#57c27a" : "#e06c75", stroke: "#0f1318" });
+      texts.push({ x: tx + 3 + io.z * 5.5, y: io.y === 0 ? ty + T + 3 : ty - 3, s: io.name, color: io.dir === "in" ? "#8fe0a8" : "#f0a0a8", size: 9, align: "center" });
+    });
+    for (const [x, y, t] of dev.tiles) {
+      if (t !== "logic") continue;
+      for (let z = 0; z < 8; z++) {
+        const [bx, by, w, h] = lcRect(dev, x, y, z);
+        bg.push({ x: bx, y: by, w, h, fill: "#2a3441" });
+      }
+    }
+    return { bg, boxes, lines: [], texts };
+  }
+  function routeLines(r, opts) {
+    const dev = r.device;
+    const c = (x, y) => {
+      const [tx, ty] = tileXY(dev, x, y);
+      return [tx + (T - 1) / 2, ty + (T - 1) / 2];
+    };
+    const out = [];
+    const crit = [];
+    r.nets.forEach((n, ni) => {
+      const sel = opts.net === ni;
+      for (const [x0, y0, x1, y1, kind, isCrit] of n.segs) {
+        if (x0 === x1 && y0 === y1) continue;
+        const [ax, ay] = c(x0, y0), [bx, by] = c(x1, y1);
+        if (isCrit) crit.push({ pts: [ax, ay, bx, by], color: "#ff5c5c", width: 2.2 });
+        else if (sel) out.push({ pts: [ax, ay, bx, by], color: "#ffd479", width: 2 });
+        else if (!opts.critOnly) out.push({ pts: [ax, ay, bx, by], color: opts.dim ? "rgba(126,150,180,0.18)" : KIND_COLOR[kind] ?? "#9fb2c8", width: 0.8 });
+      }
+    });
+    return out.concat(crit);
+  }
+  function heat(t) {
+    const h = 120 - 120 * Math.min(Math.max(t, 0), 1);
+    return `hsl(${h}, 70%, 52%)`;
+  }
 
   // src/synth/model.ts
   var OUTS = /* @__PURE__ */ new Set(["Y", "Q", "O", "CO"]);
@@ -461,24 +658,34 @@
   // src/synth/overlay.ts
   var $ = (id) => document.getElementById(id);
   var FPGA_STAGES = [
-    { key: "rtl", tag: "common", label: "\u5171 \u2460 RTL\u2192Logic", ready: true },
-    { key: "raw", tag: "common", label: "\u5171 \u2461 Logic Netlist", ready: true },
-    { key: "opt", tag: "common", label: "\u5171 \u2462 Tech-indep Syn", ready: true },
-    { key: "map", tag: "fpga", label: "F \u2463 LUT4 Techmap", ready: true },
-    { key: "place", tag: "fpga", label: "F \u2464 Placement \u9000\u706B", ready: false },
-    { key: "route", tag: "fpga", label: "F \u2465 Global+Detail Routing", ready: false },
-    { key: "sta", tag: "fpga", label: "F \u2466 Timing (STA)", ready: false }
+    { key: "rtl", tag: "common", label: "\u5171 \u2460 RTL\u2192Logic" },
+    { key: "raw", tag: "common", label: "\u5171 \u2461 Logic Netlist" },
+    { key: "opt", tag: "common", label: "\u5171 \u2462 Tech-indep Syn" },
+    { key: "map", tag: "fpga", label: "F \u2463 LUT4 Techmap" },
+    { key: "place", tag: "fpga", label: "F \u2464 Placement \u9000\u706B" },
+    { key: "route", tag: "fpga", label: "F \u2465 Global+Detail Routing" },
+    { key: "sta", tag: "fpga", label: "F \u2466 Timing (STA)" }
   ];
+  var PNR = /* @__PURE__ */ new Set(["place", "route", "sta"]);
   var SynthOverlay = class {
     constructor(core2) {
       __publicField(this, "core", core2);
       __publicField(this, "view");
       __publicField(this, "res", null);
+      __publicField(this, "pnr", null);
+      __publicField(this, "pnrErr", null);
+      __publicField(this, "pnrBusy", false);
       __publicField(this, "stage", "rtl");
       __publicField(this, "nets", /* @__PURE__ */ new Map());
       __publicField(this, "sel", null);
       __publicField(this, "edges", true);
       __publicField(this, "files", []);
+      __publicField(this, "pcf");
+      __publicField(this, "anim", 0);
+      __publicField(this, "gen", 0);
+      __publicField(this, "pnrMs", 0);
+      __publicField(this, "synMs", 0);
+      __publicField(this, "selNet", null);
       this.view = new CanvasView($("synCanvas"));
       this.view.onPick = (b) => this.pick(b);
       $("synClose").onclick = () => this.close();
@@ -487,49 +694,86 @@
       $("synZfit").onclick = () => this.view.fit();
       $("synEdges").onclick = () => {
         this.edges = !this.edges;
-        this.updateLines();
+        this.redrawLines();
       };
+      $("synAnim").onclick = () => this.animate();
+      $("synAsc").onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
+      $("synPcf").onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
       $("synTop").onchange = () => this.run($("synTop").value);
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !$("synOverlay").classList.contains("hidden")) this.close();
       });
       this.chips();
     }
-    open(files, top) {
+    open(files, top, pcf) {
       this.files = files;
+      this.pcf = pcf;
       $("synOverlay").classList.remove("hidden");
       this.run(top);
     }
     close() {
+      this.stopAnim();
       $("synOverlay").classList.add("hidden");
     }
-    run(top) {
+    async run(top) {
+      const gen = ++this.gen;
+      this.stopAnim();
+      this.res = null;
+      this.pnr = null;
+      this.pnrErr = null;
+      this.nets.clear();
       $("synInfo").textContent = "\u5408\u6210\u4E2D\u2026";
       $("synSide").innerHTML = "";
-      setTimeout(() => {
-        const t0 = performance.now();
-        try {
-          this.res = this.core.call({ cmd: "synth", files: this.files, top: top || null });
-        } catch (e) {
-          this.res = null;
-          $("synInfo").textContent = "\u5408\u6210\u5931\u6557\uFF1A\n" + String(e.message ?? e);
-          this.view.set({ boxes: [], lines: [], texts: [] });
-          $("synStats").innerHTML = "";
-          return;
-        }
-        const ms = performance.now() - t0;
-        this.nets.clear();
-        const sel = $("synTop");
-        sel.innerHTML = "";
-        for (const m of this.res.modules.filter((m2) => !m2.test)) {
-          const o = document.createElement("option");
-          o.value = o.textContent = m.name;
-          sel.appendChild(o);
-        }
-        sel.value = this.res.top;
-        this.stats(ms);
-        this.show(this.stage);
-      }, 10);
+      this.view.set({ boxes: [], lines: [], texts: [] });
+      this.buttons();
+      const t0 = performance.now();
+      let res;
+      try {
+        res = await this.core.call({ cmd: "synth", files: this.files, top: top || null });
+      } catch (e) {
+        if (gen !== this.gen) return;
+        $("synInfo").textContent = "\u5408\u6210\u5931\u6557\uFF1A\n" + String(e.message ?? e);
+        $("synStats").innerHTML = "";
+        return;
+      }
+      if (gen !== this.gen) return;
+      this.res = res;
+      const sel = $("synTop");
+      sel.innerHTML = "";
+      for (const m of res.modules.filter((m2) => !m2.test)) {
+        const o = document.createElement("option");
+        o.value = o.textContent = m.name;
+        sel.appendChild(o);
+      }
+      sel.value = res.top;
+      this.stats(performance.now() - t0);
+      this.show(this.stage);
+    }
+    async runPnr() {
+      if (!this.res || this.pnr || this.pnrBusy) return;
+      const gen = this.gen;
+      this.pnrBusy = true;
+      const t0 = performance.now();
+      const tick = setInterval(() => {
+        if (gen === this.gen && PNR.has(this.stage)) $("synInfo").textContent = `\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`;
+      }, 200);
+      try {
+        $("synInfo").textContent = "\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026";
+        await this.core.chipdb();
+        const r = await this.core.call({ cmd: "pnr", files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
+        if (gen !== this.gen) return;
+        this.pnr = r;
+        this.pnrMs = performance.now() - t0;
+      } catch (e) {
+        if (gen !== this.gen) return;
+        this.pnrErr = String(e.message ?? e);
+      } finally {
+        clearInterval(tick);
+        this.pnrBusy = false;
+      }
+      this.stats(this.synMs);
+      this.buttons();
+      if (PNR.has(this.stage)) this.show(this.stage);
     }
     chips() {
       const box = $("synChips");
@@ -545,11 +789,20 @@
         b.textContent = s.label;
         b.dataset.key = s.key;
         b.className = s.tag === "fpga" ? "tagf" : s.tag === "asic" ? "taga" : "";
-        b.disabled = !s.ready;
-        if (!s.ready) b.title = "\u4E0B\u4E00\u500B\u91CC\u7A0B\u7891";
         b.onclick = () => this.show(s.key);
         box.appendChild(b);
       });
+    }
+    /** stage-dependent buttons */
+    buttons() {
+      const p = PNR.has(this.stage);
+      $("synAnim").classList.toggle("hidden", this.stage !== "place");
+      $("synAnim").disabled = !this.pnr;
+      for (const id of ["synAsc", "synPcf"]) {
+        $(id).classList.toggle("hidden", !p);
+        $(id).disabled = !this.pnr;
+      }
+      $("synEdges").classList.toggle("hidden", p && this.stage === "place");
     }
     netView(key) {
       let v = this.nets.get(key);
@@ -562,27 +815,40 @@
       return v;
     }
     stats(ms) {
+      this.synMs = ms;
       const r = this.res;
       const m = r.map.cells;
       const luts = m.filter((c) => c.t === "SB_LUT4").length;
       const ffs = m.filter((c) => isFF(c.t)).length;
       const carry = m.filter((c) => c.t === "SB_CARRY").length;
       const lev = this.netView("map").lev;
-      $("synStats").innerHTML = [
+      const items = [
         `\u9802\u5C64 <b>${r.top}</b>`,
         `\u9598 <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`,
         `LUT4 <b>${luts}</b>`,
         `CARRY <b>${carry}</b>`,
         `DFF <b>${ffs}</b>`,
-        `LUT \u5C64\u6578 <b>${lev.depth}</b>`,
-        `\u5408\u6210 <b>${ms.toFixed(0)}</b> ms`
-      ].join('<span class="sep">\u2502</span>');
+        `LUT \u5C64\u6578 <b>${lev.depth}</b>`
+      ];
+      if (this.pnr) {
+        const p = this.pnr;
+        items.push(
+          `LC <b>${p.lcs.length}</b>/5280\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09`,
+          `pip <b>${p.pips}</b>`,
+          `F<sub>max</sub> <b>${p.timing.fmax.toFixed(1)}</b> MHz`,
+          `\u95DC\u9375\u8DEF\u5F91 <b>${p.timing.period.toFixed(2)}</b> ns`
+        );
+      }
+      items.push(`\u5408\u6210 <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `\uFF0C\u4F48\u5C40\u7E5E\u7DDA <b>${(this.pnrMs / 1e3).toFixed(1)}</b> s` : ""));
+      $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
     }
     show(key) {
       if (!this.res) return;
+      this.stopAnim();
       this.stage = key;
       this.sel = null;
       for (const b of $("synChips").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.key === key);
+      this.buttons();
       const r = this.res;
       if (key === "rtl") {
         const counts = /* @__PURE__ */ new Map();
@@ -608,12 +874,140 @@
         const v = this.netView(key);
         this.view.set({ ...v.lay.scene, lines: netLines(v.nl, v.lev, v.lay, this.edges && edgeCount(v.nl) <= 6e3, null) });
         this.info(this.netReport(key, v));
-        this.side(this.netSide(key, v));
+        this.side(this.netSide(v));
+        return;
+      }
+      if (!this.pnr) {
+        this.view.set({ boxes: [], lines: [], texts: [] });
+        this.side(document.createElement("div"));
+        if (this.pnrErr) {
+          const fit = /does not fit/.test(this.pnrErr);
+          this.info(["\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", this.pnrErr, ...fit ? ["", "iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002"] : []]);
+          return;
+        }
+        this.info(["\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026"]);
+        this.runPnr();
+        return;
+      }
+      this.drawPnr(true);
+      this.info(this.pnrReport(key));
+      this.side(this.pnrSide(key));
+    }
+    drawPnr(fit) {
+      const p = this.pnr;
+      const k = this.stage;
+      let color;
+      if (k === "sta") {
+        const max = Math.max(...p.lcs.map((l) => l.arr), 1e-9);
+        color = (i) => heat(p.lcs[i].arr / max);
+      }
+      const scene = deviceScene(p, void 0, color);
+      const crit = new Set(p.timing.crit_lcs);
+      for (const b of scene.boxes) b.hl = b.id === this.sel || k === "sta" && crit.has(b.id);
+      if (k === "route") scene.lines = this.edges ? routeLines(p, { net: this.selNet }) : [];
+      if (k === "sta") scene.lines = routeLines(p, { dim: true, net: this.selNet });
+      this.view.set(scene, fit);
+    }
+    pnrReport(key) {
+      const p = this.pnr;
+      if (key === "place") {
+        const h = p.history;
+        const chains = p.chains.map((c) => c.length);
+        return [
+          "\u2464 Placement \u9000\u706B\uFF08iCE40UP5K\uFF1A26\xD732 tile\uFF0C\u908F\u8F2F tile \u6BCF\u500B 8 \u500B LC\uFF09",
+          "\u5148\u6253\u5305\uFF08LUT+FF+CARRY \u2192 LC\uFF09\uFF0C\u9032\u4F4D\u93C8\u653E\u5728\u6574\u6B04\u908F\u8F2F tile \u4E26\u5F9E LC 0 \u958B\u59CB\uFF1B\u5176\u9918\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316\u7DDA\u9577\uFF08HPWL\uFF09\uFF0C\u540C\u4E00 tile \u7684 DFF \u5FC5\u9808\u540C clock / reset / \u908A\u7DE3\u3002",
+          "",
+          `LC ${p.lcs.length} \u500B\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0C\u9032\u4F4D\u93C8 ${chains.length} \u689D${chains.length ? `\uFF08${chains.join(", ")} LC\uFF09` : ""}\uFF0CIO ${p.ios.length} \u500B`,
+          `HPWL\uFF1A\u521D\u59CB ${h[0].cost.toFixed(0)} \u2192 \u9000\u706B\u5F8C ${h[h.length - 1].cost.toFixed(0)}\uFF08${h.length - 1} \u500B\u6EAB\u5EA6\u5FEB\u7167\uFF09\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`
+        ];
+      }
+      if (key === "route") {
+        const glb = p.globals.map((g) => `${g.net} \u2192 glb_netwk_${g.glb}`).join("\uFF0C") || "\u7121";
+        return [
+          "\u2465 Global + Detail Routing",
+          "clock / reset \u8D70\u5168\u57DF\u7DB2\u8DEF\uFF08\u4F86\u6E90 \u2192 fabout \u2192 glb_netwk \u2192 \u5404 tile \u7684 clk / s_r mux\uFF09\uFF1B\u5176\u9918\u4EE5 PathFinder \u5354\u5546\u64C1\u585E + A* \u5728 IceStorm \u7E5E\u7DDA\u5716\u4E0A\u627E\u8DEF\uFF08\u6BCF\u689D\u7DDA\u53EA\u80FD\u7D66\u4E00\u500B\u8A0A\u865F\uFF09\u3002",
+          "",
+          `\u5168\u57DF\uFF1A${glb}`,
+          `${p.nets.length} \u689D net\uFF0C\u4F7F\u7528 ${p.pips} \u500B pip\uFF1B\u6BCF\u8F2A\u904E\u5EA6\u4F7F\u7528\u7684\u7DDA\uFF1A${p.route_iters.join(" \u2192 ")}`,
+          "\u984F\u8272\uFF1A\u85CD\uFF1Dspan4\u3001\u7D2B\uFF1Dspan12\u3001\u7070\uFF1Dlocal / \u8F38\u5165\u3001\u7DA0\uFF1D\u5168\u57DF\u3001\u9EC3\uFF1DIO\uFF08\u9EDE LC \u770B\u7D30\u7BC0\uFF09"
+        ];
+      }
+      const t = p.timing;
+      return [
+        "\u2466 Timing (STA)",
+        "\u5EF6\u9072\u53D6\u81EA IceStorm timings_up5k\uFF08\u6162\u901F\u89D2\uFF09\uFF1ALC in\u2192out\u3001carry\u3001clk\u2192Q\u3001setup\uFF0C\u6BCF\u6BB5\u7E5E\u7DDA\u4F9D\u6240\u9A45\u52D5\u7684\u7DDA\u7A2E\u985E\u8A08 mux \u5EF6\u9072\uFF1Bclock \u8996\u70BA\u7406\u60F3\uFF08\u5168\u57DF\u7DB2\u8DEF\uFF09\u3002",
+        "",
+        `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0CLC \u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`
+      ];
+    }
+    pnrSide(key) {
+      const p = this.pnr;
+      const d = document.createElement("div");
+      const det = document.createElement("div");
+      det.id = "synDetail";
+      det.innerHTML = '<p class="hint">\u9EDE LC \u770B\u7D30\u7BC0\uFF08LUT \u771F\u503C\u8868\u3001DFF\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+      d.appendChild(det);
+      let h = "";
+      if (key === "sta") {
+        h += `<h3>\u95DC\u9375\u8DEF\u5F91\uFF08${p.timing.period.toFixed(2)} ns\uFF09</h3>` + table(["\u7D2F\u8A08 ns", "\u5EF6\u9072", "\u7D93\u904E"], p.timing.path.map((s) => [s.at.toFixed(2), s.delay.toFixed(3), esc(s.what)]));
+      }
+      if (key === "route") {
+        h += `<h3>Net\uFF08${p.nets.length}\uFF0C\u4F9D pip \u6578\uFF09</h3>`;
+      }
+      h += `<h3>IO</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "\u8173\u4F4D", "tile"], p.ios.map((io) => [esc(io.name), io.dir === "in" ? "in" : "out", io.pin, `${io.x},${io.y}/${io.z}`]));
+      const div = document.createElement("div");
+      div.innerHTML = h;
+      d.appendChild(div);
+      if (key === "route") {
+        const list = document.createElement("div");
+        list.className = "clist";
+        const order = p.nets.map((n, i) => i).sort((a, b) => p.nets[b].pips - p.nets[a].pips);
+        for (const i of order.slice(0, 400)) {
+          const n = p.nets[i];
+          const row = document.createElement("div");
+          row.textContent = `${n.name}  ${n.pips} pip  ${n.sinks} \u8CA0\u8F09${n.global ? "  [\u5168\u57DF]" : ""}`;
+          row.onclick = () => {
+            this.selNet = i;
+            this.drawPnr(false);
+          };
+          list.appendChild(row);
+        }
+        div.insertBefore(list, div.querySelector("h3:nth-of-type(2)"));
+      }
+      return d;
+    }
+    animate() {
+      if (!this.pnr || this.stage !== "place") return;
+      this.stopAnim();
+      const p = this.pnr;
+      let f = 0;
+      const step = () => {
+        const fr = p.history[f];
+        const scene = deviceScene(p, fr.pos);
+        this.view.set(scene, false);
+        $("synInfo").textContent = `\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`;
+        f++;
+        if (f < p.history.length) this.anim = window.setTimeout(step, 90);
+        else this.anim = window.setTimeout(() => {
+          this.anim = 0;
+          this.info(this.pnrReport("place"));
+        }, 1200);
+      };
+      step();
+    }
+    stopAnim() {
+      if (this.anim) {
+        clearTimeout(this.anim);
+        this.anim = 0;
       }
     }
-    updateLines() {
-      const k = this.stage;
+    redrawLines() {
       $("synEdges").textContent = `\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`;
+      const k = this.stage;
+      if (PNR.has(k)) {
+        if (this.pnr) this.drawPnr(false);
+        return;
+      }
       if (k !== "raw" && k !== "opt" && k !== "map") return;
       const v = this.netView(k);
       const all = this.edges && edgeCount(v.nl) <= 6e3;
@@ -669,10 +1063,10 @@
     rtlSide() {
       const r = this.res;
       const d = document.createElement("div");
-      d.innerHTML = `<h3>\u57E0</h3>` + table(["\u540D\u7A31", "\u65B9\u5411", "\u5BEC\u5EA6"], r.ports.map((p) => [p.name, p.dir === "in" ? "input" : "output", String(p.width)])) + `<h3>\u5BE6\u4F8B</h3>` + table(["\u8DEF\u5F91", "\u6A21\u7D44"], r.hier.map((h) => [h.path || "(top)", h.module])) + `<h3>\u8A0A\u865F\uFF08${r.signals.length}\uFF09</h3>` + table(["\u540D\u7A31", "\u5BEC\u5EA6"], r.signals.slice(0, 400).map((s) => [s.name, String(s.width)]));
+      d.innerHTML = `<h3>\u57E0</h3>` + table(["\u540D\u7A31", "\u65B9\u5411", "\u5BEC\u5EA6"], r.ports.map((p) => [esc(p.name), p.dir === "in" ? "input" : "output", String(p.width)])) + `<h3>\u5BE6\u4F8B</h3>` + table(["\u8DEF\u5F91", "\u6A21\u7D44"], r.hier.map((h) => [esc(h.path || "(top)"), esc(h.module)])) + `<h3>\u8A0A\u865F\uFF08${r.signals.length}\uFF09</h3>` + table(["\u540D\u7A31", "\u5BEC\u5EA6"], r.signals.slice(0, 400).map((s) => [esc(s.name), String(s.width)]));
       return d;
     }
-    netSide(_key, v) {
+    netSide(v) {
       const d = document.createElement("div");
       const types = countTypes(v.nl);
       d.innerHTML = `<h3>\u5143\u4EF6\u7A2E\u985E</h3>` + table(["\u7A2E\u985E", "\u6578\u91CF"], types.map(([t, n2]) => [`<span class="sw" style="background:${cellColor(t, 4)}"></span>${shortType(t)}`, String(n2)])) + `<h3>\u5143\u4EF6\u6E05\u55AE\uFF08\u9EDE\u9078\uFF09</h3>`;
@@ -700,19 +1094,42 @@
       return d;
     }
     pick(b) {
+      const k = this.stage;
+      if (PNR.has(k)) {
+        if (!this.pnr || this.anim) return;
+        this.sel = b && b.id < this.pnr.lcs.length ? b.id : null;
+        this.drawPnr(false);
+        this.lcDetail();
+        return;
+      }
       if (!b) {
         this.select(null);
         return;
       }
-      const k = this.stage;
       if (k === "raw" || k === "opt" || k === "map") {
         const v = this.netView(k);
         if (b.id < v.nl.cells.length) this.select(b.id);
       }
     }
+    lcDetail() {
+      const det = document.getElementById("synDetail");
+      if (!det || !this.pnr) return;
+      if (this.sel === null) {
+        det.innerHTML = '<p class="hint">\u9EDE LC \u770B\u7D30\u7BC0\uFF08LUT \u771F\u503C\u8868\u3001DFF\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+        return;
+      }
+      const lc = this.pnr.lcs[this.sel];
+      const init = parseInt(lc.init, 16).toString(2).padStart(16, "0");
+      let h = `<h3>LC #${this.sel}\u3000tile (${lc.x},${lc.y}) LC ${lc.z}</h3>`;
+      h += `<p><span class="sw" style="background:${lcColor(lc)}"></span>${lc.carry ? "CARRY " : ""}${lc.ff ? `DFF${lc.ff.neg ? "\uFF08\u8CA0\u7DE3\uFF09" : ""}${lc.ff.sr ? (lc.ff.async ? "\uFF08\u975E\u540C\u6B65" : "\uFF08\u540C\u6B65") + (lc.ff.set ? " set\uFF09" : " reset\uFF09") : ""} ` : ""}LUT 16'h${lc.init}${lc.in3c ? "\uFF08in3 = \u9032\u4F4D\u93C8\uFF09" : ""}</p>`;
+      h += `<p>\u8F38\u51FA\u5230\u9054\u6642\u9593 ${lc.arr.toFixed(2)} ns</p>`;
+      h += table(["\u63A5\u8173", "\u8A0A\u865F"], [...lc.ins.map((n, k) => [`in${k}`, esc(k === 3 && lc.in3c ? "(carry in)" : n || "\u2014")]), ["out", esc(lc.out || "\u2014")]]);
+      h += `<h3>LUT \u771F\u503C\u8868</h3>` + table(["I3 I2 I1 I0", "O"], lutBits(init).map((o, k) => [`${k >> 3 & 1}  ${k >> 2 & 1}  ${k >> 1 & 1}  ${k & 1}`, String(o)]));
+      det.innerHTML = h;
+    }
     select(i) {
       this.sel = i;
-      this.updateLines();
+      this.redrawLines();
       const det = document.getElementById("synDetail");
       const k = this.stage;
       if (!det || k !== "raw" && k !== "opt" && k !== "map") return;
@@ -741,6 +1158,17 @@
   }
   function table(head, rows) {
     return `<table><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table>`;
+  }
+  function download(name, text) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1e3);
   }
 
   // src/main.ts
@@ -808,23 +1236,27 @@
     renderTabs();
     gutter();
   }
-  function refreshTops() {
+  async function refreshTops() {
     const sel = $2("top");
+    const keep = sel.value;
+    if (!core || !st) return;
+    let mods = [];
+    try {
+      mods = (await core.call({ cmd: "list", files: st.files })).modules;
+    } catch {
+    }
     sel.innerHTML = "";
     const all = document.createElement("option");
     all.value = "";
     all.textContent = "\u5168\u90E8 #[test]";
     sel.appendChild(all);
-    if (!core || !st) return;
-    try {
-      for (const m of core.list(st.files)) {
-        const o = document.createElement("option");
-        o.value = m.name;
-        o.textContent = m.name + (m.test ? "  (#[test])" : "");
-        sel.appendChild(o);
-      }
-    } catch {
+    for (const m of mods) {
+      const o = document.createElement("option");
+      o.value = m.name;
+      o.textContent = m.name + (m.test ? "  (#[test])" : "");
+      sel.appendChild(o);
     }
+    if (mods.some((m) => m.name === keep)) sel.value = keep;
   }
   function selectExample(id) {
     const ex = examples().find((e) => e.id === id) ?? examples()[0];
@@ -877,16 +1309,17 @@
       msg.appendChild(div);
     }
   }
-  function runSim() {
+  async function runSim() {
     if (!core || !st) return;
-    const top = $2("top").value || void 0;
+    const top = $2("top").value || null;
     status("\u6A21\u64EC\u4E2D\u2026");
     $2("msg").textContent = "";
-    setTimeout(() => {
+    $2("run").disabled = true;
+    {
       const t0 = performance.now();
       const banner = $2("banner");
       try {
-        const r = core.simulate(st.files, top);
+        const r = await core.call({ cmd: "simulate", files: st.files, top, max_time: 1e6, vcd: false });
         $2("log").textContent = r.log;
         const fails = r.tops.reduce((a, t) => a + t.fails, 0);
         banner.className = fails ? "fail" : "pass";
@@ -901,7 +1334,8 @@
         if (m) jumpTo(m[1], +m[2], +m[3]);
         status("\u5931\u6557");
       }
-    }, 10);
+      $2("run").disabled = false;
+    }
   }
   function fillExamples() {
     const sel = $2("example");
@@ -946,7 +1380,7 @@
     });
     $2("run").onclick = runSim;
     $2("synth").onclick = () => {
-      if (synth && st) synth.open(st.files, st.ex.synth);
+      if (synth && st) synth.open(st.files, st.ex.synth, st.ex.pcf);
     };
     $2("revert").onclick = () => {
       if (!st) return;
@@ -968,12 +1402,12 @@
     });
     try {
       const t0 = performance.now();
-      core = await Veryl.load(fromBase64(VERYL_WASM_B64));
-      status(`\u5C31\u7DD2\uFF08WebAssembly \u8F09\u5165 ${(performance.now() - t0).toFixed(0)} ms\uFF09`);
+      core = await startCore(fromBase64(VERYL_WASM_B64));
+      status(`\u5C31\u7DD2\uFF08WebAssembly \u8F09\u5165 ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? "\uFF0C\u80CC\u666F\u57F7\u884C\u7DD2" : ""}\uFF09`);
       $2("run").disabled = false;
       $2("synth").disabled = false;
       synth = new SynthOverlay(core);
-      if (/[#&]synth=1/.test(hash)) synth.open(st.files, st.ex.synth);
+      if (/[#&]synth=1/.test(hash)) synth.open(st.files, st.ex.synth, st.ex.pcf);
       refreshTops();
     } catch (e) {
       status("WebAssembly \u8F09\u5165\u5931\u6557");

@@ -7,6 +7,7 @@ pub mod chipdb;
 pub mod pack;
 pub mod place;
 pub mod route;
+pub mod sta;
 
 use crate::netlist::{Bit, Dir, Netlist};
 use chipdb::Chip;
@@ -28,6 +29,17 @@ pub struct Output {
     pub pcf: String,
     pub lcs: usize,
     pub wires: usize,
+    pub packed: pack::Packed,
+    pub placement: place::Placement,
+    pub nets: Vec<route::RNet>,
+    pub routes: Vec<Vec<u32>>,
+    /// overused wires after each routing iteration
+    pub route_iters: Vec<usize>,
+    /// number of hardwired fabout -> global pseudo pips (indices u32::MAX - i)
+    pub extra: usize,
+    pub timing: sta::Timing,
+    /// global networks used: (net name, network number)
+    pub globals: Vec<(String, u8)>,
 }
 
 /// LUT_INIT bit k sits at LC config bit LUT_PERM[k]; 8 = carry enable,
@@ -136,11 +148,25 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
     let mut sinks: HashMap<Bit, Vec<u32>> = HashMap::new();
     let mut gsinks: HashMap<Bit, Vec<u32>> = HashMap::new();
     let mut names: HashMap<Bit, String> = HashMap::new();
+    for (n, bits) in &nl.nets {
+        for (i, b) in bits.iter().enumerate() {
+            names.entry(*b).or_insert_with(|| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() });
+        }
+    }
+    let mut eps: HashMap<u32, sta::Ep> = HashMap::new();
     for (i, lc) in p.lcs.iter().enumerate() {
         let (x, y, z) = pl.lc[i];
-        if let Some(b) = lc.out { src.insert(b, w(x, y, &format!("lutff_{}/out", z))?); }
+        if let Some(b) = lc.out {
+            let ww = w(x, y, &format!("lutff_{}/out", z))?;
+            src.insert(b, ww);
+            eps.insert(ww, sta::Ep::LcOut(i));
+        }
         for k in 0..4 {
-            if let Some(b) = lc.ins[k] { sinks.entry(b).or_default().push(w(x, y, &format!("lutff_{}/in_{}", z, k))?); }
+            if let Some(b) = lc.ins[k] {
+                let ww = w(x, y, &format!("lutff_{}/in_{}", z, k))?;
+                sinks.entry(b).or_default().push(ww);
+                eps.insert(ww, sta::Ep::LcIn(i, k as u8));
+            }
         }
         if let Some(f) = &lc.ff {
             for (b, pin) in std::iter::once((f.clk, "lutff_global/clk")).chain(f.sr.map(|s| (s, "lutff_global/s_r"))) {
@@ -154,8 +180,8 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
         let (x, y, z, _) = &pl.io[i];
         names.insert(io.net, io.name.clone());
         match io.dir {
-            Dir::In => { src.insert(io.net, w(*x, *y, &format!("io_{}/D_IN_0", z))?); }
-            Dir::Out => sinks.entry(io.net).or_default().push(w(*x, *y, &format!("io_{}/D_OUT_0", z))?),
+            Dir::In => { let ww = w(*x, *y, &format!("io_{}/D_IN_0", z))?; src.insert(io.net, ww); eps.insert(ww, sta::Ep::IoIn(i)); }
+            Dir::Out => { let ww = w(*x, *y, &format!("io_{}/D_OUT_0", z))?; sinks.entry(io.net).or_default().push(ww); eps.insert(ww, sta::Ep::IoOut(i)); }
         }
     }
     let mut nets = vec![];
@@ -171,12 +197,13 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
         };
         let mut all = s;
         all.extend(g);
-        let name = names.get(&b).cloned().unwrap_or_else(|| format!("{:?}", b));
+        let name = names.get(&b).cloned().unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), _ => format!("{:?}", b) });
         nets.push(route::RNet { name, src: src[&b], sinks: all, global });
     }
     if let Some((b, _)) = sinks.iter().find(|(_, v)| !v.is_empty()) { return Err(format!("net {:?} has loads but no driver", b)); }
     let extra: Vec<(u32, u32)> = chip.gbufin.iter().map(|&(x, y, g)| Ok((w(x, y, "fabout")?, w(x, y, &format!("glb_netwk_{}", g))?))).collect::<R<_>>()?;
-    let routes = route::route(&chip, &nets, &extra, o.verbose)?;
+    let (routes, route_iters) = route::route(&chip, &nets, &extra, o.verbose)?;
+    let timing = sta::analyze(chip, &p, &pl, &nets, &routes, &eps, extra.len());
 
     // ---- configuration ----
     let mut a = Asc::new(&chip);
@@ -241,5 +268,7 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
         let fs: Vec<String> = chip.tile_bits[t].keys().filter(|f| f.starts_with("Cascade.") && f.ends_with("_inmux02_5")).cloned().collect();
         for f in fs { a.func(xy.0, xy.1, &f)?; }
     }
-    Ok(Output { asc: a.text(), pcf, lcs: p.lcs.len(), wires })
+    let mut gl: Vec<(String, u8)> = global_of.iter().map(|(b, g)| (names.get(b).cloned().unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), _ => format!("{:?}", b) }), g.2)).collect();
+    gl.sort();
+    Ok(Output { asc: a.text(), pcf, lcs: p.lcs.len(), wires, extra: extra.len(), packed: p, placement: pl, nets, routes, route_iters, timing, globals: gl })
 }

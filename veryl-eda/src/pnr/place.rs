@@ -17,6 +17,16 @@ pub struct Placement {
     pub lc: Vec<(i32, i32, u8)>,
     /// IO -> (x, y, pio) and package pin name
     pub io: Vec<(i32, i32, u8, String)>,
+    /// annealing snapshots (after each temperature step, thinned out)
+    pub history: Vec<Frame>,
+}
+
+pub struct Frame {
+    pub temp: f64,
+    pub cost: f64,
+    pub accept: f64,
+    /// LC -> (x, y, z)
+    pub lc: Vec<(i32, i32, u8)>,
 }
 
 pub struct Rng(u64);
@@ -36,9 +46,10 @@ const PER_COL: usize = (H as usize) * 8;
 pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[Bit], seed: u64) -> R<Placement> {
     // logic columns: every row 1..=30 is a logic tile
     let cols: Vec<i32> = (0..chip.w).filter(|x| (1..=H).all(|y| chip.tile_type.get(&(*x, y)).map(|t| t == "logic").unwrap_or(false))).collect();
-    if cols.len() * PER_COL < p.lcs.len() {
-        return Err(format!("design needs {} LCs, the device has {}", p.lcs.len(), cols.len() * PER_COL));
-    }
+    let mut over = vec![];
+    if cols.len() * PER_COL < p.lcs.len() { over.push(format!("{} LCs (the device has {})", p.lcs.len(), cols.len() * PER_COL)); }
+    if p.ios.len() > chip.pins.len() { over.push(format!("{} IO pins (the package has {})", p.ios.len(), chip.pins.len())); }
+    if !over.is_empty() { return Err(format!("design does not fit: needs {}", over.join(" and "))); }
 
     // ---- IO pins ----
     let mut used_pins: Vec<String> = vec![];
@@ -145,9 +156,11 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
     let mut ncost: Vec<f64> = (0..net_pins.len()).map(|n| hpwl(n, &slot)).collect();
     let mut cost: f64 = ncost.iter().sum();
     let movable: Vec<usize> = (0..p.lcs.len()).filter(|l| !fixed[*l]).collect();
+    let initial = Frame { temp: 0.0, cost, accept: 1.0, lc: slot.iter().map(|s| slot_xyz(*s)).collect() };
     if movable.is_empty() || net_pins.is_empty() {
-        return Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io });
+        return Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io, history: vec![initial] });
     }
+    let mut history = vec![initial];
     let mut rng = Rng::new(seed);
     let ncols = cols.len() as i32;
     let mut rlim = ncols.max(H) as f64;
@@ -225,9 +238,16 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
             }
         }
         let rate = accepted as f64 / moves_per_t as f64;
+        history.push(Frame { temp, cost, accept: rate, lc: slot.iter().map(|s| slot_xyz(*s)).collect() });
         temp *= if rate > 0.96 { 0.5 } else if rate > 0.8 { 0.9 } else if rate > 0.15 { 0.95 } else { 0.8 };
         rlim = (rlim * (1.0 - 0.44 + rate)).clamp(1.0, ncols.max(H) as f64);
         if temp < 0.005 * cost.max(1.0) / net_pins.len() as f64 { break; }
     }
-    Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io })
+    // keep at most 60 snapshots (first and last included)
+    if history.len() > 60 {
+        let n = history.len();
+        let keep: std::collections::HashSet<usize> = (0..60).map(|i| i * (n - 1) / 59).collect();
+        history = history.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|x| x.1).collect();
+    }
+    Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io, history })
 }

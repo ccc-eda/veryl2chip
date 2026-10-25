@@ -1,84 +1,133 @@
 // The synthesis overlay: stage bar, report, drawing, side panel.
 
-import type { Veryl, VFile } from '../api';
+import type { VFile } from '../api';
+import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
+import { deviceScene, heat, lcColor, PnrResult, routeLines } from './device';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
 import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-interface StageDef { key: string; tag: 'common' | 'fpga' | 'asic'; label: string; ready: boolean }
+interface StageDef { key: string; tag: 'common' | 'fpga' | 'asic'; label: string }
 
 const FPGA_STAGES: StageDef[] = [
-  { key: 'rtl', tag: 'common', label: '共 ① RTL→Logic', ready: true },
-  { key: 'raw', tag: 'common', label: '共 ② Logic Netlist', ready: true },
-  { key: 'opt', tag: 'common', label: '共 ③ Tech-indep Syn', ready: true },
-  { key: 'map', tag: 'fpga', label: 'F ④ LUT4 Techmap', ready: true },
-  { key: 'place', tag: 'fpga', label: 'F ⑤ Placement 退火', ready: false },
-  { key: 'route', tag: 'fpga', label: 'F ⑥ Global+Detail Routing', ready: false },
-  { key: 'sta', tag: 'fpga', label: 'F ⑦ Timing (STA)', ready: false },
+  { key: 'rtl', tag: 'common', label: '共 ① RTL→Logic' },
+  { key: 'raw', tag: 'common', label: '共 ② Logic Netlist' },
+  { key: 'opt', tag: 'common', label: '共 ③ Tech-indep Syn' },
+  { key: 'map', tag: 'fpga', label: 'F ④ LUT4 Techmap' },
+  { key: 'place', tag: 'fpga', label: 'F ⑤ Placement 退火' },
+  { key: 'route', tag: 'fpga', label: 'F ⑥ Global+Detail Routing' },
+  { key: 'sta', tag: 'fpga', label: 'F ⑦ Timing (STA)' },
 ];
+const PNR = new Set(['place', 'route', 'sta']);
 
 interface NetView { nl: JNetlist; lev: Leveled; lay: NetLayout; names: Map<number, string> }
 
 export class SynthOverlay {
   private view: CanvasView;
   private res: SynthResult | null = null;
+  private pnr: PnrResult | null = null;
+  private pnrErr: string | null = null;
+  private pnrBusy = false;
   private stage = 'rtl';
   private nets = new Map<string, NetView>();
   private sel: number | null = null;
   private edges = true;
   private files: VFile[] = [];
+  private pcf: string | undefined;
+  private anim = 0;
+  private gen = 0;
 
-  constructor(private core: Veryl) {
+  constructor(private core: Core) {
     this.view = new CanvasView($<HTMLCanvasElement>('synCanvas'));
     this.view.onPick = b => this.pick(b);
     $('synClose').onclick = () => this.close();
     $('synZin').onclick = () => this.view.zoom(1.4);
     $('synZout').onclick = () => this.view.zoom(1 / 1.4);
     $('synZfit').onclick = () => this.view.fit();
-    $('synEdges').onclick = () => { this.edges = !this.edges; this.updateLines(); };
+    $('synEdges').onclick = () => { this.edges = !this.edges; this.redrawLines(); };
+    $('synAnim').onclick = () => this.animate();
+    $('synAsc').onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
+    $('synPcf').onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
     $<HTMLSelectElement>('synTop').onchange = () => this.run($<HTMLSelectElement>('synTop').value);
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('synOverlay').classList.contains('hidden')) this.close(); });
     this.chips();
   }
 
-  open(files: VFile[], top?: string): void {
+  open(files: VFile[], top?: string, pcf?: string): void {
     this.files = files;
+    this.pcf = pcf;
     $('synOverlay').classList.remove('hidden');
     this.run(top);
   }
 
-  close(): void { $('synOverlay').classList.add('hidden'); }
+  close(): void { this.stopAnim(); $('synOverlay').classList.add('hidden'); }
 
-  private run(top?: string): void {
+  private async run(top?: string): Promise<void> {
+    const gen = ++this.gen;
+    this.stopAnim();
+    this.res = null;
+    this.pnr = null;
+    this.pnrErr = null;
+    this.nets.clear();
     $('synInfo').textContent = '合成中…';
     $('synSide').innerHTML = '';
-    setTimeout(() => {
-      const t0 = performance.now();
-      try {
-        this.res = this.core.call<SynthResult>({ cmd: 'synth', files: this.files, top: top || null });
-      } catch (e) {
-        this.res = null;
-        $('synInfo').textContent = '合成失敗：\n' + String((e as Error).message ?? e);
-        this.view.set({ boxes: [], lines: [], texts: [] });
-        $('synStats').innerHTML = '';
-        return;
-      }
-      const ms = performance.now() - t0;
-      this.nets.clear();
-      const sel = $<HTMLSelectElement>('synTop');
-      sel.innerHTML = '';
-      for (const m of this.res.modules.filter(m => !m.test)) {
-        const o = document.createElement('option');
-        o.value = o.textContent = m.name;
-        sel.appendChild(o);
-      }
-      sel.value = this.res.top;
-      this.stats(ms);
-      this.show(this.stage);
-    }, 10);
+    this.view.set({ boxes: [], lines: [], texts: [] });
+    this.buttons();
+    const t0 = performance.now();
+    let res: SynthResult;
+    try {
+      res = await this.core.call<SynthResult>({ cmd: 'synth', files: this.files, top: top || null });
+    } catch (e) {
+      if (gen !== this.gen) return;
+      $('synInfo').textContent = '合成失敗：\n' + String((e as Error).message ?? e);
+      $('synStats').innerHTML = '';
+      return;
+    }
+    if (gen !== this.gen) return;
+    this.res = res;
+    const sel = $<HTMLSelectElement>('synTop');
+    sel.innerHTML = '';
+    for (const m of res.modules.filter(m => !m.test)) {
+      const o = document.createElement('option');
+      o.value = o.textContent = m.name;
+      sel.appendChild(o);
+    }
+    sel.value = res.top;
+    this.stats(performance.now() - t0);
+    this.show(this.stage);
   }
+
+  private async runPnr(): Promise<void> {
+    if (!this.res || this.pnr || this.pnrBusy) return;
+    const gen = this.gen;
+    this.pnrBusy = true;
+    const t0 = performance.now();
+    const tick = setInterval(() => {
+      if (gen === this.gen && PNR.has(this.stage)) $('synInfo').textContent = `佈局繞線中…（iCE40UP5K，${((performance.now() - t0) / 1000).toFixed(1)} s）`;
+    }, 200);
+    try {
+      $('synInfo').textContent = '載入晶片資料庫（IceStorm chipdb-5k，4 MB）…';
+      await this.core.chipdb();
+      const r = await this.core.call<PnrResult>({ cmd: 'pnr', files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
+      if (gen !== this.gen) return;
+      this.pnr = r;
+      this.pnrMs = performance.now() - t0;
+    } catch (e) {
+      if (gen !== this.gen) return;
+      this.pnrErr = String((e as Error).message ?? e);
+    } finally {
+      clearInterval(tick);
+      this.pnrBusy = false;
+    }
+    this.stats(this.synMs);
+    this.buttons();
+    if (PNR.has(this.stage)) this.show(this.stage);
+  }
+
+  private pnrMs = 0;
+  private synMs = 0;
 
   private chips(): void {
     const box = $('synChips');
@@ -89,11 +138,18 @@ export class SynthOverlay {
       b.textContent = s.label;
       b.dataset.key = s.key;
       b.className = s.tag === 'fpga' ? 'tagf' : s.tag === 'asic' ? 'taga' : '';
-      b.disabled = !s.ready;
-      if (!s.ready) b.title = '下一個里程碑';
       b.onclick = () => this.show(s.key);
       box.appendChild(b);
     });
+  }
+
+  /** stage-dependent buttons */
+  private buttons(): void {
+    const p = PNR.has(this.stage);
+    $('synAnim').classList.toggle('hidden', this.stage !== 'place');
+    $<HTMLButtonElement>('synAnim').disabled = !this.pnr;
+    for (const id of ['synAsc', 'synPcf']) { $(id).classList.toggle('hidden', !p); $<HTMLButtonElement>(id).disabled = !this.pnr; }
+    $('synEdges').classList.toggle('hidden', p && this.stage === 'place');
   }
 
   private netView(key: 'raw' | 'opt' | 'map'): NetView {
@@ -108,28 +164,37 @@ export class SynthOverlay {
   }
 
   private stats(ms: number): void {
+    this.synMs = ms;
     const r = this.res!;
     const m = r.map.cells;
     const luts = m.filter(c => c.t === 'SB_LUT4').length;
     const ffs = m.filter(c => isFF(c.t)).length;
     const carry = m.filter(c => c.t === 'SB_CARRY').length;
     const lev = this.netView('map').lev;
-    $('synStats').innerHTML = [
+    const items = [
       `頂層 <b>${r.top}</b>`,
       `閘 <b>${r.raw.cells.length}</b> → <b>${r.opt.cells.length}</b>`,
       `LUT4 <b>${luts}</b>`,
       `CARRY <b>${carry}</b>`,
       `DFF <b>${ffs}</b>`,
       `LUT 層數 <b>${lev.depth}</b>`,
-      `合成 <b>${ms.toFixed(0)}</b> ms`,
-    ].join('<span class="sep">│</span>');
+    ];
+    if (this.pnr) {
+      const p = this.pnr;
+      items.push(`LC <b>${p.lcs.length}</b>/5280（${(100 * p.lcs.length / 5280).toFixed(1)}%）`, `pip <b>${p.pips}</b>`,
+        `F<sub>max</sub> <b>${p.timing.fmax.toFixed(1)}</b> MHz`, `關鍵路徑 <b>${p.timing.period.toFixed(2)}</b> ns`);
+    }
+    items.push(`合成 <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `，佈局繞線 <b>${(this.pnrMs / 1000).toFixed(1)}</b> s` : ''));
+    $('synStats').innerHTML = items.join('<span class="sep">│</span>');
   }
 
   private show(key: string): void {
     if (!this.res) return;
+    this.stopAnim();
     this.stage = key;
     this.sel = null;
     for (const b of $('synChips').querySelectorAll('button')) b.classList.toggle('cur', (b as HTMLElement).dataset.key === key);
+    this.buttons();
     const r = this.res;
     if (key === 'rtl') {
       const counts = new Map<string, number>();
@@ -155,13 +220,135 @@ export class SynthOverlay {
       const v = this.netView(key);
       this.view.set({ ...v.lay.scene, lines: netLines(v.nl, v.lev, v.lay, this.edges && edgeCount(v.nl) <= 6000, null) });
       this.info(this.netReport(key, v));
-      this.side(this.netSide(key, v));
+      this.side(this.netSide(v));
+      return;
     }
+    // place and route stages
+    if (!this.pnr) {
+      this.view.set({ boxes: [], lines: [], texts: [] });
+      this.side(document.createElement('div'));
+      if (this.pnrErr) {
+        const fit = /does not fit/.test(this.pnrErr);
+        this.info(['佈局繞線失敗：', this.pnrErr, ...(fit ? ['', 'iCE40UP5K-SG48 只有 5280 個 LC、39 個 IO 腳：整顆 RV32I 核心（暫存器檔用正反器）放不下。請改用「RISC-V SoC（FPGA）」範例，或改看 ASIC 流程。'] : [])]);
+        return;
+      }
+      this.info(['佈局繞線中…']);
+      this.runPnr();
+      return;
+    }
+    this.drawPnr(true);
+    this.info(this.pnrReport(key));
+    this.side(this.pnrSide(key));
   }
 
-  private updateLines(): void {
+  private drawPnr(fit: boolean): void {
+    const p = this.pnr!;
     const k = this.stage;
+    let color: ((i: number) => string) | undefined;
+    if (k === 'sta') {
+      const max = Math.max(...p.lcs.map(l => l.arr), 1e-9);
+      color = i => heat(p.lcs[i].arr / max);
+    }
+    const scene = deviceScene(p, undefined, color);
+    const crit = new Set(p.timing.crit_lcs);
+    for (const b of scene.boxes) b.hl = b.id === this.sel || (k === 'sta' && crit.has(b.id));
+    if (k === 'route') scene.lines = this.edges ? routeLines(p, { net: this.selNet }) : [];
+    if (k === 'sta') scene.lines = routeLines(p, { dim: true, net: this.selNet });
+    this.view.set(scene, fit);
+  }
+
+  private selNet: number | null = null;
+
+  private pnrReport(key: string): string[] {
+    const p = this.pnr!;
+    if (key === 'place') {
+      const h = p.history;
+      const chains = p.chains.map(c => c.length);
+      return [
+        '⑤ Placement 退火（iCE40UP5K：26×32 tile，邏輯 tile 每個 8 個 LC）',
+        '先打包（LUT+FF+CARRY → LC），進位鏈放在整欄邏輯 tile 並從 LC 0 開始；其餘以模擬退火最小化線長（HPWL），同一 tile 的 DFF 必須同 clock / reset / 邊緣。',
+        '',
+        `LC ${p.lcs.length} 個（${(100 * p.lcs.length / 5280).toFixed(1)}%），進位鏈 ${chains.length} 條${chains.length ? `（${chains.join(', ')} LC）` : ''}，IO ${p.ios.length} 個`,
+        `HPWL：初始 ${h[0].cost.toFixed(0)} → 退火後 ${h[h.length - 1].cost.toFixed(0)}（${h.length - 1} 個溫度快照）　按「▶ 退火動畫」重播`,
+      ];
+    }
+    if (key === 'route') {
+      const glb = p.globals.map(g => `${g.net} → glb_netwk_${g.glb}`).join('，') || '無';
+      return [
+        '⑥ Global + Detail Routing',
+        'clock / reset 走全域網路（來源 → fabout → glb_netwk → 各 tile 的 clk / s_r mux）；其餘以 PathFinder 協商擁塞 + A* 在 IceStorm 繞線圖上找路（每條線只能給一個訊號）。',
+        '',
+        `全域：${glb}`,
+        `${p.nets.length} 條 net，使用 ${p.pips} 個 pip；每輪過度使用的線：${p.route_iters.join(' → ')}`,
+        '顏色：藍＝span4、紫＝span12、灰＝local / 輸入、綠＝全域、黃＝IO（點 LC 看細節）',
+      ];
+    }
+    const t = p.timing;
+    return [
+      '⑦ Timing (STA)',
+      '延遲取自 IceStorm timings_up5k（慢速角）：LC in→out、carry、clk→Q、setup，每段繞線依所驅動的線種類計 mux 延遲；clock 視為理想（全域網路）。',
+      '',
+      `關鍵路徑 ${t.period.toFixed(2)} ns → Fmax ${t.fmax.toFixed(2)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，LC 顏色＝到達時間（綠早紅晚）`,
+    ];
+  }
+
+  private pnrSide(key: string): HTMLElement {
+    const p = this.pnr!;
+    const d = document.createElement('div');
+    const det = document.createElement('div');
+    det.id = 'synDetail';
+    det.innerHTML = '<p class="hint">點 LC 看細節（LUT 真值表、DFF、接腳訊號、到達時間）。</p>';
+    d.appendChild(det);
+    let h = '';
+    if (key === 'sta') {
+      h += `<h3>關鍵路徑（${p.timing.period.toFixed(2)} ns）</h3>` + table(['累計 ns', '延遲', '經過'], p.timing.path.map(s => [s.at.toFixed(2), s.delay.toFixed(3), esc(s.what)]));
+    }
+    if (key === 'route') {
+      h += `<h3>Net（${p.nets.length}，依 pip 數）</h3>`;
+    }
+    h += `<h3>IO</h3>` + table(['訊號', '方向', '腳位', 'tile'], p.ios.map(io => [esc(io.name), io.dir === 'in' ? 'in' : 'out', io.pin, `${io.x},${io.y}/${io.z}`]));
+    const div = document.createElement('div');
+    div.innerHTML = h;
+    d.appendChild(div);
+    if (key === 'route') {
+      const list = document.createElement('div');
+      list.className = 'clist';
+      const order = p.nets.map((n, i) => i).sort((a, b) => p.nets[b].pips - p.nets[a].pips);
+      for (const i of order.slice(0, 400)) {
+        const n = p.nets[i];
+        const row = document.createElement('div');
+        row.textContent = `${n.name}  ${n.pips} pip  ${n.sinks} 負載${n.global ? '  [全域]' : ''}`;
+        row.onclick = () => { this.selNet = i; this.drawPnr(false); };
+        list.appendChild(row);
+      }
+      div.insertBefore(list, div.querySelector('h3:nth-of-type(2)'));
+    }
+    return d;
+  }
+
+  private animate(): void {
+    if (!this.pnr || this.stage !== 'place') return;
+    this.stopAnim();
+    const p = this.pnr;
+    let f = 0;
+    const step = () => {
+      const fr = p.history[f];
+      const scene = deviceScene(p, fr.pos);
+      this.view.set(scene, false);
+      $('synInfo').textContent = `⑤ 退火動畫：第 ${f + 1}/${p.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${fr.cost.toFixed(0)}　接受率 ${(fr.accept * 100).toFixed(0)}%`;
+      f++;
+      if (f < p.history.length) this.anim = window.setTimeout(step, 90);
+      else this.anim = window.setTimeout(() => { this.anim = 0; this.info(this.pnrReport('place')); }, 1200);
+    };
+    step();
+  }
+
+  private stopAnim(): void { if (this.anim) { clearTimeout(this.anim); this.anim = 0; } }
+
+  private redrawLines(): void {
     $('synEdges').textContent = `⌁ 連線：${this.edges ? '開' : '關'}`;
+    const k = this.stage;
+    if (PNR.has(k)) { if (this.pnr) this.drawPnr(false); return; }
     if (k !== 'raw' && k !== 'opt' && k !== 'map') return;
     const v = this.netView(k);
     const all = this.edges && edgeCount(v.nl) <= 6000;
@@ -219,13 +406,13 @@ export class SynthOverlay {
   private rtlSide(): HTMLElement {
     const r = this.res!;
     const d = document.createElement('div');
-    d.innerHTML = `<h3>埠</h3>` + table(['名稱', '方向', '寬度'], r.ports.map(p => [p.name, p.dir === 'in' ? 'input' : 'output', String(p.width)]))
-      + `<h3>實例</h3>` + table(['路徑', '模組'], r.hier.map(h => [h.path || '(top)', h.module]))
-      + `<h3>訊號（${r.signals.length}）</h3>` + table(['名稱', '寬度'], r.signals.slice(0, 400).map(s => [s.name, String(s.width)]));
+    d.innerHTML = `<h3>埠</h3>` + table(['名稱', '方向', '寬度'], r.ports.map(p => [esc(p.name), p.dir === 'in' ? 'input' : 'output', String(p.width)]))
+      + `<h3>實例</h3>` + table(['路徑', '模組'], r.hier.map(h => [esc(h.path || '(top)'), esc(h.module)]))
+      + `<h3>訊號（${r.signals.length}）</h3>` + table(['名稱', '寬度'], r.signals.slice(0, 400).map(s => [esc(s.name), String(s.width)]));
     return d;
   }
 
-  private netSide(_key: string, v: NetView): HTMLElement {
+  private netSide(v: NetView): HTMLElement {
     const d = document.createElement('div');
     const types = countTypes(v.nl);
     d.innerHTML = `<h3>元件種類</h3>` + table(['種類', '數量'], types.map(([t, n]) => [`<span class="sw" style="background:${cellColor(t, 4)}"></span>${shortType(t)}`, String(n)]))
@@ -250,17 +437,38 @@ export class SynthOverlay {
   }
 
   private pick(b: Box | null): void {
-    if (!b) { this.select(null); return; }
     const k = this.stage;
+    if (PNR.has(k)) {
+      if (!this.pnr || this.anim) return;
+      this.sel = b && b.id < this.pnr.lcs.length ? b.id : null;
+      this.drawPnr(false);
+      this.lcDetail();
+      return;
+    }
+    if (!b) { this.select(null); return; }
     if (k === 'raw' || k === 'opt' || k === 'map') {
       const v = this.netView(k);
       if (b.id < v.nl.cells.length) this.select(b.id);
     }
   }
 
+  private lcDetail(): void {
+    const det = document.getElementById('synDetail');
+    if (!det || !this.pnr) return;
+    if (this.sel === null) { det.innerHTML = '<p class="hint">點 LC 看細節（LUT 真值表、DFF、接腳訊號、到達時間）。</p>'; return; }
+    const lc = this.pnr.lcs[this.sel];
+    const init = parseInt(lc.init, 16).toString(2).padStart(16, '0');
+    let h = `<h3>LC #${this.sel}　tile (${lc.x},${lc.y}) LC ${lc.z}</h3>`;
+    h += `<p><span class="sw" style="background:${lcColor(lc)}"></span>${lc.carry ? 'CARRY ' : ''}${lc.ff ? `DFF${lc.ff.neg ? '（負緣）' : ''}${lc.ff.sr ? (lc.ff.async ? '（非同步' : '（同步') + (lc.ff.set ? ' set）' : ' reset）') : ''} ` : ''}LUT 16'h${lc.init}${lc.in3c ? '（in3 = 進位鏈）' : ''}</p>`;
+    h += `<p>輸出到達時間 ${lc.arr.toFixed(2)} ns</p>`;
+    h += table(['接腳', '訊號'], [...lc.ins.map((n, k) => [`in${k}`, esc(k === 3 && lc.in3c ? '(carry in)' : n || '—')]), ['out', esc(lc.out || '—')]]);
+    h += `<h3>LUT 真值表</h3>` + table(['I3 I2 I1 I0', 'O'], lutBits(init).map((o, k) => [`${(k >> 3) & 1}  ${(k >> 2) & 1}  ${(k >> 1) & 1}  ${k & 1}`, String(o)]));
+    det.innerHTML = h;
+  }
+
   private select(i: number | null): void {
     this.sel = i;
-    this.updateLines();
+    this.redrawLines();
     const det = document.getElementById('synDetail');
     const k = this.stage;
     if (!det || (k !== 'raw' && k !== 'opt' && k !== 'map')) return;
@@ -288,3 +496,12 @@ function table(head: string[], rows: string[][]): string {
   return `<table><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
 }
 
+/** save text as a file (a Blob URL works from file:// too) */
+function download(name: string, text: string): void {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}

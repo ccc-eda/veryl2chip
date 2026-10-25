@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const ctx = {};
 vm.createContext(ctx);
-for (const f of ['wasm.js', 'examples.js']) vm.runInContext(fs.readFileSync(path.join(dist, f), 'utf8'), ctx);
-const { Veryl, fromBase64 } = createRequire(import.meta.url)(path.join(dist, 'api.cjs'));
+for (const f of ['wasm.js', 'examples.js', 'chipdb.js']) vm.runInContext(fs.readFileSync(path.join(dist, f), 'utf8'), ctx);
+const { Veryl, fromBase64, gunzip } = createRequire(import.meta.url)(path.join(dist, 'api.cjs'));
 const core = await Veryl.load(fromBase64(ctx.VERYL_WASM_B64));
 
 let bad = 0;
@@ -53,6 +53,35 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   } catch (e) {
     bad++;
     console.log(`FAIL ${ex.id.padEnd(9)} synth ${e.message}`);
+  }
+}
+
+// FPGA place and route in wasm: the bitstream (.asc) must equal the CLI's
+{
+  const t0 = Date.now();
+  core.loadChipdb(await gunzip(fromBase64(ctx.VERYL_CHIPDB_GZ_B64)));
+  console.log(`ok   chipdb loaded (${Date.now() - t0} ms)`);
+}
+for (const ex of ctx.VERYL_EXAMPLES) {
+  if (!ex.synth) continue;
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'pnr', files: ex.files, top: ex.synth, pcf: ex.pcf ?? null, seed: 1 });
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const asc = path.join(tmp, ex.id + '.asc');
+      const extra = ex.pcf ? ['--pcf', path.join(tmp, ex.id + '.pcf')] : [];
+      if (ex.pcf) fs.writeFileSync(extra[1], ex.pcf);
+      execFileSync(cli, ['--top', ex.synth, '--ice40', '--pnr', 'veryl', ...extra, '--asc', asc, ...paths]);
+      if (fs.readFileSync(asc, 'utf8') !== r.asc) { bad++; note = ' .asc DIFFERS from CLI'; } else note = ', .asc = CLI';
+    }
+    console.log(`${note.includes('DIFFERS') ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} pnr ${r.top}: ${r.lcs.length} LCs, ${r.pips} pips, Fmax ${r.timing.fmax.toFixed(1)} MHz, route ${r.route_iters.join('>')}${note}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    // the bare RV32I core is too big for the UP5K (and has 160 IO bits for 39 pins)
+    const expected = ex.id === 'rv32i' && /does not fit/.test(e.message);
+    if (!expected) bad++;
+    console.log(`${expected ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} pnr ${e.message}${expected ? '  (expected)' : ''}`);
   }
 }
 

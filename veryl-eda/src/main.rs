@@ -97,6 +97,8 @@ fn main() {
             let opts = pnr::Opts { chipdb: None, package: package.clone(), pcf: pcf_map, seed, verbose };
             let out = pnr::place_and_route(&nl, &opts).unwrap_or_else(|e| { eprintln!("place & route error: {}", e); std::process::exit(1) });
             println!("  veryl pnr: {} LCs, {} routing pips, {:.1}s", out.lcs, out.wires, t0.elapsed().as_secs_f64());
+            println!("  timing: critical path {:.2} ns, Fmax {:.2} MHz", out.timing.period, out.timing.fmax);
+            if verbose { for st in &out.timing.path { println!("    {:7.3} {:6.3}  {}", st.at, st.delay, st.what); } }
             std::fs::write(&asc_path, &out.asc).unwrap();
             std::fs::write(asc_path.with_extension("pcf"), &out.pcf).unwrap();
             println!("wrote {} (+ .pcf)", asc_path.display());

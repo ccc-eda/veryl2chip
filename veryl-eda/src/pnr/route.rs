@@ -29,7 +29,8 @@ impl PartialOrd for Item {
 }
 
 /// pips used by each net (indices into chip.pips; u32::MAX - g = hardwired fabout -> global g)
-pub fn route(chip: &Chip, nets: &[RNet], extra_pips: &[(u32, u32)], verbose: bool) -> R<Vec<Vec<u32>>> {
+/// returns the pips of each net and the number of overused wires after each iteration
+pub fn route(chip: &Chip, nets: &[RNet], extra_pips: &[(u32, u32)], verbose: bool) -> R<(Vec<Vec<u32>>, Vec<usize>)> {
     let n = chip.net_box.len();
     // hardwired fabout -> global edges, as pseudo pips
     let mut extra_fanout: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
@@ -59,6 +60,7 @@ pub fn route(chip: &Chip, nets: &[RNet], extra_pips: &[(u32, u32)], verbose: boo
         let dy = if ty < b.1 as f32 { b.1 as f32 - ty } else if ty > b.3 as f32 { ty - b.3 as f32 } else { 0.0 };
         dx + dy
     };
+    let mut iters: Vec<usize> = vec![];
     let mut order: Vec<usize> = (0..nets.len()).collect();
     order.sort_by_key(|i| std::cmp::Reverse(nets[*i].sinks.len()));
 
@@ -153,10 +155,8 @@ pub fn route(chip: &Chip, nets: &[RNet], extra_pips: &[(u32, u32)], verbose: boo
         }
         let over: Vec<usize> = (0..n).filter(|w| occ[*w] > 1).collect();
         if verbose { eprintln!("  route iteration {}: {} overused wires", iter + 1, over.len()); }
-        if over.is_empty() {
-            let _ = extra_pips;
-            return Ok(routes);
-        }
+        iters.push(over.len());
+        if over.is_empty() { return Ok((routes, iters)); }
         for w in over { hist[w] += 0.5 * (occ[w] - 1) as f32; }
         pres *= 1.8;
     }

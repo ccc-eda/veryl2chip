@@ -8,6 +8,7 @@ export interface SimResult { log: string; tops: TopResult[]; vcd: { top: string;
 
 interface Exports {
   memory: WebAssembly.Memory;
+  load_chipdb(p: number, n: number): number;
   alloc(n: number): number;
   dealloc(p: number, n: number): void;
   call(p: number, n: number): number;
@@ -31,9 +32,30 @@ export class Veryl {
     return new Veryl(await WebAssembly.compile(bytes as BufferSource));
   }
 
+  static fromModule(mod: WebAssembly.Module): Veryl { return new Veryl(mod); }
+
+  private chipdb: Uint8Array | null = null;
+
+  /** chip database text (IceStorm chipdb-5k.txt) for place and route */
+  loadChipdb(text: Uint8Array): void {
+    this.chipdb = text;
+    this.pushChipdb();
+  }
+
+  private pushChipdb(): void {
+    if (!this.chipdb) return;
+    const x = this.x;
+    const p = x.alloc(this.chipdb.length);
+    new Uint8Array(x.memory.buffer, p, this.chipdb.length).set(this.chipdb);
+    const r = x.load_chipdb(p, this.chipdb.length);
+    x.dealloc(p, this.chipdb.length);
+    if (r !== 0) throw new Error(this.text(x.panic_message()));
+  }
+
   /** a trap (Rust panic) leaves the instance unusable: start a fresh one */
   private reset(): void {
     this.x = new WebAssembly.Instance(this.mod, {}).exports as unknown as Exports;
+    if (this.chipdb) this.pushChipdb();
   }
 
   private text(ptr: number): string {
@@ -68,4 +90,11 @@ export class Veryl {
   simulate(files: VFile[], top?: string, opts: { maxTime?: number; vcd?: boolean } = {}): SimResult {
     return this.call<SimResult>({ cmd: 'simulate', files, top: top || null, max_time: opts.maxTime ?? 1_000_000, vcd: !!opts.vcd });
   }
+}
+
+/** gunzip with the platform's DecompressionStream (browsers, Node >= 18) */
+export async function gunzip(gz: Uint8Array): Promise<Uint8Array> {
+  const ds = new DecompressionStream('gzip');
+  const stream = new Blob([gz as BlobPart]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }

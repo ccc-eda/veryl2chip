@@ -50,8 +50,24 @@ const EX = [
 fs.writeFileSync(path.join(dist, 'examples.js'), `var VERYL_EXAMPLES = ${JSON.stringify(EX)};\n`);
 console.log(`examples.js  ${EX.length} projects`);
 
+// ---- IceStorm chip database for place and route (gzip, base64) ----
+const chipdbCands = [process.env.VERYL_EDA_CHIPDB, '/usr/local/share/icebox/chipdb-5k.txt', '/usr/share/icebox/chipdb-5k.txt',
+  '/Users/Shared/ccc/oss-cad-suite/share/icebox/chipdb-5k.txt', path.join(process.env.HOME ?? '', 'oss-cad-suite/share/icebox/chipdb-5k.txt')].filter(Boolean);
+const chipdbPath = chipdbCands.find((p) => fs.existsSync(p));
+if (chipdbPath) {
+  const { gzipSync } = await import('node:zlib');
+  const gz = gzipSync(fs.readFileSync(chipdbPath), { level: 9 });
+  fs.writeFileSync(path.join(dist, 'chipdb.js'), `// IceStorm chip database (chipdb-5k.txt, ISC license, https://github.com/YosysHQ/icestorm), gzip + base64\nvar VERYL_CHIPDB_GZ_B64 = "${gz.toString('base64')}";\n`);
+  console.log(`chipdb.js    ${(gz.length / 1e6).toFixed(1)} MB gzip (${chipdbPath})`);
+} else if (!fs.existsSync(path.join(dist, 'chipdb.js'))) {
+  console.warn('chipdb-5k.txt not found (set VERYL_EDA_CHIPDB): place & route will be unavailable');
+}
+
 // ---- TypeScript ----
-await esbuild.build({ entryPoints: [path.join(here, 'src/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'app.js'), logLevel: 'warning' });
+const worker = await esbuild.build({ entryPoints: [path.join(here, 'src/worker.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
+const workerSrc = worker.outputFiles[0].text;
+await esbuild.build({ entryPoints: [path.join(here, 'src/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'app.js'), logLevel: 'warning',
+  define: { WORKER_SRC: JSON.stringify(workerSrc) } });
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
 for (const f of ['index.html', 'style.css']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
 console.log('app.js, api.cjs, index.html, style.css');

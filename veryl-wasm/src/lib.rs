@@ -40,6 +40,19 @@ pub extern "C" fn panic_message() -> *const u8 {
     RESULT.with(|r| { *r.borrow_mut() = s.into_bytes(); r.borrow().as_ptr() })
 }
 
+/// Load the IceStorm chip database (text of chipdb-5k.txt); 0 = ok,
+/// otherwise the error is in the result buffer (`result_len` bytes at `panic_message`'s buffer).
+/// # Safety
+/// `p` must point to `n` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn load_chipdb(p: *const u8, n: usize) -> i32 {
+    let text = String::from_utf8_lossy(std::slice::from_raw_parts(p, n));
+    match veryl_eda::pnr::chipdb::Chip::parse(&text, "sg48") {
+        Ok(c) => { api::set_chip(c); 0 }
+        Err(e) => { PANIC.with(|p| *p.borrow_mut() = e); 1 }
+    }
+}
+
 /// # Safety
 /// `p` must point to `n` readable bytes.
 #[no_mangle]

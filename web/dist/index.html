@@ -53,6 +53,9 @@
     <select id="synTarget" title="後端"><option value="fpga">FPGA</option><option value="asic" disabled>ASIC</option></select>
     <div id="synChips"></div>
     <span class="spacer"></span>
+    <button id="synAnim" class="hidden">▶ 退火動畫</button>
+    <button id="synAsc" class="hidden" title="下載 IceStorm .asc（icepack 可轉成位元流）">⬇ .asc</button>
+    <button id="synPcf" class="hidden" title="下載腳位指定">⬇ .pcf</button>
     <button id="synEdges">⌁ 連線：開</button>
   </div>
   <div id="synInfo"></div>
@@ -67,6 +70,7 @@
 </div>
 <script src="wasm.js"></script>
 <script src="examples.js"></script>
+<script src="chipdb.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

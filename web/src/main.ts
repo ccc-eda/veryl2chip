@@ -1,6 +1,7 @@
 // veryl2chip web environment: page controller.
 
-import { fromBase64, Veryl, VFile } from './api';
+import { fromBase64, ModuleInfo, SimResult, VFile } from './api';
+import { Core, startCore } from './client';
 import { Example, examples } from './examples';
 import { SynthOverlay } from './synth/overlay';
 
@@ -14,7 +15,7 @@ interface State {
   cur: number;
 }
 
-let core: Veryl | null = null;
+let core: Core | null = null;
 let synth: SynthOverlay | null = null;
 let st: State | null = null;
 
@@ -74,22 +75,24 @@ function showFile(): void {
   gutter();
 }
 
-function refreshTops(): void {
+async function refreshTops(): Promise<void> {
   const sel = $<HTMLSelectElement>('top');
+  const keep = sel.value;
+  if (!core || !st) return;
+  let mods: ModuleInfo[] = [];
+  try { mods = (await core.call<{ modules: ModuleInfo[] }>({ cmd: 'list', files: st.files })).modules; } catch { /* parse errors show up when running */ }
   sel.innerHTML = '';
   const all = document.createElement('option');
   all.value = '';
   all.textContent = '全部 #[test]';
   sel.appendChild(all);
-  if (!core || !st) return;
-  try {
-    for (const m of core.list(st.files)) {
-      const o = document.createElement('option');
-      o.value = m.name;
-      o.textContent = m.name + (m.test ? '  (#[test])' : '');
-      sel.appendChild(o);
-    }
-  } catch { /* parse errors show up when running */ }
+  for (const m of mods) {
+    const o = document.createElement('option');
+    o.value = m.name;
+    o.textContent = m.name + (m.test ? '  (#[test])' : '');
+    sel.appendChild(o);
+  }
+  if (mods.some(m => m.name === keep)) sel.value = keep;
 }
 
 function selectExample(id: string): void {
@@ -142,16 +145,17 @@ function showError(text: string): void {
   }
 }
 
-function runSim(): void {
+async function runSim(): Promise<void> {
   if (!core || !st) return;
-  const top = $<HTMLSelectElement>('top').value || undefined;
+  const top = $<HTMLSelectElement>('top').value || null;
   status('模擬中…');
   $('msg').textContent = '';
-  setTimeout(() => {
+  $<HTMLButtonElement>('run').disabled = true;
+  {
     const t0 = performance.now();
     const banner = $('banner');
     try {
-      const r = core!.simulate(st!.files, top);
+      const r = await core.call<SimResult>({ cmd: 'simulate', files: st.files, top, max_time: 1_000_000, vcd: false });
       $('log').textContent = r.log;
       const fails = r.tops.reduce((a, t) => a + t.fails, 0);
       banner.className = fails ? 'fail' : 'pass';
@@ -168,7 +172,8 @@ function runSim(): void {
       if (m) jumpTo(m[1], +m[2], +m[3]);
       status('失敗');
     }
-  }, 10);
+    $<HTMLButtonElement>('run').disabled = false;
+  }
 }
 
 function fillExamples(): void {
@@ -207,7 +212,7 @@ function wire(): void {
     }
   });
   $('run').onclick = runSim;
-  $('synth').onclick = () => { if (synth && st) synth.open(st.files, st.ex.synth); };
+  $('synth').onclick = () => { if (synth && st) synth.open(st.files, st.ex.synth, st.ex.pcf); };
   $('revert').onclick = () => {
     if (!st) return;
     st.files = st.ex.files.map(f => ({ ...f }));
@@ -229,12 +234,12 @@ async function boot(): Promise<void> {
   });
   try {
     const t0 = performance.now();
-    core = await Veryl.load(fromBase64(VERYL_WASM_B64));
-    status(`就緒（WebAssembly 載入 ${(performance.now() - t0).toFixed(0)} ms）`);
+    core = await startCore(fromBase64(VERYL_WASM_B64));
+    status(`就緒（WebAssembly 載入 ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? '，背景執行緒' : ''}）`);
     $<HTMLButtonElement>('run').disabled = false;
     $<HTMLButtonElement>('synth').disabled = false;
     synth = new SynthOverlay(core);
-    if (/[#&]synth=1/.test(hash)) synth.open(st!.files, st!.ex.synth);
+    if (/[#&]synth=1/.test(hash)) synth.open(st!.files, st!.ex.synth, st!.ex.pcf);
     refreshTops();
   } catch (e) {
     status('WebAssembly 載入失敗');
