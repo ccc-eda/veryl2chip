@@ -25,6 +25,8 @@ export interface AsicResult {
     /** per net: segs flat (layer, x0, y0, x1, y1) and vias flat (lower layer, x, y), in track units; empty when too large */
     nets: { name: string; len: number; segs: number[]; vias: number[] }[];
   };
+  /** power grid: rail count (row boundaries), straps (track x, VDD?), fillers flat (row, site, width) */
+  pdn: { rails: number; strap_w: number; vias: number; straps: [number, boolean][]; fillers: number[] };
   cts: { buffers: number; hold_bufs: number; trees: { net: string; sinks: number; buffers: number; levels: number }[] };
   timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
   verilog: string;
@@ -151,4 +153,24 @@ export function detailLines(r: AsicResult, sel: number | null, layers: boolean[]
     }
   });
   return out.concat(top);
+}
+
+/** filler cells (background boxes) and the power grid: M1 rails, M5 straps */
+export function powerScene(r: AsicResult): { bg: { x: number; y: number; w: number; h: number; fill: string }[]; lines: Line[] } {
+  const d = r.die, H = d.h * S, f = r.pdn.fillers;
+  const bg = [];
+  for (let i = 0; i < f.length; i += 3) {
+    bg.push({ x: f[i + 1] * d.site_w * S + 0.25, y: H - (f[i] + 1) * d.row_h * S + 0.6, w: f[i + 2] * d.site_w * S - 0.5, h: d.row_h * S - 1.2, fill: '#323a46' });
+  }
+  const lines: Line[] = [];
+  for (let k = 0; k < r.pdn.rails; k++) {
+    const y = H - k * d.row_h * S;
+    lines.push({ pts: [0, y, d.w * S, y], color: k % 2 ? 'rgba(224,108,117,0.55)' : 'rgba(126,195,255,0.55)', width: 0.8 });
+  }
+  const t = d.row_h / r.detail.tracks;
+  for (const [x, vdd] of r.pdn.straps) {
+    const cx = (x + r.pdn.strap_w / 2) * t * S;
+    lines.push({ pts: [cx, 0, cx, H], color: vdd ? 'rgba(224,108,117,0.8)' : 'rgba(126,195,255,0.8)', width: r.pdn.strap_w * t * S });
+  }
+  return { bg, lines };
 }

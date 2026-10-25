@@ -455,6 +455,24 @@
     });
     return out.concat(top);
   }
+  function powerScene(r) {
+    const d = r.die, H = d.h * S, f = r.pdn.fillers;
+    const bg = [];
+    for (let i = 0; i < f.length; i += 3) {
+      bg.push({ x: f[i + 1] * d.site_w * S + 0.25, y: H - (f[i] + 1) * d.row_h * S + 0.6, w: f[i + 2] * d.site_w * S - 0.5, h: d.row_h * S - 1.2, fill: "#323a46" });
+    }
+    const lines = [];
+    for (let k = 0; k < r.pdn.rails; k++) {
+      const y = H - k * d.row_h * S;
+      lines.push({ pts: [0, y, d.w * S, y], color: k % 2 ? "rgba(224,108,117,0.55)" : "rgba(126,195,255,0.55)", width: 0.8 });
+    }
+    const t = d.row_h / r.detail.tracks;
+    for (const [x, vdd] of r.pdn.straps) {
+      const cx = (x + r.pdn.strap_w / 2) * t * S;
+      lines.push({ pts: [cx, 0, cx, H], color: vdd ? "rgba(224,108,117,0.8)" : "rgba(126,195,255,0.8)", width: r.pdn.strap_w * t * S });
+    }
+    return { bg, lines };
+  }
 
   // src/synth/device.ts
   var T = 12;
@@ -834,6 +852,7 @@
       __publicField(this, "selNetA", null);
       __publicField(this, "selNetD", null);
       __publicField(this, "layers", [true, true, true, true]);
+      __publicField(this, "power", true);
       this.view = new CanvasView($("synCanvas"));
       this.view.onPick = (b) => this.pick(b);
       $("synClose").onclick = () => this.close();
@@ -1266,7 +1285,11 @@
         scene.bg = [...scene.bg ?? [], ...congestion(a)];
         scene.lines = this.edges ? asicRouteLines(a, { net: this.selNetA }) : [];
       }
-      if (k === "adetail") scene.lines = this.edges ? detailLines(a, this.selNetD, this.layers) : [];
+      if (k === "adetail") {
+        const pw = powerScene(a);
+        scene.bg = [...scene.bg ?? [], ...pw.bg];
+        scene.lines = [...this.power ? pw.lines : [], ...this.edges ? detailLines(a, this.selNetD, this.layers) : []];
+      }
       if (k === "asta") scene.lines = asicRouteLines(a, { dim: true });
       this.view.set(scene, fit);
     }
@@ -1302,6 +1325,7 @@
           `A \u2466 Detail Routing\uFF08\u8ECC\u9053\u683C\u9EDE\uFF1A\u6BCF ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m \u4E00\u689D\uFF0C${d.nx} \xD7 ${d.ny} \xD7 4 \u5C64\uFF1BM2/M4 \u6C34\u5E73\u3001M3/M5 \u5782\u76F4\uFF09`,
           "\u6BCF\u689D net \u53EA\u5728\u5168\u57DF\u7E5E\u7DDA\u9078\u7684 gcell \u8D70\u5ECA\u5167\uFF08\u5916\u52A0\u4E00\u5708\uFF09\u4EE5 A* \u627E\u8DEF\uFF1A\u7AEF\u9EDE\u4F9D Prim \u9806\u5E8F\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF0C\u63DB\u5C64\u4E00\u500B via \u6210\u672C\u8F03\u9AD8\uFF1B\u6BCF\u500B\u683C\u9EDE\u53EA\u80FD\u5C6C\u65BC\u4E00\u689D net\uFF08\u6240\u4EE5\u6C92\u6709\u77ED\u8DEF\uFF09\uFF0C\u91CD\u758A\u4EE5 PathFinder \u5354\u5546\u91CD\u7E5E\uFF0C\u5361\u4F4F\u7684 net \u8D70\u5ECA\u6703\u52A0\u5BEC\u3002\u5143\u4EF6\u8173\u4F4D\u5F9E M1 \u7D93 via \u4E0A\u4F86\uFF0CSRAM \u5DE8\u96C6\u4E0A\u65B9\u64CB\u4F4F M2/M3\uFF0CIO \u8173\u5728 M5\u3002",
           "",
+          `\u96FB\u6E90\u7DB2\u8DEF\uFF1A\u6BCF\u689D\u5217\u908A\u754C\u4E00\u689D M1 \u96FB\u6E90\u8ECC\uFF08VSS / VDD \u4EA4\u66FF\uFF0C\u5171 ${a.pdn.rails} \u689D\uFF09\uFF0CM5 \u5782\u76F4\u96FB\u6E90\u5E36 ${a.pdn.straps.length} \u689D\uFF08VDD / VSS \u6210\u5C0D\uFF0C\u6BCF 40 \xB5m \u4E00\u5C0D\uFF09\uFF0C${a.pdn.vias} \u500B via \u758A\u628A\u5E36\u5B50\u63A5\u5230\u540C\u540D\u7684\u8ECC\uFF1B\u7E5E\u7DDA\u5668\u907F\u958B\u5E36\u5B50\u8207 via \u758A\u3002\u7A7A\u4F4D\u88DC\u4E0A ${a.pdn.fillers.length / 3} \u500B\u586B\u5145\u5143\u4EF6\uFF08FILL8/4/2/1\uFF0C\u6DF1\u7070\uFF09\uFF0C\u8B93\u4E95\u8207\u96FB\u6E90\u8ECC\u9023\u7E8C\u3002`,
           `\u7DDA\u9577 ${um(d.wirelength)}\uFF08M2 ${um(d.per_layer[0])}\u3001M3 ${um(d.per_layer[1])}\u3001M4 ${um(d.per_layer[2])}\u3001M5 ${um(d.per_layer[3])}\uFF09\uFF0Cvia ${d.vias} \u500B\uFF1B\u885D\u7A81 ${d.conflicts}\u3001\u672A\u63A5\u901A ${d.opens}\uFF1B\u6BCF\u8F2A\u885D\u7A81\uFF1A${d.iters.join(" \u2192 ")}`,
           d.nets.length ? "\u984F\u8272\uFF1A\u85CD M2\u3001\u7D05 M3\u3001\u7DA0 M4\u3001\u9EC3 M5\uFF1B\u5074\u6B04\u53EF\u5207\u63DB\u5C64\u3001\u9EDE net \u9AD8\u4EAE\u3002\u9019\u4E00\u6B65\u7684\u7DDA\u9577\u4E5F\u56DE\u994B\u7D66 STA\u3002" : `\uFF08\u5171 ${d.segments} \u6BB5\u7DDA\uFF0C\u592A\u591A\u4E0D\u756B\uFF0C\u53EA\u5217\u7D71\u8A08\uFF09`
         ];
@@ -1328,6 +1352,17 @@
       if (key === "adetail") {
         const d2 = a.detail;
         div.innerHTML = `<h3>\u5C64</h3>`;
+        const pw = document.createElement("label");
+        pw.style.display = "block";
+        const pcb = document.createElement("input");
+        pcb.type = "checkbox";
+        pcb.checked = this.power;
+        pcb.onchange = () => {
+          this.power = pcb.checked;
+          this.drawAsic(false);
+        };
+        pw.append(pcb, ` \u96FB\u6E90\u7DB2\u8DEF\uFF08\u7D05 VDD\u3001\u85CD VSS\uFF09`);
+        div.appendChild(pw);
         ["M2 \u6C34\u5E73", "M3 \u5782\u76F4", "M4 \u6C34\u5E73", "M5 \u5782\u76F4"].forEach((name, l) => {
           const lab = document.createElement("label");
           lab.style.display = "block";

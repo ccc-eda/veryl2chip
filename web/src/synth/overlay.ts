@@ -3,7 +3,7 @@
 import { fromBase64, VFile } from '../api';
 import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
-import { AsicResult, asicRouteLines, congestion, detailLines, dieScene, LAYER_COLOR, stdColor } from './asic';
+import { AsicResult, asicRouteLines, congestion, detailLines, dieScene, LAYER_COLOR, powerScene, stdColor } from './asic';
 import { deviceScene, heat, lcColor, PnrResult, RAM_COLOR, routeLines } from './device';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
 import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
@@ -459,6 +459,7 @@ export class SynthOverlay {
   private selNetA: number | null = null;
   private selNetD: number | null = null;
   private layers = [true, true, true, true];
+  private power = true;
 
   private drawAsic(fit: boolean): void {
     const a = this.asic!;
@@ -474,7 +475,11 @@ export class SynthOverlay {
       scene.bg = [...(scene.bg ?? []), ...congestion(a)];
       scene.lines = this.edges ? asicRouteLines(a, { net: this.selNetA }) : [];
     }
-    if (k === 'adetail') scene.lines = this.edges ? detailLines(a, this.selNetD, this.layers) : [];
+    if (k === 'adetail') {
+      const pw = powerScene(a);
+      scene.bg = [...(scene.bg ?? []), ...pw.bg];
+      scene.lines = [...(this.power ? pw.lines : []), ...(this.edges ? detailLines(a, this.selNetD, this.layers) : [])];
+    }
     if (k === 'asta') scene.lines = asicRouteLines(a, { dim: true });
     this.view.set(scene, fit);
   }
@@ -511,6 +516,7 @@ export class SynthOverlay {
         `A ⑦ Detail Routing（軌道格點：每 ${(a.die.row_h / d.tracks).toFixed(1)} µm 一條，${d.nx} × ${d.ny} × 4 層；M2/M4 水平、M3/M5 垂直）`,
         '每條 net 只在全域繞線選的 gcell 走廊內（外加一圈）以 A* 找路：端點依 Prim 順序連到已建好的樹，換層一個 via 成本較高；每個格點只能屬於一條 net（所以沒有短路），重疊以 PathFinder 協商重繞，卡住的 net 走廊會加寬。元件腳位從 M1 經 via 上來，SRAM 巨集上方擋住 M2/M3，IO 腳在 M5。',
         '',
+        `電源網路：每條列邊界一條 M1 電源軌（VSS / VDD 交替，共 ${a.pdn.rails} 條），M5 垂直電源帶 ${a.pdn.straps.length} 條（VDD / VSS 成對，每 40 µm 一對），${a.pdn.vias} 個 via 疊把帶子接到同名的軌；繞線器避開帶子與 via 疊。空位補上 ${a.pdn.fillers.length / 3} 個填充元件（FILL8/4/2/1，深灰），讓井與電源軌連續。`,
         `線長 ${um(d.wirelength)}（M2 ${um(d.per_layer[0])}、M3 ${um(d.per_layer[1])}、M4 ${um(d.per_layer[2])}、M5 ${um(d.per_layer[3])}），via ${d.vias} 個；衝突 ${d.conflicts}、未接通 ${d.opens}；每輪衝突：${d.iters.join(' → ')}`,
         d.nets.length ? '顏色：藍 M2、紅 M3、綠 M4、黃 M5；側欄可切換層、點 net 高亮。這一步的線長也回饋給 STA。' : `（共 ${d.segments} 段線，太多不畫，只列統計）`,
       ];
@@ -538,6 +544,14 @@ export class SynthOverlay {
     if (key === 'adetail') {
       const d = a.detail;
       div.innerHTML = `<h3>層</h3>`;
+      const pw = document.createElement('label');
+      pw.style.display = 'block';
+      const pcb = document.createElement('input');
+      pcb.type = 'checkbox';
+      pcb.checked = this.power;
+      pcb.onchange = () => { this.power = pcb.checked; this.drawAsic(false); };
+      pw.append(pcb, ` 電源網路（紅 VDD、藍 VSS）`);
+      div.appendChild(pw);
       ['M2 水平', 'M3 垂直', 'M4 水平', 'M5 垂直'].forEach((name, l) => {
         const lab = document.createElement('label');
         lab.style.display = 'block';

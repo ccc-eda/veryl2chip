@@ -100,6 +100,11 @@ fn asic(v: &Value) -> R<Value> {
             })).collect::<Vec<_>>(),
         },
         "detail": detail_json,
+        "pdn": {
+            "rails": o.pdn.rails, "strap_w": asic::pdn::STRAP_W, "vias": o.pdn.vias.len(),
+            "straps": o.pdn.straps.iter().map(|(x, v)| json!([x, v])).collect::<Vec<_>>(),
+            "fillers": o.pdn.fillers.iter().flat_map(|f| [f.0, f.1, f.2]).collect::<Vec<_>>(),
+        },
         "cts": {
             "buffers": o.cts.buffers, "hold_bufs": o.hold_bufs,
             "trees": o.cts.trees.iter().map(|(b, sinks, bufs, levels)| json!({ "net": names.get(b).cloned().unwrap_or_else(|| "?".into()), "sinks": sinks, "buffers": bufs, "levels": levels })).collect::<Vec<_>>(),

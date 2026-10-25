@@ -265,6 +265,18 @@ fn asic_flow_legal() {
                 for s in x..x + w { assert!(!occ[rr as usize][s as usize], "{}: overlap at row {} site {}", top, rr, s); occ[rr as usize][s as usize] = true; }
             }
         }
+        // fillers close every gap: cells + fillers cover each site exactly once
+        for &(r, x, w) in &o.pdn.fillers {
+            for s in x..x + w { assert!(!occ[r as usize][s as usize], "{}: filler overlaps at row {} site {}", top, r, s); occ[r as usize][s as usize] = true; }
+        }
+        assert!(occ.iter().all(|row| row.iter().all(|o| *o)), "{}: a site is neither cell nor filler", top);
+        // signal wires stay off the power straps and via stacks
+        let ny = pl.rows * crate::asic::detail::TRACKS + 1;
+        let power: std::collections::HashSet<(u8, u32, u32)> = o.pdn.blocked(ny).into_iter().map(|(l, x, y)| (l as u8, x, y)).collect();
+        assert!(!o.pdn.straps.is_empty(), "{}: no power straps", top);
+        for n in &o.detail.nets {
+            for &(l, x0, y0, x1, y1) in &n.segs { for x in x0..=x1 { for y in y0..=y1 { assert!(!power.contains(&(l, x, y)), "{}: signal on the power grid at {:?}", top, (l, x, y)); } } }
+        }
         // detailed routing, checked from its wires alone: no grid node in two
         // nets, and every net one connected piece that reaches all its pins
         let d = &o.detail;

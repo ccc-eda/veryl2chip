@@ -91,12 +91,13 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 | `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹）；同步讀取的記憶體（與 FPGA 的 block RAM 推論相同條件）變成 **SRAM 巨集**，每個讀取埠一個 |
 | `place.rs` | 依利用率 65% 決定晶粒（加上巨集面積），SRAM 巨集先由左下角起成排固定擺放，IO 腳放在四周；標準元件依各列空位比例蛇形初始擺放，再以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL |
 | `route.rs` | gcell（4 µm）**全域繞線**：水平 M2/M4、垂直 M3/M5，每邊規劃 12 軌（16 軌留 4 軌給腳位與 via）；端點依 Prim 順序以 A* 連到已建好的樹（巨集以其邊上的腳位為端點），PathFinder（現況 + 歷史成本）消除溢出 |
+| `pdn.rs` | **電源網路與填充元件**：每條列邊界一條 M1 電源軌（VSS / VDD 交替，配合列的翻轉），M5 垂直電源帶每 40 µm 一對（VDD、VSS 各 2 軌寬，避開 IO 腳），via 疊（M1→M5）接到同名的軌；細部繞線把帶子與 via 疊當障礙物；空位填滿 FILL8/4/2/1；DEF 輸出 `SPECIALNETS` 與填充元件 |
 | `detail.rs` | **細部繞線**：0.5 µm 軌道格點 × 4 層（M2/M4 水平、M3/M5 垂直），每個格點只屬於一條 net（不會短路）；每條 net 只在全域繞線的 gcell 走廊（外加一圈）裡以 A* 找路，換層算 via 成本，重疊以 PathFinder 協商、卡住的 net 走廊加寬；元件腳位從 M1 經 via 上來，SRAM 巨集上方擋 M2/M3，IO 腳在 M5；輸出每層線段與 via（DEF `NETS`），細部線長回饋給 STA |
 | `cts.rs` | **時脈樹合成**（佈局之後）：clock 與非同步 reset 的負載依位置遞迴對半切（沿較長方向取中位數，H-tree 式平衡二元樹），每群 ≤ 16 個負載一個 CLKBUF，緩衝器放在所驅動者重心的最近空位；另有 hold 修正（在違規的 D 前插延遲 BUF） |
 | `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；CTS 之後時脈是 propagated：每個正反器有自己的時脈到達時間，setup 以發送端 / 接收端時脈計算，再用最短路徑做 **hold 檢查**（IO 視為同步於平均延遲的虛擬時脈）；另算每條 net 的關鍵度（給時序導向佈局） |
 | `mod.rs` | `flow()` 串起來；`def()` 輸出 DEF 佈局 |
 
-流程：映射 → 佈局（線長；全域繞線的試繞若溢出或平均需求 > 50% 就放大晶粒、利用率 ×0.8 重來）→ 時序導向佈局 → CTS → 全域繞線 → STA（propagated clock、hold）→ 有 hold 違規就插延遲 BUF、重繞、重算 → 細部繞線 → 以細部線長做最後的 STA。
+流程：映射 → 佈局（線長；全域繞線的試繞若溢出或平均需求 > 50% 就放大晶粒、利用率 ×0.8 重來）→ 時序導向佈局 → CTS → 全域繞線 → STA（propagated clock、hold）→ 有 hold 違規就插延遲 BUF、重繞、重算 → 電源網路與填充元件 → 細部繞線 → 以細部線長做最後的 STA。
 RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關）在 65% 時繞不通，自動降到 42%：細部繞線 0 衝突、0 未接通，80 MHz。
 例：RiscvSoc 的 i_clk 有 232 個負載 → 31 個 CLKBUF、5 級，插入延遲 0.74 ns、skew 104 ps；RiscvCore 1056 個負載 → 194 個 CLKBUF、8 級、skew 170 ps。
 
@@ -106,7 +107,8 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
 | RiscvCore（整顆 RV32I，暫存器檔 1024 個 DFF） | 9795 | 0.132 mm² | 449 × 452 µm | 1088 mm | 67.5 MHz |
 
 驗證：`cargo test` 在標準元件 netlist 上也跑每個範例的 testbench（含 RV32I 測試程式），並檢查佈局合法、每條 net 繞成連通的樹、沒有溢出，
-細部繞線只看線段與 via 重新檢查：沒有格點同屬兩條 net、每條 net 連通且接到所有腳位；
+細部繞線只看線段與 via 重新檢查：沒有格點同屬兩條 net、每條 net 連通且接到所有腳位、訊號線不碰電源帶與 via 疊，
+元件加填充元件恰好鋪滿每個 site；
 `./test.sh` 用 yosys 對 `veryl build` 的輸出做標準元件 netlist 的形式等價驗證。
 
 ## 流程

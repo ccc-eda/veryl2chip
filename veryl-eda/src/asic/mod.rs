@@ -6,6 +6,7 @@ pub mod cts;
 pub mod detail;
 pub mod lib;
 pub mod map;
+pub mod pdn;
 pub mod place;
 pub mod route;
 pub mod sta;
@@ -29,6 +30,7 @@ pub struct Output {
     /// delay buffers inserted to fix hold
     pub hold_bufs: usize,
     pub detail: detail::Detail,
+    pub pdn: pdn::Pdn,
 }
 
 pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> { flow_with(opt, seed, 0.0) }
@@ -94,7 +96,9 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     }
     // detailed routing on the track grid; its wire lengths make the final timing
     let t0 = now();
-    let detail = detail::route(&mapped, &placement, &routing);
+    // power grid and fillers, then detailed routing around the straps
+    let pdn = pdn::build(&mapped, &placement);
+    let detail = detail::route(&mapped, &placement, &routing, &pdn);
     t("detail route", t0);
     let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
     for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
@@ -104,7 +108,7 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail, pdn })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -123,16 +127,31 @@ pub fn def(o: &Output) -> String {
     for r in 0..pl.rows {
         writeln!(s, "ROW ROW_{} core 0 {} {} DO {} BY 1 STEP {} 0 ;", r, u(r as f64 * lib::ROW_H), if r % 2 == 0 { "N" } else { "FS" }, pl.sites, u(lib::SITE_W)).unwrap();
     }
-    writeln!(s, "COMPONENTS {} ;", o.mapped.cells.len()).unwrap();
+    writeln!(s, "COMPONENTS {} ;", o.mapped.cells.len() + o.pdn.fillers.len()).unwrap();
     for (i, c) in o.mapped.cells.iter().enumerate() {
         let (r, x) = pl.pos[i];
         writeln!(s, "  - c{} {} + PLACED ( {} {} ) {} ;", i, c.typ, u(x as f64 * lib::SITE_W), u(r as f64 * lib::ROW_H), if r % 2 == 0 { "N" } else { "FS" }).unwrap();
     }
-    writeln!(s, "END COMPONENTS\nPINS {} ;", pl.pins.len()).unwrap();
+    for (k, &(r, x, w)) in o.pdn.fillers.iter().enumerate() {
+        writeln!(s, "  - fill{} FILL{} + PLACED ( {} {} ) {} ;", k, w, u(x as f64 * lib::SITE_W), u(r as f64 * lib::ROW_H), if r % 2 == 0 { "N" } else { "FS" }).unwrap();
+    }
+    writeln!(s, "END COMPONENTS\nPINS {} ;", pl.pins.len() + 2).unwrap();
+    writeln!(s, "  - VDD + NET VDD + SPECIAL + DIRECTION INOUT + USE POWER ;\n  - VSS + NET VSS + SPECIAL + DIRECTION INOUT + USE GROUND ;").unwrap();
     for p in &pl.pins {
         writeln!(s, "  - {} + NET {} + DIRECTION {} + PLACED ( {} {} ) N ;", p.name, p.name, if p.dir == crate::netlist::Dir::In { "INPUT" } else { "OUTPUT" }, u(p.x), u(p.y)).unwrap();
     }
     writeln!(s, "END PINS").unwrap();
+    // power: M1 rails on the row boundaries, M5 straps, via stacks
+    let tk = lib::ROW_H / detail::TRACKS as f64;
+    writeln!(s, "SPECIALNETS 2 ;").unwrap();
+    for (net, vdd) in [("VDD", true), ("VSS", false)] {
+        let mut parts = vec![];
+        for r in 0..o.pdn.rails { if (r % 2 == 1) == vdd { parts.push(format!("M1 400 ( 0 {} ) ( {} * )", u(r as f64 * lib::ROW_H), u(pl.w))); } }
+        for &(x, sv) in &o.pdn.straps { if sv == vdd { parts.push(format!("M5 1000 ( {} 0 ) ( * {} )", u((x as f64 + 0.5) * lib::SITE_W), u(pl.h))); } }
+        for &(x, y, sv) in &o.pdn.vias { if sv == vdd { parts.push(format!("M1 0 ( {} {} ) VIA1_5", u(x as f64 * lib::SITE_W), u(y as f64 * tk))); } }
+        writeln!(s, "  - {} ( * {} )\n    + ROUTED {} ;", net, net, parts.join("\n      NEW ")).unwrap();
+    }
+    writeln!(s, "END SPECIALNETS").unwrap();
     // detailed routes: wires per layer and vias (VIA12 = M1 pin to M2, VIA23 ...)
     let t = lib::ROW_H / detail::TRACKS as f64;
     let (ux, uy) = (|x: u32| u(x as f64 * lib::SITE_W), |y: u32| u(y as f64 * t));

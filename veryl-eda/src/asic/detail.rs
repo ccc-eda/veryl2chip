@@ -74,7 +74,8 @@ pub fn pin_point(nl: &Netlist, pl: &RowPlacement, i: usize, k: usize) -> (u32, u
     (x.min(s + w - 1), y)
 }
 
-pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Detail {
+/// `pdn`: power straps and via stacks, off limits for signals
+pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pdn) -> Detail {
     let nx = pl.sites + 1;
     let ny = pl.rows * TRACKS + 1;
     let plane = (nx * ny) as usize;
@@ -91,6 +92,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Detail {
             for x in s..s + w { for l in 0..2 { blocked[id(l, x, y) as usize] = true; } }
         }
     }
+    for (l, x, y) in pdn.blocked(ny) { if x < nx && y < ny { blocked[id(l, x, y) as usize] = true; } }
     // terminals of each net
     let pn = nets(nl, &pl.pins);
     let corridor_of: HashMap<Bit, &Vec<(u32, u32, u32, u32)>> = rt.nets.iter().map(|n| (n.bit, &n.segs)).collect();
