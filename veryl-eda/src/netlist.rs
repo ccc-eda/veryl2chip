@@ -330,6 +330,35 @@ pub struct Netlist {
     pub cells: Vec<Cell>,
 }
 
+/// The netlist exactly as elaborated: placeholder aliases resolved, cells
+/// that reach no output dropped, nothing else simplified.
+pub fn elaborated(b: &Builder, alias: &HashMap<u32, Bit>, ports: &[Port], nets: &[(String, Vec<Bit>)], name: &str) -> R<Netlist> {
+    let resolve = |mut x: Bit| -> R<Bit> {
+        let mut n = 0;
+        while let Bit::W(w) = x {
+            match alias.get(&w) { Some(&y) => x = y, None => break }
+            n += 1;
+            if n > alias.len() + 1 { return Err(format!("combinational loop through net {}", w)); }
+        }
+        Ok(x)
+    };
+    let mut cells = vec![];
+    for c in &b.cells {
+        let mut conns = vec![];
+        for (p, x) in &c.conns { conns.push((*p, if is_out(p) { *x } else { resolve(*x)? })); }
+        cells.push(Cell { typ: c.typ.clone(), conns, params: c.params.clone() });
+    }
+    let mut ports2 = vec![];
+    for p in ports {
+        let bits = p.bits.iter().map(|x| if p.dir == Dir::In { Ok(*x) } else { resolve(*x) }).collect::<R<Vec<Bit>>>()?;
+        ports2.push(Port { name: p.name.clone(), dir: p.dir, bits });
+    }
+    let nets2 = nets.iter().map(|(n, bits)| Ok((n.clone(), bits.iter().map(|x| resolve(*x)).collect::<R<Vec<Bit>>>()?))).collect::<R<Vec<_>>>()?;
+    let roots: Vec<Bit> = ports2.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
+    sweep(&mut cells, &roots);
+    Ok(Netlist { name: name.to_string(), ports: ports2, nets: nets2, cells })
+}
+
 /// Optimize the netlist after elaboration: `rebuild` it, then replace
 /// flip-flops that can never leave their initial 0 (next state is their own
 /// output or 0, reset value 0) by the constant, and repeat until nothing changes.

@@ -41,6 +41,30 @@
     </div>
   </section>
 </main>
+<div id="synOverlay" class="hidden">
+  <div id="synBar">
+    <h1>合成 → FPGA（iCE40UP5K）</h1>
+    <div id="synStats"></div>
+    <span class="spacer"></span>
+    <label class="inl">頂層 <select id="synTop"></select></label>
+    <button id="synClose">關閉 ✕</button>
+  </div>
+  <div id="synPipe">
+    <select id="synTarget" title="後端"><option value="fpga">FPGA</option><option value="asic" disabled>ASIC</option></select>
+    <div id="synChips"></div>
+    <span class="spacer"></span>
+    <button id="synEdges">⌁ 連線：開</button>
+  </div>
+  <div id="synInfo"></div>
+  <div id="synBody">
+    <div id="synCanvasWrap">
+      <canvas id="synCanvas"></canvas>
+      <div id="synZoom"><button id="synZin">＋</button><button id="synZout">－</button><button id="synZfit">⤢</button></div>
+    </div>
+    <div id="synSide"></div>
+  </div>
+  <div id="synFoot">滾輪縮放、拖曳平移、雙擊重設；點方塊看細節。</div>
+</div>
 <script src="wasm.js"></script>
 <script src="examples.js"></script>
 <script src="app.js"></script>

@@ -682,15 +682,17 @@ pub struct Synth<'l, 'a> {
     driven: HashSet<u32>,
     pub nets: Vec<(String, Vec<Bit>)>,
     pub warnings: Vec<String>,
+    /// instance hierarchy: (path, module), in elaboration order
+    pub insts: Vec<(String, String)>,
 }
 
 impl<'l, 'a> Synth<'l, 'a> {
     pub fn new(lib: &'l Lib<'a>, b: &'l mut Builder) -> Self {
-        Synth { lib: Some(lib), b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![] }
+        Synth { lib: Some(lib), b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![], insts: vec![] }
     }
     /// constant folding only (no library, no signals)
     fn scratch(b: &'l mut Builder) -> Self {
-        Synth { lib: None, b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![] }
+        Synth { lib: None, b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![], insts: vec![] }
     }
     fn lib(&self) -> &'l Lib<'a> { self.lib.expect("library") }
 
@@ -946,6 +948,7 @@ impl<'l, 'a> Synth<'l, 'a> {
             return Err(format!("'{}' is a testbench component ({}); pick a design module with --top", iname, kind));
         }
         let child = lib.modules.get(&kind).ok_or(format!("unknown module '{}'", kind))?.0;
+        self.insts.push((sc.qual(&iname), kind.clone()));
         let mut ov = HashMap::new();
         if let Some(p) = &ci.component_instantiation_opt1 {
             let mut v = vec![];
@@ -1493,12 +1496,37 @@ impl<'l, 'a> Synth<'l, 'a> {
 
 /// Synthesize `top` into a flat, optimized gate-level netlist.
 pub fn synthesize(lib: &Lib, top: &str) -> R<(Netlist, Vec<String>)> {
+    let st = synthesize_stages(lib, top)?;
+    Ok((st.opt, st.warnings))
+}
+
+/// Every step of synthesis, for viewing: the instance hierarchy, the gate
+/// netlist as elaborated (aliases resolved, nothing optimized away yet) and
+/// the optimized netlist.
+pub struct Stages {
+    /// (path, module); the top is ("", top)
+    pub insts: Vec<(String, String)>,
+    /// top-level ports: (name, direction, width)
+    pub ports: Vec<(String, Dir, usize)>,
+    /// named signals: (hierarchical name, width)
+    pub signals: Vec<(String, usize)>,
+    pub raw: Netlist,
+    pub opt: Netlist,
+    pub warnings: Vec<String>,
+}
+
+pub fn synthesize_stages(lib: &Lib, top: &str) -> R<Stages> {
     let (m, _) = lib.modules.get(top).ok_or(format!("module '{}' not found", top))?;
     let mut b = Builder::new();
     let mut s = Synth::new(lib, &mut b);
     let sc = s.module(m, "", &HashMap::new())?;
     let ports: Vec<Port> = sc.ports.iter().map(|(n, d)| Port { name: n.clone(), dir: *d, bits: sc.sigs[n].bits.clone() }).collect();
+    let mut insts = vec![(String::new(), top.to_string())];
+    insts.extend(std::mem::take(&mut s.insts));
     let (alias, nets, warnings) = (std::mem::take(&mut s.alias), std::mem::take(&mut s.nets), std::mem::take(&mut s.warnings));
-    let nl = optimize(b, &alias, ports, nets, top)?;
-    Ok((nl, warnings))
+    let pinfo = ports.iter().map(|p| (p.name.clone(), p.dir, p.bits.len())).collect();
+    let signals = nets.iter().map(|(n, b)| (n.clone(), b.len())).collect();
+    let raw = elaborated(&b, &alias, &ports, &nets, top)?;
+    let opt = optimize(b, &alias, ports, nets, top)?;
+    Ok(Stages { insts, ports: pinfo, signals, raw, opt, warnings })
 }

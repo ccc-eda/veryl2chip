@@ -36,3 +36,47 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px;
 #editor { flex: 1; border: none; border-radius: 0; resize: none; padding: 6px; font-size: 12px; line-height: 1.45; background: transparent; outline: none; white-space: pre; tab-size: 4; }
 .err-line { color: #ff9b8a; }
 #msg a { color: #7ec3ff; text-decoration: underline; }
+
+/* synthesis overlay */
+#synOverlay { position: fixed; inset: 0; background: #1b2027; z-index: 60; display: flex; flex-direction: column; }
+#synBar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: #232b36; border-bottom: 1px solid #3a4a5e; flex-wrap: wrap; }
+#synBar h1 { font-size: 14px; margin: 0; }
+#synStats { display: flex; gap: 8px; font-size: 12px; flex-wrap: wrap; align-items: center; }
+#synStats b { color: #ffd479; font-weight: 600; }
+#synStats .sep { color: #435269; }
+label.inl { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; color: #9fb2c8; display: flex; }
+#synPipe { display: flex; align-items: center; gap: 6px; padding: 6px 14px; background: #1c232c; border-bottom: 1px solid #34435a; font-size: 12px; flex-wrap: wrap; }
+#synChips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+#synChips .arrow { color: #435269; }
+#synPipe button { padding: 3px 10px; font-size: 12px; border-radius: 11px; border: 1px solid #435269; background: #242e3a; color: #9fb2c8; }
+#synPipe button.cur { background: #3d6ea0; border-color: #6aa1d4; color: #fff; font-weight: 600; }
+#synPipe button.tagf { border-color: #2b6b8f; color: #7ec3ff; }
+#synPipe button.taga { border-color: #8f6b2b; color: #e0b87e; }
+#synPipe button.cur.tagf, #synPipe button.cur.taga { color: #fff; }
+#synPipe button:disabled { opacity: .3; cursor: default; }
+#synInfo { padding: 6px 16px 8px; font-size: 12px; color: #c9d4e2; background: #1c232c; border-bottom: 1px solid #232b36; white-space: pre-wrap; max-height: 170px; overflow: auto; }
+#synBody { flex: 1; display: flex; min-height: 0; }
+#synCanvasWrap { flex: 3; position: relative; overflow: hidden; background: #171c24; }
+#synCanvas { display: block; position: absolute; inset: 0; cursor: grab; touch-action: none; }
+#synZoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+#synZoom button { width: 32px; height: 32px; padding: 0; }
+#synSide { flex: 1; min-width: 280px; max-width: 400px; overflow: auto; background: #232b36; border-left: 1px solid #3a4a5e; padding: 10px 12px; font-size: 12px; }
+#synSide h3 { font-size: 13px; margin: 12px 0 4px; color: #9fb2c8; }
+#synSide table { border-collapse: collapse; width: 100%; font-size: 12px; }
+#synSide th, #synSide td { border: 1px solid #3a4a5e; padding: 2px 6px; text-align: left; white-space: nowrap; }
+#synSide th { background: #2c3547; }
+#synSide .sw { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
+#synSide .hint { color: #9fb2c8; margin: 0; }
+.clist { max-height: 320px; overflow: auto; border: 1px solid #3a4a5e; border-radius: 4px; }
+.clist div { padding: 1px 6px; cursor: pointer; white-space: nowrap; }
+.clist div:hover { background: #2c3e55; }
+.clist .more { color: #9fb2c8; cursor: default; }
+#synFoot { padding: 4px 14px; font-size: 11px; color: #9fb2c8; background: #1c232c; border-top: 1px solid #34435a; }
+#synOverlay { overflow: auto; }
+#synBody { min-height: 60vh; }
+@media (max-width: 1000px) {
+  #synBody { flex-direction: column; min-height: 0; }
+  #synCanvasWrap { flex: 0 0 70vh; }
+  #synSide { max-width: none; flex: 0 0 auto; border-left: none; border-top: 1px solid #3a4a5e; }
+  #synInfo { max-height: 110px; }
+}

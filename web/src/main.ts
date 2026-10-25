@@ -2,6 +2,7 @@
 
 import { fromBase64, Veryl, VFile } from './api';
 import { Example, examples } from './examples';
+import { SynthOverlay } from './synth/overlay';
 
 declare const VERYL_WASM_B64: string;
 
@@ -14,6 +15,7 @@ interface State {
 }
 
 let core: Veryl | null = null;
+let synth: SynthOverlay | null = null;
 let st: State | null = null;
 
 function store(): Storage | null {
@@ -205,6 +207,7 @@ function wire(): void {
     }
   });
   $('run').onclick = runSim;
+  $('synth').onclick = () => { if (synth && st) synth.open(st.files, st.ex.synth); };
   $('revert').onclick = () => {
     if (!st) return;
     st.files = st.ex.files.map(f => ({ ...f }));
@@ -215,9 +218,10 @@ function wire(): void {
 }
 
 async function boot(): Promise<void> {
+  const hash = location.hash;
   fillExamples();
   wire();
-  const id = /ex=([\w-]+)/.exec(location.hash)?.[1] ?? 'seq101';
+  const id = /ex=([\w-]+)/.exec(hash)?.[1] ?? 'seq101';
   selectExample(id);
   window.addEventListener('hashchange', () => {
     const h = /ex=([\w-]+)/.exec(location.hash)?.[1];
@@ -228,6 +232,9 @@ async function boot(): Promise<void> {
     core = await Veryl.load(fromBase64(VERYL_WASM_B64));
     status(`就緒（WebAssembly 載入 ${(performance.now() - t0).toFixed(0)} ms）`);
     $<HTMLButtonElement>('run').disabled = false;
+    $<HTMLButtonElement>('synth').disabled = false;
+    synth = new SynthOverlay(core);
+    if (/[#&]synth=1/.test(hash)) synth.open(st!.files, st!.ex.synth);
     refreshTops();
   } catch (e) {
     status('WebAssembly 載入失敗');
