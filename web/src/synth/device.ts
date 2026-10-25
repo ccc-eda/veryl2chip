@@ -14,7 +14,9 @@ export interface PnrResult {
   lcs: PnrLc[];
   chains: number[][];
   ios: { name: string; dir: string; x: number; y: number; z: number; pin: string }[];
-  history: { temp: number; cost: number; accept: number; pos: number[] }[];
+  /** block RAMs at their ramb tile (x, y); the ramt tile is (x, y + 1) */
+  rams: { x: number; y: number; read: string; write: string; ins: [string, string][]; outs: [string, string][] }[];
+  history: { temp: number; cost: number; accept: number; pos: number[]; ram: number[] }[];
   nets: { name: string; global: boolean; sinks: number; pips: number; segs: [number, number, number, number, string, boolean][] }[];
   route_iters: number[];
   globals: { net: string; glb: number }[];
@@ -54,8 +56,10 @@ export function lcRect(dev: PnrResult['device'], x: number, y: number, z: number
   return [tx + 1 + (z % 2) * (w + 0.5), ty + 1 + (3 - Math.floor(z / 2)) * (h + 0.3), w, h];
 }
 
-/** ids: LCs 0..n-1, IO pins n.. */
-export function deviceScene(r: PnrResult, pos?: number[], colorOf?: (i: number) => string): Scene {
+export const RAM_COLOR = '#b48ead';
+
+/** ids: LCs 0..n-1, IO pins n.., block RAMs after the IO pins */
+export function deviceScene(r: PnrResult, pos?: number[], colorOf?: (i: number) => string, ramPos?: number[]): Scene {
   const dev = r.device;
   const bg = dev.tiles.map(([x, y, t]) => { const [tx, ty] = tileXY(dev, x, y); return { x: tx, y: ty, w: T - 1, h: T - 1, fill: TILE_FILL[t] ?? '#1d232e' }; });
   const boxes: Box[] = r.lcs.map((lc, i) => {
@@ -68,6 +72,11 @@ export function deviceScene(r: PnrResult, pos?: number[], colorOf?: (i: number) 
     const [tx, ty] = tileXY(dev, io.x, io.y);
     boxes.push({ id: r.lcs.length + k, x: tx + 1 + io.z * 5.5, y: ty + 3, w: 4.5, h: 5, fill: io.dir === 'in' ? '#57c27a' : '#e06c75', stroke: '#0f1318' });
     texts.push({ x: tx + 3 + io.z * 5.5, y: io.y === 0 ? ty + T + 3 : ty - 3, s: io.name, color: io.dir === 'in' ? '#8fe0a8' : '#f0a0a8', size: 9, align: 'center' });
+  });
+  r.rams.forEach((ram, k) => {
+    const [x, y] = ramPos ? [ramPos[2 * k], ramPos[2 * k + 1]] : [ram.x, ram.y];
+    const [tx, ty] = tileXY(dev, x, y + 1);
+    boxes.push({ id: r.lcs.length + r.ios.length + k, x: tx + 1, y: ty + 1, w: T - 3, h: 2 * T - 3, fill: RAM_COLOR, stroke: '#0f1318', label: 'RAM' });
   });
   // empty LC slots of logic tiles, as background
   for (const [x, y, t] of dev.tiles) {

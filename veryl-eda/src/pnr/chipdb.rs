@@ -35,6 +35,10 @@ impl Kind {
         let n = name;
         if n.starts_with("local_g") { Kind::Local }
         else if n.starts_with("lutff_global/") { Kind::Ctrl }
+        else if let Some(p) = n.strip_prefix("ram/") {
+            // block RAM pins: data out drives routing like an LC output
+            if p.starts_with("RDATA") { Kind::LutOut } else if p.contains("ADDR") || p.starts_with("WDATA") || p.starts_with("MASK") { Kind::LutIn } else { Kind::Ctrl }
+        }
         else if n.starts_with("lutff_") && n.contains("/in_") { Kind::LutIn }
         else if n.starts_with("lutff_") || n.starts_with("neigh_op_") || n.starts_with("logic_op_") { Kind::LutOut }
         else if n.starts_with("glb_netwk_") { Kind::Glb }
@@ -52,7 +56,7 @@ impl Kind {
 
 /// names the place and route looks up (`Chip::net`); other aliases are not kept
 fn wanted(name: &str) -> bool {
-    name.starts_with("lutff_") || name.starts_with("io_") || name.starts_with("glb_netwk_") || name == "fabout" || name.starts_with("carry_in")
+    name.starts_with("lutff_") || name.starts_with("io_") || name.starts_with("glb_netwk_") || name == "fabout" || name.starts_with("carry_in") || name.starts_with("ram/")
 }
 
 pub struct Pip {

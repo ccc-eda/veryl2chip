@@ -32,7 +32,7 @@ pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> {
     let routing = route::route(&mapped, &placement);
     t("route", t0);
     let timing = sta::analyze(&mapped, &placement, &routing);
-    let area = mapped.cells.iter().map(|c| lib::area(&c.typ)).sum();
+    let area = mapped.cells.iter().map(lib::cell_area).sum();
     let mut m: std::collections::BTreeMap<String, usize> = Default::default();
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();

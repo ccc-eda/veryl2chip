@@ -7,10 +7,14 @@ use std::collections::HashMap;
 pub struct NetSim<'n> {
     nl: &'n Netlist,
     v: HashMap<u32, bool>,
+    /// SB_RAM40_4K contents (256 × 16 bits), by cell index
+    ram: HashMap<usize, Vec<u16>>,
+    /// SRAM macro contents, by cell index
+    sram: HashMap<usize, Vec<u128>>,
 }
 
 impl<'n> NetSim<'n> {
-    pub fn new(nl: &'n Netlist) -> Self { NetSim { nl, v: HashMap::new() } }
+    pub fn new(nl: &'n Netlist) -> Self { NetSim { nl, v: HashMap::new(), ram: HashMap::new(), sram: HashMap::new() } }
 
     fn get_bit(&self, b: Bit) -> bool {
         match b { Bit::C0 => false, Bit::C1 => true, Bit::W(w) => *self.v.get(&w).unwrap_or(&false) }
@@ -56,7 +60,7 @@ impl<'n> NetSim<'n> {
     pub fn settle(&mut self) {
         for _ in 0..4 {
             for c in &self.nl.cells {
-                if c.is_ff() { continue; }
+                if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" { continue; }
                 let g = |p: &str, s: &Self| s.get_bit(c.port(p).unwrap());
                 let y = match c.typ.as_str() {
                     "$_NOT_" => !g("A", self),
@@ -109,7 +113,61 @@ impl<'n> NetSim<'n> {
             }
             if let Bit::W(w) = c.out() { next.push((w, d)); }
         }
+        // block RAMs (yosys cells_sim.v): registered read of the old contents, then the write;
+        // in mode m data bit d is physical bit (d << m) | lane, lane = the address bits above 7
+        let mut next_ram = vec![];
+        for (i, c) in self.nl.cells.iter().enumerate().filter(|(_, c)| c.typ == "SB_RAM40_4K") {
+            let g = |p: &str| self.get_bit(c.port(p).unwrap_or(Bit::C0));
+            let bus = |name: &[&str]| name.iter().enumerate().fold(0usize, |a, (k, p)| a | ((g(p) as usize) << k));
+            let mode = |p: &str| c.params.iter().find(|x| x.0 == p).map(|x| usize::from_str_radix(&x.1, 2).unwrap_or(0)).unwrap_or(0);
+            let (rm, wm) = (mode("READ_MODE"), mode("WRITE_MODE"));
+            let (re, we) = (g("RE") && g("RCLKE"), g("WE") && g("WCLKE"));
+            let (ra, wa, wd, mask) = (bus(&crate::bram::RADDR), bus(&crate::bram::WADDR), bus(&crate::bram::WDATA), bus(&crate::bram::MASK));
+            let mem = self.ram.entry(i).or_insert_with(|| vec![0; 256]);
+            if re {
+                let (word, lane) = (mem[ra & 0xff], (ra >> 8) & ((1 << rm) - 1));
+                let mut out = [false; 16];
+                for d in 0..(16 >> rm) { out[crate::bram::data_pin(rm, d)] = (word >> ((d << rm) | lane)) & 1 == 1; }
+                for (k, p) in crate::bram::RDATA.iter().enumerate() {
+                    if let Some(Bit::W(w)) = c.port(p) { next_ram.push((w, out[k])); }
+                }
+            }
+            if we {
+                let cur = mem[wa & 0xff];
+                mem[wa & 0xff] = if wm == 0 {
+                    (cur & mask as u16) | (wd as u16 & !(mask as u16))
+                } else {
+                    let lane = (wa >> 8) & ((1 << wm) - 1);
+                    let mut v = cur;
+                    for d in 0..(16 >> wm) {
+                        let b = (d << wm) | lane;
+                        v = (v & !(1 << b)) | ((((wd >> crate::bram::data_pin(wm, d)) & 1) as u16) << b);
+                    }
+                    v
+                };
+            }
+        }
+        // SRAM macros (asic::lib): registered read of the old word, then the write
+        for (i, c) in self.nl.cells.iter().enumerate().filter(|(_, c)| c.typ == "SRAM") {
+            let depth = crate::asic::lib::param(c, "DEPTH");
+            let bus = |base: &str| c.conns.iter().filter_map(|(p, b)| {
+                let k: usize = p.strip_prefix(base)?.strip_prefix('[')?.strip_suffix(']')?.parse().ok()?;
+                Some((self.get_bit(*b) as u128) << k)
+            }).fold(0u128, |a, x| a | x);
+            let g = |p: &str| self.get_bit(c.port(p).unwrap_or(Bit::C0));
+            let (re, we, ra, wa, wd) = (g("RE"), g("WE"), bus("RA") as usize % depth, bus("WA") as usize % depth, bus("WD"));
+            let mem = self.sram.entry(i).or_insert_with(|| vec![0; depth]);
+            if re {
+                let word = mem[ra];
+                for (p, b) in &c.conns {
+                    let Some(k) = p.strip_prefix("RDATA[").and_then(|r| r.strip_suffix(']')).and_then(|r| r.parse::<usize>().ok()) else { continue };
+                    if let Bit::W(w) = b { next_ram.push((*w, (word >> k) & 1 == 1)); }
+                }
+            }
+            if we { mem[wa] = wd; }
+        }
         for (w, d) in next { self.v.insert(w, d); }
+        for (w, d) in next_ram { self.v.insert(w, d); }
         self.settle();
     }
 }

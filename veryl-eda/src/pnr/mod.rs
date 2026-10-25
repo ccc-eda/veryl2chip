@@ -63,6 +63,8 @@ struct Asc<'c> {
     chip: &'c Chip,
     bits: HashMap<(i32, i32), Vec<Vec<u8>>>,
     groups: HashMap<u32, u32>,
+    /// block RAM contents: ramb tile -> 16 lines of 64 hex digits
+    ram_data: Vec<((i32, i32), Vec<String>)>,
 }
 
 impl<'c> Asc<'c> {
@@ -72,7 +74,7 @@ impl<'c> Asc<'c> {
             let (c, r) = chip.dims[t];
             bits.insert(*xy, vec![vec![b'0'; c]; r]);
         }
-        Asc { chip, bits, groups: HashMap::new() }
+        Asc { chip, bits, groups: HashMap::new(), ram_data: vec![] }
     }
     fn set(&mut self, x: i32, y: i32, (r, c): (u8, u8), v: bool) {
         self.bits.get_mut(&(x, y)).unwrap()[r as usize][c as usize] = if v { b'1' } else { b'0' };
@@ -100,6 +102,10 @@ impl<'c> Asc<'c> {
             s += &format!(".{}_tile {} {}\n", t, xy.0, xy.1);
             for row in &self.bits[xy] { s += std::str::from_utf8(row).unwrap(); s.push('\n'); }
         }
+        for ((x, y), lines) in &self.ram_data {
+            s += &format!(".ram_data {} {}\n", x, y);
+            for l in lines { s += l; s.push('\n'); }
+        }
         s
     }
 }
@@ -125,6 +131,9 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
     // ---- global networks: set/reset nets need an even one ----
     let mut clocks: Vec<Bit> = vec![];
     let mut resets: Vec<Bit> = vec![];
+    for r in &p.rams {
+        for (pin, b) in &r.ins { if (pin == "RCLK" || pin == "WCLK") && !clocks.contains(b) { clocks.push(*b); } }
+    }
     for lc in &p.lcs {
         if let Some(f) = &lc.ff {
             if !clocks.contains(&f.clk) { clocks.push(f.clk); }
@@ -175,6 +184,21 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
                 let list = if global_of.contains_key(&b) { gsinks.entry(b).or_default() } else { sinks.entry(b).or_default() };
                 if !list.contains(&s) { list.push(s); }
             }
+        }
+    }
+    // block RAM pins live in the ramb tile or the ramt tile above it
+    let ram_wire = |x: i32, y: i32, pin: &str| -> R<u32> {
+        let n = format!("ram/{}", pin);
+        chip.net(x, y, &n).or_else(|| chip.net(x, y + 1, &n)).ok_or_else(|| format!("no RAM pin {} at {},{}", pin, x, y))
+    };
+    for (r, ram) in p.rams.iter().enumerate() {
+        let (x, y) = pl.ram[r];
+        for (pin, b) in &ram.outs { let ww = ram_wire(x, y, pin)?; src.insert(*b, ww); eps.insert(ww, sta::Ep::RamOut(r)); }
+        for (pin, b) in &ram.ins {
+            let ww = ram_wire(x, y, pin)?;
+            let list = if global_of.contains_key(b) { gsinks.entry(*b).or_default() } else { sinks.entry(*b).or_default() };
+            if !list.contains(&ww) { list.push(ww); }
+            if pin != "RCLK" && pin != "WCLK" { eps.insert(ww, sta::Ep::RamIn(r, sta::ram_setup(pin))); }
         }
     }
     for (i, io) in p.ios.iter().enumerate() {
@@ -232,6 +256,18 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
         for (k, b) in bits.into_iter().enumerate() { if v[k] { a.set(x, y, b, true); } }
     }
     for ((x, y), neg) in negclk { if neg { a.func(x, y, "NegClk")?; } }
+    // block RAMs: power up, read / write modes, contents
+    for (r, ram) in p.rams.iter().enumerate() {
+        let (x, y) = pl.ram[r];
+        a.func(x, y, "RamConfig.PowerUp")?;
+        for (k, on) in [ram.write_mode & 1, ram.write_mode & 2, ram.read_mode & 1, ram.read_mode & 2].iter().enumerate() {
+            if *on != 0 { a.func(x, y + 1, &format!("RamConfig.CBIT_{}", k))?; }
+        }
+        let lines = ram.init.iter().map(|bits| {
+            bits.as_bytes().chunks(4).map(|c| { let v = c.iter().fold(0u32, |a, b| a * 2 + (*b == b'1') as u32); std::char::from_digit(v, 16).unwrap() }).collect::<String>()
+        }).collect();
+        a.ram_data.push(((x, y), lines));
+    }
     for ch in &p.chains {
         for (j, &l) in ch.lcs.iter().enumerate() {
             let (x, y, z) = pl.lc[l];

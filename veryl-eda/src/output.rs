@@ -39,8 +39,15 @@ pub fn to_json(nl: &Netlist) -> String {
     writeln!(s, "{}\n      }},", ports.join(",\n")).unwrap();
     writeln!(s, "      \"cells\": {{").unwrap();
     let cells: Vec<String> = nl.cells.iter().enumerate().map(|(i, c)| {
-        let dirs: Vec<String> = c.conns.iter().map(|(p, _)| format!("\"{}\": \"{}\"", p, port_dir(p))).collect();
-        let conns: Vec<String> = c.conns.iter().map(|(p, b)| format!("\"{}\": [{}]", p, bit(b))).collect();
+        // pins "NAME[i]" are bit i of port NAME (e.g. SB_RAM40_4K RADDR)
+        let mut groups: Vec<(&str, Vec<(usize, &Bit)>)> = vec![];
+        for (p, b) in &c.conns {
+            let (base, i) = match p.split_once('[') { Some((n, r)) => (n, r.trim_end_matches(']').parse().unwrap_or(0)), None => (*p, 0) };
+            match groups.iter_mut().find(|g| g.0 == base) { Some(g) => g.1.push((i, b)), None => groups.push((base, vec![(i, b)])) }
+        }
+        for g in &mut groups { g.1.sort_by_key(|x| x.0); }
+        let dirs: Vec<String> = groups.iter().map(|(p, _)| format!("\"{}\": \"{}\"", p, port_dir(p))).collect();
+        let conns: Vec<String> = groups.iter().map(|(p, v)| format!("\"{}\": [{}]", p, v.iter().map(|x| bit(x.1)).collect::<Vec<_>>().join(", "))).collect();
         let params: Vec<String> = c.params.iter().map(|(k, v)| format!("\"{}\": \"{}\"", k, v)).collect();
         format!("        \"$veryl${}\": {{ \"hide_name\": 1, \"type\": \"{}\", \"parameters\": {{ {} }}, \"attributes\": {{}}, \"port_directions\": {{ {} }}, \"connections\": {{ {} }} }}",
             i, c.typ, params.join(", "), dirs.join(", "), conns.join(", "))
@@ -88,15 +95,28 @@ pub fn to_verilog(nl: &Netlist) -> String {
             "$_OR_" => writeln!(s, "  assign {} = {} | {};", y, g("A"), g("B")),
             "$_XOR_" => writeln!(s, "  assign {} = {} ^ {};", y, g("A"), g("B")),
             "$_MUX_" => writeln!(s, "  assign {} = {} ? {} : {};", y, g("S"), g("B"), g("A")),
-            t if !t.starts_with("$_") && !t.starts_with("SB_") => {
-                // vlib standard cell (models: asic::lib::verilog_models)
-                let pins: Vec<String> = c.conns.iter().map(|(p, b)| format!(".{}({})", p, name(b))).collect();
-                writeln!(s, "  {} c{} ({});", t, i, pins.join(", "))
-            }
-            t if t.starts_with("SB_") => {
-                // iCE40 primitive (simulation models: yosys techlibs/ice40/cells_sim.v)
+            t if !t.starts_with("$_") => {
+                // iCE40 primitive (models: yosys techlibs/ice40/cells_sim.v) or vlib
+                // standard cell / SRAM macro (models: asic::lib::verilog_models)
                 let params: Vec<String> = c.params.iter().map(|(k, v)| format!(".{}({}'b{})", k, v.len(), v)).collect();
-                let pins: Vec<String> = c.conns.iter().map(|(p, b)| format!(".{}({})", p, name(b))).collect();
+                // indexed pins "NAME[i]" form one bus port (missing input bits read 0)
+                let mut groups: Vec<(&str, Vec<(usize, Bit)>)> = vec![];
+                for (p, b) in &c.conns {
+                    let (base, k) = match p.split_once('[') { Some((n, r)) => (n, r.trim_end_matches(']').parse().unwrap_or(0)), None => (*p, 0) };
+                    match groups.iter_mut().find(|g| g.0 == base) { Some(g) => g.1.push((k, *b)), None => groups.push((base, vec![(k, *b)])) }
+                }
+                let mut dangling = 0;
+                let pins: Vec<String> = groups.iter().map(|(p, v)| {
+                    if !c.conns.iter().any(|(q, _)| q.starts_with(&format!("{}[", p))) { return format!(".{}({})", p, name(&v[0].1)); }
+                    let top = v.iter().map(|x| x.0).max().unwrap_or(0);
+                    let bits: Vec<String> = (0..=top).rev().map(|k| match v.iter().find(|x| x.0 == k) {
+                        Some(x) => name(&x.1),
+                        None if is_out(p) => { dangling += 1; format!("nc{}_{}", i, dangling) }
+                        None => "1'b0".to_string(),
+                    }).collect();
+                    format!(".{}({{{}}})", p, bits.join(", "))
+                }).collect();
+                for k in 1..=dangling { writeln!(s, "  wire nc{}_{};", i, k).unwrap(); }
                 let ps = if params.is_empty() { String::new() } else { format!(" #({})", params.join(", ")) };
                 writeln!(s, "  {}{} c{} ({});", t, ps, i, pins.join(", "))
             }

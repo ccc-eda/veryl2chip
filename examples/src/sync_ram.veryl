@@ -1,0 +1,81 @@
+// ==========================================
+// 同步讀取 RAM：讀取位址在時脈正緣取樣，下一拍才有資料
+// （iCE40 block RAM 的行為：合成到 FPGA 時會變成 SB_RAM40_4K）
+// ==========================================
+module SyncRam #(
+    param ADDR_W: u32 = 9,
+    param DATA_W: u32 = 8,
+) (
+    i_clk  : input  clock,
+    i_we   : input  logic,
+    i_waddr: input  logic<ADDR_W>,
+    i_wdata: input  logic<DATA_W>,
+    i_re   : input  logic,
+    i_raddr: input  logic<ADDR_W>,
+    o_rdata: output logic<DATA_W>,
+) {
+    var mem: logic<DATA_W> [1 << ADDR_W];
+
+    always_ff (i_clk) {
+        if i_we {
+            mem[i_waddr] = i_wdata;
+        }
+        if i_re {
+            o_rdata = mem[i_raddr];
+        }
+    }
+}
+
+#[test(sync_ram_test)]
+module TestSyncRam {
+    inst clk: $tb::clock_gen;
+
+    var we   : logic;
+    var waddr: logic<9>;
+    var wdata: logic<8>;
+    var re   : logic;
+    var raddr: logic<9>;
+    var rdata: logic<8>;
+
+    inst u: SyncRam (
+        i_clk  : clk,
+        i_we   : we,
+        i_waddr: waddr,
+        i_wdata: wdata,
+        i_re   : re,
+        i_raddr: raddr,
+        o_rdata: rdata,
+    );
+
+    initial {
+        re = 1;
+        we = 1;
+        waddr = 9'd5;   wdata = 8'h5A; clk.next();
+        waddr = 9'd300; wdata = 8'hC3; clk.next();
+        waddr = 9'd511; wdata = 8'h7E; clk.next();
+        we = 0;
+
+        // 讀取：下一拍才出現
+        raddr = 9'd300; clk.next();
+        $assert(rdata == 8'hC3, "read 300");
+        raddr = 9'd5;   clk.next();
+        $assert(rdata == 8'h5A, "read 5");
+        raddr = 9'd511; clk.next();
+        $assert(rdata == 8'h7E, "read 511");
+
+        // 讀取致能關閉時輸出保持
+        re = 0;
+        raddr = 9'd5; clk.next();
+        $assert(rdata == 8'h7E, "hold when re = 0");
+
+        // 同一拍讀寫同一位址：讀到舊值
+        re = 1;
+        we = 1;
+        waddr = 9'd5; wdata = 8'h11; raddr = 9'd5; clk.next();
+        $assert(rdata == 8'h5A, "read-during-write returns the old value");
+        we = 0;
+        clk.next();
+        $assert(rdata == 8'h11, "new value next cycle");
+        $finish();
+    }
+}

@@ -72,9 +72,9 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 `INV BUF NAND2 NOR2 AND2 OR2 XOR2 XNOR2 AOI21 OAI21 MUX2 TIEL TIEH DFF DFFN DFFR DFFS DFFNR DFFNS`（R/S 腳低態有效）。
 | 檔案 | 內容 |
 |---|---|
-| `lib.rs` | 元件庫：寬度、面積、本徵延遲 + 每扇出負載、setup、Verilog 行為模型 |
-| `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹） |
-| `place.rs` | 依利用率 65% 決定晶粒，IO 腳放在四周；蛇形初始擺放後以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL |
+| `lib.rs` | 元件庫：寬度、面積、本徵延遲 + 每扇出負載、setup、Verilog 行為模型；**SRAM 巨集**（記憶體編譯器的角色：依字數×字寬算出面積與形狀） |
+| `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹）；同步讀取的記憶體（與 FPGA 的 block RAM 推論相同條件）變成 **SRAM 巨集**，每個讀取埠一個 |
+| `place.rs` | 依利用率 65% 決定晶粒（加上巨集面積），SRAM 巨集先由左下角起成排固定擺放，IO 腳放在四周；標準元件依各列空位比例蛇形初始擺放，再以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL |
 | `route.rs` | gcell（4 µm）**全域繞線**：水平 M2/M4、垂直 M3/M5，每邊 16 軌；端點依 Prim 順序以 A* 連到已建好的樹，PathFinder（現況 + 歷史成本）消除溢出；統計線長與 via |
 | `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；起點輸入腳 / DFF clk→Q，終點 DFF D（+setup）/ 輸出腳 |
 | `mod.rs` | `flow()` 串起來；`def()` 輸出 DEF 佈局 |
@@ -107,7 +107,23 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 ## 輸出的 cell
 - 通用（`-o`）：`$_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_`（Y = S ? B : A）、`$_DFF_P_ / $_DFF_N_`、
   非同步 reset `$_DFF_{P,N}{P,N}{0,1}_`、同步 reset `$_SDFF_{P,N}{P,N}{0,1}_`。
-- iCE40（`--ice40`）：`SB_LUT4`、`SB_CARRY`、`SB_DFF`、`SB_DFFN`、`SB_DFF[N]{R,S}`、`SB_DFF[N]S{R,S}`。
+- iCE40（`--ice40`）：`SB_LUT4`、`SB_CARRY`、`SB_DFF`、`SB_DFFN`、`SB_DFF[N]{R,S}`、`SB_DFF[N]S{R,S}`、`SB_RAM40_4K`。
+
+## Block RAM 推論（iCE40，`src/bram.rs`）
+陣列若只在**一個** always_ff 中以整個元素寫入（每拍最多一次）、只以整個元素讀取，elab 會把它記成記憶體
+（寫入埠 we / waddr / wdata、各讀取埠的位址與資料，存成具名 net `$mem:名稱:...`，其餘照常展開成 DFF）。
+映射 iCE40 時，若每個讀取埠是**同步讀取**（讀出的資料直接進同一時脈的暫存器，可帶致能）就換成 `SB_RAM40_4K`：
+元素 DFF、讀取暫存器與位址解碼 / 讀取多工器都消失。模式 256×16、512×8、1024×4、2048×2，字寬超過一塊就並排多塊，
+每個讀取埠一份拷貝。非同步讀取（例如 RV32I 暫存器檔、`Ram`）保留為邏輯，因為 block RAM 只有暫存式讀取埠。
+
+| 設計 | 不用 BRAM | 用 BRAM |
+|---|---|---|
+| SyncRam 512×8（`examples/src/sync_ram.veryl`） | 12832 個 cell | 1 個 `SB_RAM40_4K` |
+| BramMix（256×32、兩個讀取埠 + 邏輯） | 29059 個 cell，放不進 UP5K | 4 個 BRAM + 86 LC，自己的 P&R 49 MHz（icetime 46 MHz） |
+
+自己的佈局繞線支援 BRAM：30 個 RAM 位置一起退火、RAM 腳位繞線（時脈走全域網路）、`RamConfig` 位元與 `.ram_data`、STA（RCLK→RDATA 與各輸入 setup）。
+驗證：netsim 依 yosys `cells_sim.v` 模擬 `SB_RAM40_4K`（各模式的隨機讀寫測試）；`fpga/pnr_test.sh` 對繞好的位元流做共模擬；
+`test.sh` 用 yosys 的 `SB_RAM40_4K` 模型對 `veryl build` 做 iCE40 netlist 的形式等價（BMC）。
 
 ## 支援
 module / 參數（`#(param ..)`、`const`、inst 參數覆寫）/ port / `var` / `let` / `assign` / `always_comb` /
@@ -119,7 +135,7 @@ module / 參數（`#(param ..)`、`const`、inst 參數覆寫）/ port / `var` /
 
 ## 尚未支援
 interface/modport、`inout`、遞迴、非常數的除法、latch（不完整賦值的 always_comb 會報組合迴路）、
-寬度 > 128 bit 的常數、Block RAM（`SB_RAM40_4K`）推論、PLL、多時脈域的 netsim；
+寬度 > 128 bit 的常數、非同步讀取的記憶體放進 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL、多時脈域的 netsim；
 自己的佈局繞線：只支援 UP5K，沒有時序導向的擺放/繞線（目前以線長為準）、沒有 LUT 輸入腳交換。
 
 ## 驗證結果（`./test.sh`）

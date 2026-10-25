@@ -19,8 +19,9 @@ export interface SynthResult {
 }
 
 const OUTS = new Set(['Y', 'Q', 'O', 'CO']);
-export const isOut = (pin: string) => OUTS.has(pin);
-export const isFF = (t: string) => t.includes('DFF');
+export const isOut = (pin: string) => OUTS.has(pin) || pin.startsWith('RDATA');
+/** sequential cells (flip-flops, block RAM): level 0, drawn in the DFF column */
+export const isFF = (t: string) => t.includes('DFF') || t === 'SB_RAM40_4K';
 
 export function cellOut(c: JCell): JBit | undefined {
   return c.c.find(([p]) => isOut(p))?.[1];

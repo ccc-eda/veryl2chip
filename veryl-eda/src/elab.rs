@@ -684,15 +684,41 @@ pub struct Synth<'l, 'a> {
     pub warnings: Vec<String>,
     /// instance hierarchy: (path, module), in elaboration order
     pub insts: Vec<(String, String)>,
+    /// arrays that may become memories (block RAM), by hierarchical name
+    mems: HashMap<String, MemInfo>,
+    /// inside an always_ff: (block number, clock, rising edge)
+    ff: Option<(usize, Bit, bool)>,
+    ff_blocks: usize,
 }
+
+/// How an array is used, recorded while it is elaborated as flip-flops: if
+/// it is written only as whole elements from one always_ff (at most one
+/// write per cycle) and read only as whole elements, it is a memory with one
+/// write port and read ports. The ports are kept as named nets
+/// (`$mem:NAME:...`), so a technology mapper can replace the flip-flops by a
+/// block RAM; nothing else changes.
+#[derive(Default)]
+struct MemInfo {
+    bad: bool,
+    /// (block, clock, rising edge, we, waddr, wdata)
+    write: Option<(usize, Bit, bool, Bit, Vec<Bit>, Vec<Bit>)>,
+    /// (address, data placeholder wires)
+    reads: Vec<(Vec<Bit>, Vec<Bit>)>,
+}
+
+/// env keys of an array's pending write in an always_ff
+fn mem_key(name: &str, what: &str) -> String { format!("{}$mem{}", name, what) }
+
+/// pending write address / data: undefined until written (no mux needed for "no write")
+fn dont_care(k: &str) -> bool { k.ends_with("$memwa") || k.ends_with("$memwd") }
 
 impl<'l, 'a> Synth<'l, 'a> {
     pub fn new(lib: &'l Lib<'a>, b: &'l mut Builder) -> Self {
-        Synth { lib: Some(lib), b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![], insts: vec![] }
+        Synth { lib: Some(lib), b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![], insts: vec![], mems: HashMap::new(), ff: None, ff_blocks: 0 }
     }
     /// constant folding only (no library, no signals)
     fn scratch(b: &'l mut Builder) -> Self {
-        Synth { lib: None, b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![], insts: vec![] }
+        Synth { lib: None, b, alias: HashMap::new(), driven: HashSet::new(), nets: vec![], warnings: vec![], insts: vec![], mems: HashMap::new(), ff: None, ff_blocks: 0 }
     }
     fn lib(&self) -> &'l Lib<'a> { self.lib.expect("library") }
 
@@ -1017,6 +1043,21 @@ impl<'l, 'a> Synth<'l, 'a> {
             return Err("if_reset must be the only top-level statement of always_ff".into());
         }
         let (mut env_n, mut env_r) = (Env::new(), Env::new());
+        // pending memory writes of this block start as "no write"
+        let arrays: Vec<(String, usize, usize)> = sc.sigs.iter().filter_map(|(n, si)| {
+            let depth = si.ty.arr? as usize;
+            (depth > 1 && !si.bits.is_empty()).then(|| (n.clone(), depth, si.ty.w as usize))
+        }).collect();
+        for env in [&mut env_n, &mut env_r] {
+            for (n, depth, w) in &arrays {
+                env.insert(mem_key(n, "we"), vec![Bit::C0]);
+                let (wa, wd) = (self.b.wires(crate::netlist::bits_for(*depth).max(1) as u32), self.b.wires(*w as u32));
+                env.insert(mem_key(n, "wa"), wa);
+                env.insert(mem_key(n, "wd"), wd);
+            }
+        }
+        self.ff_blocks += 1;
+        self.ff = Some((self.ff_blocks, ck, pos));
         let reset = if let Some(Stmt::IfReset { reset, arms, els }) = body.first() {
             let rname = match rst { Some(r) => r, None => self.find_kind(sc, |k| matches!(k, Kind::Reset { .. })).ok_or("if_reset used without a reset signal")? };
             let ri = sc.sigs.get(&rname).ok_or(format!("unknown reset '{}'", rname))?;
@@ -1029,6 +1070,17 @@ impl<'l, 'a> Synth<'l, 'a> {
             self.exec(sc, &body, &mut env_n)?;
             None
         };
+        self.ff = None;
+        // the memory write port of this block (none during reset, as for the flip-flops)
+        for (n, _, _) in &arrays {
+            let we = env_n[&mem_key(n, "we")][0];
+            if env_r[&mem_key(n, "we")][0] != Bit::C0 { self.mems.entry(sc.qual(n)).or_default().bad = true; }
+            if we == Bit::C0 { continue; }
+            let we = match reset { Some((rb, low, _)) => { let act = if low { self.b.not(rb) } else { rb }; let na = self.b.not(act); self.b.and(we, na) } None => we };
+            let m = self.mems.entry(sc.qual(n)).or_default();
+            if m.write.is_some() { m.bad = true; continue; }
+            m.write = Some((self.ff_blocks, ck, pos, we, env_n[&mem_key(n, "wa")].clone(), env_n[&mem_key(n, "wd")].clone()));
+        }
 
         let mut regs: Vec<String> = env_n.keys().chain(env_r.keys()).filter(|k| sc.sigs.contains_key(*k)).cloned().collect();
         regs.sort();
@@ -1076,6 +1128,12 @@ impl<'l, 'a> Synth<'l, 'a> {
 
     // ---------------- symbolic execution ----------------
 
+    /// inside always_ff, a module signal reads as its register output (the
+    /// assignments are non-blocking), not as the value assigned so far
+    fn registered(&self, sc: &Scope, n: &str) -> bool {
+        self.ff.is_some() && sc.sigs.get(n).map(|s| !s.bits.is_empty()).unwrap_or(false)
+    }
+
     /// current value of a signal / local
     fn cur(&self, sc: &Scope, env: &Env, name: &str) -> R<Vec<Bit>> {
         if let Some(v) = env.get(name) { return Ok(v.clone()); }
@@ -1111,6 +1169,26 @@ impl<'l, 'a> Synth<'l, 'a> {
 
     /// env[name] = cur with `sel` replaced by `val`
     fn write(&mut self, sc: &Scope, env: &mut Env, name: &str, sel: &Sel, val: &[Bit]) -> R<()> {
+        if let Some(ew) = self.elem_w(sc, env, name) {
+            if sc.sigs.get(name).map(|s| !s.bits.is_empty()).unwrap_or(false) {
+                let key = sc.qual(name);
+                let we = mem_key(name, "we");
+                let ok = matches!(sel, Sel::Index(_)) && val.len() == ew as usize && self.ff.is_some()
+                    && env.get(&we).map(|v| v[0] == Bit::C0).unwrap_or(false) && !env.contains_key("$done");
+                if ok {
+                    let Sel::Index(i) = sel else { unreachable!() };
+                    let idx = self.eval(sc, env, i, 0)?;
+                    let wa = env[&mem_key(name, "wa")].len();
+                    // an index wider than the array could point past it: no memory then
+                    if idx.iter().skip(wa).any(|b| *b != Bit::C0) { self.mems.entry(key.clone()).or_default().bad = true; }
+                    env.insert(we, vec![Bit::C1]);
+                    env.insert(mem_key(name, "wa"), pad(&idx, wa));
+                    env.insert(mem_key(name, "wd"), val.to_vec());
+                } else {
+                    self.mems.entry(key).or_default().bad = true;
+                }
+            }
+        }
         let cur = self.cur(sc, env, name)?;
         let w = cur.len();
         let mut nv = cur.clone();
@@ -1242,7 +1320,9 @@ impl<'l, 'a> Synth<'l, 'a> {
             if t == f { if let Some(t) = t { env.insert(k, t.clone()); } continue; }
             let base = self.cur(sc, env, &k)?;
             let t = t.cloned().unwrap_or_else(|| base.clone());
-            let f = f.cloned().unwrap_or(base);
+            let f = f.cloned().unwrap_or(base.clone());
+            // a memory's write address / data only matter where it writes
+            if dont_care(&k) && (t == base || f == base) { env.insert(k, if t == base { f } else { t }); continue; }
             let m = self.b.muxv(*c, &f, &t);
             env.insert(k, m);
         }
@@ -1274,10 +1354,12 @@ impl<'l, 'a> Synth<'l, 'a> {
             let base = self.cur(sc, env, &k)?;
             let vals: Vec<Vec<Bit>> = envs.iter().map(|(_, e)| e.get(&k).cloned().unwrap_or_else(|| base.clone())).collect();
             if vals.iter().all(|v| *v == base) { continue; }
+            let arms: Vec<(Bit, &Vec<Bit>)> = envs.iter().zip(&vals).filter(|(_, v)| !dont_care(&k) || **v != base).map(|((h, _), v)| (*h, v)).collect();
+            if dont_care(&k) && arms.len() == 1 { env.insert(k, arms[0].1.clone()); continue; }
             let w = vals.iter().map(|v| v.len()).max().unwrap_or(0);
             let mut out = vec![];
             for i in 0..w {
-                let terms: Vec<Bit> = envs.iter().zip(&vals).map(|((h, _), v)| self.b.and(*h, at(v, i))).collect();
+                let terms: Vec<Bit> = arms.iter().map(|(h, v)| self.b.and(*h, at(v, i))).collect();
                 out.push(self.b.reduce_or(&terms));
             }
             env.insert(k, out);
@@ -1318,9 +1400,10 @@ impl<'l, 'a> Synth<'l, 'a> {
             Expr::AllBit(b) => vec![Bit::of(*b == 1); ctx.max(1) as usize],
             Expr::Str(_) => return Err("string literals are not synthesizable".into()),
             Expr::Sym(n) => {
-                if let Some(v) = env.get(n) { return Ok(v.clone()); }
+                if let Some(v) = env.get(n) { if !self.registered(sc, n) { return Ok(v.clone()); } }
                 if let Some(si) = sc.sigs.get(n) {
                     if si.bits.is_empty() && si.ty.w > 0 { return Err(format!("'{}' is not readable here", n)); }
+                    if si.ty.arr.is_some() { self.mems.entry(sc.qual(n)).or_default().bad = true; }
                     return Ok(si.bits.clone());
                 }
                 if let Some(v) = sc.consts.get(n) { return Ok(const_bits(v.v, v.w)); }
@@ -1330,6 +1413,7 @@ impl<'l, 'a> Synth<'l, 'a> {
                 let idx = self.eval(sc, env, i, 0)?;
                 let (base, ew) = match &**b {
                     Expr::Sym(n) => match self.elem_w(sc, env, n) {
+                        Some(ew) if self.registered(sc, n) => (sc.sigs[n].bits.clone(), ew as usize),
                         Some(ew) => (self.cur(sc, env, n)?, ew as usize),
                         None => (self.eval(sc, env, b, 0)?, 1),
                     },
@@ -1337,7 +1421,24 @@ impl<'l, 'a> Synth<'l, 'a> {
                 };
                 let elems: Vec<Vec<Bit>> = base.chunks(ew).map(|c| c.to_vec()).collect();
                 if elems.is_empty() { return Err("select on an empty value".into()); }
-                self.b.select(&elems, &idx)
+                let v = self.b.select(&elems, &idx);
+                // an element read of an array: a memory read port (placeholders aliased to the mux tree)
+                if let Expr::Sym(n) = &**b {
+                    if ew > 1 || elems.len() > 1 {
+                        if let Some(si) = sc.sigs.get(n).filter(|s| s.ty.arr.is_some() && !s.bits.is_empty()) {
+                            let _ = si;
+                            let key = sc.qual(n);
+                            // read after a write in a combinational block: not a memory
+                            if env.contains_key(n) && !self.registered(sc, n) { self.mems.entry(key).or_default().bad = true; return Ok(v); }
+                            if let Some((_, r)) = self.mems.get(&key).and_then(|m| m.reads.iter().find(|(a, _)| *a == idx)) { return Ok(r.clone()); }
+                            let r = self.b.wires(v.len() as u32);
+                            for (p, d) in r.iter().zip(&v) { if let Bit::W(w) = p { self.alias.insert(*w, *d); } }
+                            self.mems.entry(key).or_default().reads.push((idx, r.clone()));
+                            return Ok(r);
+                        }
+                    }
+                }
+                v
             }
             Expr::Slice(b, x, y, k) => {
                 let base = self.eval(sc, env, b, 0)?;
@@ -1523,9 +1624,25 @@ pub fn synthesize_stages(lib: &Lib, top: &str) -> R<Stages> {
     let ports: Vec<Port> = sc.ports.iter().map(|(n, d)| Port { name: n.clone(), dir: *d, bits: sc.sigs[n].bits.clone() }).collect();
     let mut insts = vec![(String::new(), top.to_string())];
     insts.extend(std::mem::take(&mut s.insts));
+    // memories (see MemInfo) as named nets for the technology mappers
+    let mut mems: Vec<(&String, &MemInfo)> = s.mems.iter().filter(|(_, m)| !m.bad && !m.reads.is_empty() && m.write.as_ref().map(|w| w.2).unwrap_or(false)).collect();
+    mems.sort_by(|a, b| a.0.cmp(b.0));
+    let mut mem_nets = vec![];
+    for (q, m) in mems {
+        let (_, ck, _, we, wa, wd) = m.write.as_ref().unwrap();
+        mem_nets.push((format!("$mem:{}:clk", q), vec![*ck]));
+        mem_nets.push((format!("$mem:{}:we", q), vec![*we]));
+        mem_nets.push((format!("$mem:{}:wa", q), wa.clone()));
+        mem_nets.push((format!("$mem:{}:wd", q), wd.clone()));
+        for (i, (ra, rd)) in m.reads.iter().enumerate() {
+            mem_nets.push((format!("$mem:{}:ra{}", q, i), ra.clone()));
+            mem_nets.push((format!("$mem:{}:rd{}", q, i), rd.clone()));
+        }
+    }
+    s.nets.extend(mem_nets);
     let (alias, nets, warnings) = (std::mem::take(&mut s.alias), std::mem::take(&mut s.nets), std::mem::take(&mut s.warnings));
     let pinfo = ports.iter().map(|p| (p.name.clone(), p.dir, p.bits.len())).collect();
-    let signals = nets.iter().map(|(n, b)| (n.clone(), b.len())).collect();
+    let signals = nets.iter().filter(|(n, _)| !n.starts_with("$mem:")).map(|(n, b)| (n.clone(), b.len())).collect();
     let raw = elaborated(&b, &alias, &ports, &nets, top)?;
     let opt = optimize(b, &alias, ports, nets, top)?;
     Ok(Stages { insts, ports: pinfo, signals, raw, opt, warnings })

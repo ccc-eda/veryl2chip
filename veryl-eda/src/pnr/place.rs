@@ -3,7 +3,9 @@
 //! - the 8 LCs of a tile share clock, set/reset and clock polarity, so all
 //!   flip-flops in one tile must agree on them;
 //! - a carry chain occupies consecutive LCs of one logic column, starting
-//!   at LC 0 of a tile (its carry-in is then the tile's constant CarryInSet).
+//!   at LC 0 of a tile (its carry-in is then the tile's constant CarryInSet);
+//! - a block RAM sits on a RAM site (a ramb tile and the ramt tile above it)
+//!   and moves by swapping sites.
 
 use super::chipdb::Chip;
 use super::pack::{Ff, Packed};
@@ -17,6 +19,8 @@ pub struct Placement {
     pub lc: Vec<(i32, i32, u8)>,
     /// IO -> (x, y, pio) and package pin name
     pub io: Vec<(i32, i32, u8, String)>,
+    /// block RAM -> its ramb tile (x, y); the ramt tile is (x, y + 1)
+    pub ram: Vec<(i32, i32)>,
     /// annealing snapshots (after each temperature step, thinned out)
     pub history: Vec<Frame>,
 }
@@ -27,6 +31,7 @@ pub struct Frame {
     pub accept: f64,
     /// LC -> (x, y, z)
     pub lc: Vec<(i32, i32, u8)>,
+    pub ram: Vec<(i32, i32)>,
 }
 
 pub struct Rng(u64);
@@ -38,7 +43,7 @@ impl Rng {
 }
 
 #[derive(Clone, Copy)]
-enum Pin { Lc(usize), Io(usize) }
+enum Pin { Lc(usize), Io(usize), Ram(usize) }
 
 const H: i32 = 30; // logic rows y = 1..=30
 const PER_COL: usize = (H as usize) * 8;
@@ -49,6 +54,10 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
     let mut over = vec![];
     if cols.len() * PER_COL < p.lcs.len() { over.push(format!("{} LCs (the device has {})", p.lcs.len(), cols.len() * PER_COL)); }
     if p.ios.len() > chip.pins.len() { over.push(format!("{} IO pins (the package has {})", p.ios.len(), chip.pins.len())); }
+    // RAM sites: ramb tiles, middle columns first
+    let mut sites: Vec<(i32, i32)> = chip.tile_type.iter().filter(|(_, t)| *t == "ramb").map(|(xy, _)| *xy).collect();
+    sites.sort_by_key(|&(x, y)| ((y - H / 2).abs(), x, y));
+    if p.rams.len() > sites.len() { over.push(format!("{} block RAMs (the device has {})", p.rams.len(), sites.len())); }
     if !over.is_empty() { return Err(format!("design does not fit: needs {}", over.join(" and "))); }
 
     // ---- IO pins ----
@@ -80,6 +89,16 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
         if let Some(f) = &lc.ff { add(f.clk, Pin::Lc(i), &mut net_ix, &mut net_pins); if let Some(s) = f.sr { add(s, Pin::Lc(i), &mut net_ix, &mut net_pins); } }
     }
     for (i, o) in p.ios.iter().enumerate() { add(o.net, Pin::Io(i), &mut net_ix, &mut net_pins); }
+    for (r, ram) in p.rams.iter().enumerate() {
+        for (_, b) in ram.ins.iter().chain(&ram.outs) { add(*b, Pin::Ram(r), &mut net_ix, &mut net_pins); }
+    }
+    let mut ram_nets: Vec<Vec<usize>> = vec![vec![]; p.rams.len()];
+    for (n, pins) in net_pins.iter().enumerate() {
+        for pn in pins { if let Pin::Ram(r) = pn { if !ram_nets[*r].contains(&n) { ram_nets[*r].push(n); } } }
+    }
+    // RAM -> site index, site -> RAM
+    let mut ram_site: Vec<usize> = (0..p.rams.len()).collect();
+    let mut site_ram: Vec<Option<usize>> = (0..sites.len()).map(|s| (s < p.rams.len()).then_some(s)).collect();
     let mut lc_nets: Vec<Vec<usize>> = vec![vec![]; p.lcs.len()];
     for (n, pins) in net_pins.iter().enumerate() {
         for pn in pins { if let Pin::Lc(l) = pn { if !lc_nets[*l].contains(&n) { lc_nets[*l].push(n); } } }
@@ -145,20 +164,25 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
     }
 
     // ---- annealing ----
-    let pos = |pn: &Pin, slot: &Vec<usize>| -> (i32, i32) {
-        match pn { Pin::Lc(l) => { let (x, y, _) = slot_xyz(slot[*l]); (x, y) } Pin::Io(i) => (io[*i].0, io[*i].1) }
+    let pos = |pn: &Pin, slot: &Vec<usize>, ram_site: &Vec<usize>| -> (i32, i32) {
+        match pn {
+            Pin::Lc(l) => { let (x, y, _) = slot_xyz(slot[*l]); (x, y) }
+            Pin::Io(i) => (io[*i].0, io[*i].1),
+            Pin::Ram(r) => { let (x, y) = sites[ram_site[*r]]; (x, y) }
+        }
     };
-    let hpwl = |n: usize, slot: &Vec<usize>| -> f64 {
+    let hpwl = |n: usize, slot: &Vec<usize>, ram_site: &Vec<usize>| -> f64 {
         let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-        for pn in &net_pins[n] { let (x, y) = pos(pn, slot); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
+        for pn in &net_pins[n] { let (x, y) = pos(pn, slot, ram_site); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
         if x0 == i32::MAX { 0.0 } else { ((x1 - x0) + (y1 - y0)) as f64 }
     };
-    let mut ncost: Vec<f64> = (0..net_pins.len()).map(|n| hpwl(n, &slot)).collect();
+    let mut ncost: Vec<f64> = (0..net_pins.len()).map(|n| hpwl(n, &slot, &ram_site)).collect();
     let mut cost: f64 = ncost.iter().sum();
     let movable: Vec<usize> = (0..p.lcs.len()).filter(|l| !fixed[*l]).collect();
-    let initial = Frame { temp: 0.0, cost, accept: 1.0, lc: slot.iter().map(|s| slot_xyz(*s)).collect() };
-    if movable.is_empty() || net_pins.is_empty() {
-        return Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io, history: vec![initial] });
+    let ram_xy = |ram_site: &Vec<usize>| -> Vec<(i32, i32)> { ram_site.iter().map(|s| sites[*s]).collect() };
+    let initial = Frame { temp: 0.0, cost, accept: 1.0, lc: slot.iter().map(|s| slot_xyz(*s)).collect(), ram: ram_xy(&ram_site) };
+    if (movable.is_empty() && p.rams.is_empty()) || net_pins.is_empty() {
+        return Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io, ram: ram_xy(&ram_site), history: vec![initial] });
     }
     let mut history = vec![initial];
     let mut rng = Rng::new(seed);
@@ -168,21 +192,54 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
         // initial temperature from random moves
         let mut d = vec![];
         for _ in 0..200 {
-            let l = movable[rng.below(movable.len())];
+            let nets = if movable.is_empty() { &ram_nets[rng.below(p.rams.len())] } else { &lc_nets[movable[rng.below(movable.len())]] };
             let mut delta = 0.0;
-            for &n in &lc_nets[l] { delta += ncost[n]; }
+            for &n in nets { delta += ncost[n]; }
             d.push(delta);
         }
         let m = d.iter().sum::<f64>() / d.len() as f64;
         (d.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / d.len() as f64).sqrt().max(1.0) * 2.0
     };
-    let moves_per_t = (movable.len() as f64).powf(1.33) as usize * 4 + 100;
+    let moves_per_t = ((movable.len() + p.rams.len()) as f64).powf(1.33) as usize * 4 + 100;
     let mut touched: Vec<usize> = vec![];
     let mut stamp = vec![0u32; net_pins.len()];
     let mut gen = 0u32;
     loop {
         let mut accepted = 0usize;
         for _ in 0..moves_per_t {
+            // a block RAM move: to another site (swapping with the RAM there)
+            if !p.rams.is_empty() && (movable.is_empty() || rng.below(movable.len() + p.rams.len()) < p.rams.len()) {
+                let r = rng.below(p.rams.len());
+                let (sa, sb) = (ram_site[r], rng.below(sites.len()));
+                if sa == sb { continue; }
+                let other = site_ram[sb];
+                let swap = |ram_site: &mut Vec<usize>, site_ram: &mut Vec<Option<usize>>, from: usize, to: usize| {
+                    ram_site[r] = to;
+                    site_ram[to] = Some(r);
+                    site_ram[from] = other;
+                    if let Some(o) = other { ram_site[o] = from; }
+                };
+                swap(&mut ram_site, &mut site_ram, sa, sb);
+                gen += 1;
+                touched.clear();
+                for &n in ram_nets[r].iter().chain(other.map(|o| ram_nets[o].as_slice()).unwrap_or(&[])) {
+                    if stamp[n] != gen { stamp[n] = gen; touched.push(n); }
+                }
+                let mut delta = 0.0;
+                let newc: Vec<f64> = touched.iter().map(|&n| { let c = hpwl(n, &slot, &ram_site); delta += c - ncost[n]; c }).collect();
+                if delta <= 0.0 || rng.unit() < (-delta / temp).exp() {
+                    for (i, &n) in touched.iter().enumerate() { ncost[n] = newc[i]; }
+                    cost += delta;
+                    accepted += 1;
+                } else {
+                    // undo
+                    ram_site[r] = sa;
+                    site_ram[sa] = Some(r);
+                    site_ram[sb] = other;
+                    if let Some(o) = other { ram_site[o] = sb; }
+                }
+                continue;
+            }
             let a = movable[rng.below(movable.len())];
             let sa = slot[a];
             let (ax, ay, _) = slot_xyz(sa);
@@ -218,7 +275,7 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
                 if stamp[n] != gen { stamp[n] = gen; touched.push(n); }
             }
             let mut delta = 0.0;
-            let newc: Vec<f64> = touched.iter().map(|&n| { let c = hpwl(n, &slot); delta += c - ncost[n]; c }).collect();
+            let newc: Vec<f64> = touched.iter().map(|&n| { let c = hpwl(n, &slot, &ram_site); delta += c - ncost[n]; c }).collect();
             if delta <= 0.0 || rng.unit() < (-delta / temp).exp() {
                 for (i, &n) in touched.iter().enumerate() { ncost[n] = newc[i]; }
                 cost += delta;
@@ -238,7 +295,7 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
             }
         }
         let rate = accepted as f64 / moves_per_t as f64;
-        history.push(Frame { temp, cost, accept: rate, lc: slot.iter().map(|s| slot_xyz(*s)).collect() });
+        history.push(Frame { temp, cost, accept: rate, lc: slot.iter().map(|s| slot_xyz(*s)).collect(), ram: ram_xy(&ram_site) });
         temp *= if rate > 0.96 { 0.5 } else if rate > 0.8 { 0.9 } else if rate > 0.15 { 0.95 } else { 0.8 };
         rlim = (rlim * (1.0 - 0.44 + rate)).clamp(1.0, ncols.max(H) as f64);
         if temp < 0.005 * cost.max(1.0) / net_pins.len() as f64 { break; }
@@ -249,5 +306,5 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
         let keep: std::collections::HashSet<usize> = (0..60).map(|i| i * (n - 1) / 59).collect();
         history = history.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|x| x.1).collect();
     }
-    Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io, history })
+    Ok(Placement { lc: slot.iter().map(|s| slot_xyz(*s)).collect(), io, ram: ram_xy(&ram_site), history })
 }

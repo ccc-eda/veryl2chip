@@ -4,7 +4,7 @@ import { fromBase64, VFile } from '../api';
 import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
 import { AsicResult, asicRouteLines, congestion, dieScene, stdColor } from './asic';
-import { deviceScene, heat, lcColor, PnrResult, routeLines } from './device';
+import { deviceScene, heat, lcColor, PnrResult, RAM_COLOR, routeLines } from './device';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
 import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
 
@@ -232,8 +232,9 @@ export class SynthOverlay {
     if (this.target === 'asic') { this.asicStats(ms); return; }
     const m = r.map.cells;
     const luts = m.filter(c => c.t === 'SB_LUT4').length;
-    const ffs = m.filter(c => isFF(c.t)).length;
+    const ffs = m.filter(c => c.t.includes("DFF")).length;
     const carry = m.filter(c => c.t === 'SB_CARRY').length;
+    const brams = m.filter(c => c.t === 'SB_RAM40_4K').length;
     const lev = this.netView('map').lev;
     const items = [
       `頂層 <b>${r.top}</b>`,
@@ -241,11 +242,12 @@ export class SynthOverlay {
       `LUT4 <b>${luts}</b>`,
       `CARRY <b>${carry}</b>`,
       `DFF <b>${ffs}</b>`,
+      ...(brams ? [`BRAM <b>${brams}</b>`] : []),
       `LUT 層數 <b>${lev.depth}</b>`,
     ];
     if (this.pnr) {
       const p = this.pnr;
-      items.push(`LC <b>${p.lcs.length}</b>/5280（${(100 * p.lcs.length / 5280).toFixed(1)}%）`, `pip <b>${p.pips}</b>`,
+      items.push(`LC <b>${p.lcs.length}</b>/5280（${(100 * p.lcs.length / 5280).toFixed(1)}%）`, ...(p.rams.length ? [`BRAM <b>${p.rams.length}</b>/30`] : []), `pip <b>${p.pips}</b>`,
         `F<sub>max</sub> <b>${p.timing.fmax.toFixed(1)}</b> MHz`, `關鍵路徑 <b>${p.timing.period.toFixed(2)}</b> ns`);
     }
     items.push(`合成 <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `，佈局繞線 <b>${(this.pnrMs / 1000).toFixed(1)}</b> s` : ''));
@@ -257,7 +259,7 @@ export class SynthOverlay {
     const items = [`頂層 <b>${r.top}</b>`, `閘 <b>${r.raw.cells.length}</b> → <b>${r.opt.cells.length}</b>`];
     const a = this.asic;
     if (a) {
-      const ffs = a.map.cells.filter(c => isFF(c.t)).length;
+      const ffs = a.map.cells.filter(c => c.t.includes("DFF")).length;
       items.push(`標準元件 <b>${a.map.cells.length}</b>（DFF ${ffs}）`, `面積 <b>${fmtArea(a.area)}</b>`,
         `晶粒 <b>${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)}</b> µm（${a.die.rows} 列，利用率 ${(a.die.util * 100).toFixed(0)}%）`,
         `線長 <b>${(a.route.wirelength / 1000).toFixed(2)}</b> mm`, `F<sub>max</sub> <b>${a.timing.fmax.toFixed(1)}</b> MHz`);
@@ -360,7 +362,7 @@ export class SynthOverlay {
         '⑤ Placement 退火（iCE40UP5K：26×32 tile，邏輯 tile 每個 8 個 LC）',
         '先打包（LUT+FF+CARRY → LC），進位鏈放在整欄邏輯 tile 並從 LC 0 開始；其餘以模擬退火最小化線長（HPWL），同一 tile 的 DFF 必須同 clock / reset / 邊緣。',
         '',
-        `LC ${p.lcs.length} 個（${(100 * p.lcs.length / 5280).toFixed(1)}%），進位鏈 ${chains.length} 條${chains.length ? `（${chains.join(', ')} LC）` : ''}，IO ${p.ios.length} 個`,
+        `LC ${p.lcs.length} 個（${(100 * p.lcs.length / 5280).toFixed(1)}%），進位鏈 ${chains.length} 條${chains.length ? `（${chains.join(', ')} LC）` : ''}，IO ${p.ios.length} 個${p.rams.length ? `，block RAM ${p.rams.length} 個（RAM 欄 x = 6 / 19，每個佔上下兩個 tile）` : ''}`,
         `HPWL：初始 ${h[0].cost.toFixed(0)} → 退火後 ${h[h.length - 1].cost.toFixed(0)}（${h.length - 1} 個溫度快照）　按「▶ 退火動畫」重播`,
       ];
     }
@@ -426,7 +428,7 @@ export class SynthOverlay {
     let f = 0;
     const step = () => {
       const fr = p.history[f];
-      const scene = deviceScene(p, fr.pos);
+      const scene = deviceScene(p, fr.pos, undefined, fr.ram);
       this.view.set(scene, false);
       $('synInfo').textContent = `⑤ 退火動畫：第 ${f + 1}/${p.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${fr.cost.toFixed(0)}　接受率 ${(fr.accept * 100).toFixed(0)}%`;
       f++;
@@ -527,7 +529,9 @@ export class SynthOverlay {
       }
       div.appendChild(list);
     } else {
-      div.innerHTML = `<h3>元件數量</h3>` + table(['元件', '數量', '面積 µm²'], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (n * (a.lib.find(l => l.name === t)?.area ?? 0)).toFixed(0)]));
+      const areaOf = new Map<string, number>();
+      a.cells.forEach(([, , w, , , h], i) => { const t = a.map.cells[i].t; areaOf.set(t, (areaOf.get(t) ?? 0) + w * a.die.site_w * h * a.die.row_h); });
+      div.innerHTML = `<h3>元件數量</h3>` + table(['元件', '數量', '面積 µm²'], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (areaOf.get(t) ?? 0).toFixed(0)]));
     }
     div.innerHTML += `<h3>IO 腳</h3>` + table(['訊號', '方向', 'x µm', 'y µm'], a.pins.map(p => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)]));
     d.appendChild(div);
@@ -546,6 +550,10 @@ export class SynthOverlay {
     let h = `<h3><span class="sw" style="background:${stdColor(c.t)}"></span>#${this.sel} ${c.t}${crit ? '（關鍵路徑）' : ''}</h3>`;
     h += `<p>第 ${row} 列，site ${site}–${site + w - 1}（x = ${(site * a.die.site_w).toFixed(1)} µm）<br>輸出到達時間 ${arr.toFixed(3)} ns</p>`;
     if (lib) h += `<p><code>${esc(lib.verilog)}</code></p>`;
+    if (c.t === 'SRAM') {
+      const n = (k: string) => parseInt(c.p?.[k] ?? '0', 2);
+      h += `<p>SRAM 巨集（記憶體編譯器產生的硬巨集）：${n('DEPTH')} 字 × ${n('WIDTH')} bit，一個寫入埠、一個同步讀取埠（RA 在 CK 正緣取樣，RDATA 下一拍有效）；佔 ${w} site × ${a.cells[this.sel][5]} 列。</p>`;
+    }
     h += table(['接腳', '訊號'], c.c.map(([p, b]) => [p, esc(bitName(v.names, b))]));
     det.innerHTML = h;
   }
@@ -567,7 +575,7 @@ export class SynthOverlay {
   private netReport(key: string, v: NetView): string[] {
     const r = this.res!;
     const types = countTypes(v.nl).map(([t, n]) => `${shortType(t)} ${n}`).join('  ');
-    const ffs = v.nl.cells.filter(c => isFF(c.t)).length;
+    const ffs = v.nl.cells.filter(c => c.t.includes("DFF")).length;
     const big = edgeCount(v.nl) > 6000 ? '（連線太多：只畫選取元件的扇入/扇出）' : '';
     if (key === 'raw') return [
       '② Logic Netlist',
@@ -579,7 +587,7 @@ export class SynthOverlay {
     ];
     if (key === 'opt') {
       const d = r.raw.cells.length - r.opt.cells.length;
-      const rf = r.raw.cells.filter(c => isFF(c.t)).length;
+      const rf = r.raw.cells.filter(c => c.t.includes("DFF")).length;
       return [
         '③ Tech-indep Syn（與技術無關的最佳化）',
         '依拓撲順序重建整個網表：常數傳播、structural hashing、x&!x 等化簡、組合迴路檢查、移除不影響輸出的邏輯；',
@@ -595,7 +603,7 @@ export class SynthOverlay {
       const bufs = v.nl.cells.filter(c => c.t === 'BUF').length;
       return [
         'A ④ Standard Cell Map（vlib：列高 4.0 µm、site 0.5 µm，約 130 nm 慢速角）',
-        '把網表在多扇出點切成樹，對每棵樹做動態規劃的 tree covering（最小面積）：反相器併入 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21；同步 set/reset 變成 D 前的邏輯，非同步的用 DFFR / DFFS（低態有效，必要時加 INV）；扇出 > 12 的訊號插入 BUF 樹。',
+        '把網表在多扇出點切成樹，對每棵樹做動態規劃的 tree covering（最小面積）：反相器併入 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21；同步 set/reset 變成 D 前的邏輯，非同步的用 DFFR / DFFS（低態有效，必要時加 INV）；扇出 > 12 的訊號插入 BUF 樹；同步讀取的記憶體變成 SRAM 巨集（每個讀取埠一個）。',
         '',
         `${types}`,
         `元件面積 ${fmtArea(a.area)}，BUF ${bufs} 個，組合邏輯深度 ${v.lev.depth} 層 ${big}`,
@@ -665,9 +673,10 @@ export class SynthOverlay {
     const k = this.stage;
     if (PNR.has(k)) {
       if (!this.pnr || this.anim) return;
-      this.sel = b && b.id < this.pnr.lcs.length ? b.id : null;
+      const n = this.pnr.lcs.length + this.pnr.ios.length;
+      this.sel = b && (b.id < this.pnr.lcs.length || b.id >= n) ? b.id : null;
       this.drawPnr(false);
-      this.lcDetail();
+      if (this.sel !== null && this.sel >= n) this.ramDetail(this.sel - n); else this.lcDetail();
       return;
     }
     if (APHYS.has(k)) {
@@ -682,6 +691,16 @@ export class SynthOverlay {
       const v = this.netView(k);
       if (b.id < v.nl.cells.length) this.select(b.id);
     }
+  }
+
+  private ramDetail(k: number): void {
+    const det = document.getElementById('synDetail');
+    if (!det || !this.pnr) return;
+    const r = this.pnr.rams[k];
+    let h = `<h3><span class="sw" style="background:${RAM_COLOR}"></span>block RAM #${k}　tile (${r.x},${r.y})–(${r.x},${r.y + 1})</h3>`;
+    h += `<p>SB_RAM40_4K（4 Kbit），讀 ${r.read}、寫 ${r.write}；同步讀取：RADDR 在 RCLK 正緣取樣，RDATA 下一拍有效。</p>`;
+    h += table(['接腳', '訊號'], [...r.ins.map(([p, n]) => [p, esc(n)]), ...r.outs.map(([p, n]) => [p + ' →', esc(n)])]);
+    det.innerHTML = h;
   }
 
   private lcDetail(): void {

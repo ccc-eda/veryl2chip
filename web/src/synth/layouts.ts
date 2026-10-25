@@ -2,11 +2,11 @@
 
 import type { Box, Line, Scene, Text } from '../view/canvas';
 import { stdColor } from './asic';
-import { isOut, JNetlist, Leveled, lutInputs } from './model';
+import { isFF, isOut, JNetlist, Leveled, lutInputs } from './model';
 
 export const TYPE_COLOR: Record<string, string> = {
   $_AND_: '#6aa1d4', $_OR_: '#7ec3ff', $_XOR_: '#c39bd3', $_NOT_: '#a3be8c', $_MUX_: '#ebcb8b',
-  SB_CARRY: '#e5c07b', PI: '#57c27a', PO: '#e06c75',
+  SB_CARRY: '#e5c07b', SB_RAM40_4K: '#b48ead', PI: '#57c27a', PO: '#e06c75',
 };
 const LUT_COLOR = ['#5a6b80', '#8fbcbb', '#88c0d0', '#81a1c1', '#5e81ac'];
 
@@ -20,6 +20,7 @@ export function cellColor(t: string, inputs = 4): string {
 export function shortType(t: string): string {
   if (t === 'SB_LUT4') return 'LUT4';
   if (t === 'SB_CARRY') return 'CARRY';
+  if (t === 'SB_RAM40_4K') return 'BRAM';
   if (t.startsWith('SB_DFF')) return t.slice(3);
   return t.replace(/^\$_/, '').replace(/_$/, '').replace(/^DFF_.*/, 'DFF').replace(/^SDFF_.*/, 'SDFF');
 }
@@ -46,7 +47,7 @@ export function netScene(nl: JNetlist, lev: Leveled): NetLayout {
   const items: { fill: string; label: string }[] = [];
   nl.cells.forEach((c, i) => {
     items.push({ fill: cellColor(c.t, c.t === 'SB_LUT4' ? lutInputs(c) : 4), label: shortType(c.t) });
-    put(c.t.includes('DFF') ? 1 : 1 + Math.max(lev.level[i], 1), i);
+    put(isFF(c.t) ? 1 : 1 + Math.max(lev.level[i], 1), i);
   });
   const portBox = new Map<string, number>();
   const pinPorts = new Map<number, number[]>();

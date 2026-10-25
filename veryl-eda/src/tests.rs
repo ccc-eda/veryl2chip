@@ -24,7 +24,7 @@ fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     assert!(mapped.cells.iter().all(|c| c.typ.starts_with("SB_")));
     check(&mut NetSim::new(&mapped));
     let cells = crate::asic::map::map(&nl).unwrap();
-    assert!(cells.cells.iter().all(|c| crate::asic::lib::LIB.iter().any(|l| l.name == c.typ)));
+    assert!(cells.cells.iter().all(|c| c.typ == "SRAM" || crate::asic::lib::LIB.iter().any(|l| l.name == c.typ)));
     check(&mut NetSim::new(&cells));
 }
 
@@ -281,4 +281,78 @@ fn asic_flow_legal() {
         assert!(o.timing.fmax > 10.0 && o.timing.fmax < 2000.0, "{}: Fmax {}", top, o.timing.fmax);
         assert!(!o.timing.path.is_empty());
     }
+}
+
+/// random reads and writes against a model of a synchronous-read memory
+/// (read-during-write returns the old word); `second` = the 2nd read port
+fn sync_ram_check(s: &mut NetSim, abits: u32, dbits: u32, second: bool) {
+    let mut mem = vec![0u128; 1 << abits];
+    let (mut out, mut out2) = (0u128, 0u128);
+    let mut x = 0x2545f4914f6cdd1du64;
+    let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+    let dmask = (1u128 << dbits) - 1;
+    for cycle in 0..400 {
+        let (we, re) = (rnd() % 3 != 0, rnd() % 4 != 0);
+        // reuse a few addresses so reads hit written words
+        let pick = |r: u64| (r % 8 * 37 + r % 3) as usize % (1 << abits);
+        let (wa, ra, ra2, wd) = (pick(rnd()), pick(rnd()), pick(rnd()), (rnd() as u128) & dmask);
+        s.set("i_we", we as u128);
+        s.set("i_waddr", wa as u128);
+        s.set("i_wdata", wd);
+        s.set("i_re", re as u128);
+        s.set("i_raddr", ra as u128);
+        if second { s.set("i_raddr2", ra2 as u128); }
+        s.step();
+        if re { out = mem[ra]; }
+        out2 = mem[ra2];
+        if we { mem[wa] = wd; }
+        assert_eq!(s.get("o_rdata"), out, "cycle {}", cycle);
+        if second { assert_eq!(s.get("o_rdata2"), out2, "cycle {} (port 2)", cycle); }
+    }
+}
+
+/// block RAM count of the iCE40 mapping
+fn brams(files: &[&str], top: &str) -> usize {
+    let mut parsers = vec![];
+    for f in files {
+        let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), f);
+        let path = if std::path::Path::new(&path).exists() { path } else { format!("{}/examples/{}", env!("CARGO_MANIFEST_DIR"), f) };
+        parsers.push(Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap());
+    }
+    let mut lib = Lib::new();
+    for p in &parsers { lib.add(&p.veryl); }
+    let nl = synthesize(&lib, top).unwrap().0;
+    crate::ice40::map(&nl).unwrap().cells.iter().filter(|c| c.typ == "SB_RAM40_4K").count()
+}
+
+#[test]
+fn sync_ram_bram() {
+    for (top, a, d, n) in [("Bram256x16", 8, 16, 1), ("Bram1024x4", 10, 4, 1), ("Bram2048x2", 11, 2, 1), ("Bram512x20", 9, 20, 3)] {
+        synth(&["sync_ram.veryl", "bram_tests.veryl"], top, |s| sync_ram_check(s, a, d, false));
+        assert_eq!(brams(&["sync_ram.veryl", "bram_tests.veryl"], top), n, "{}", top);
+    }
+    synth(&["bram_tests.veryl"], "Bram2Read", |s| sync_ram_check(s, 8, 16, true));
+    synth(&["sync_ram.veryl"], "SyncRam", |s| sync_ram_check(s, 9, 8, false));
+    assert_eq!(brams(&["sync_ram.veryl"], "SyncRam"), 1);
+    assert_eq!(brams(&["bram_tests.veryl"], "Bram2Read"), 2);
+    // asynchronous reads stay logic
+    assert_eq!(brams(&["ram.veryl"], "Ram"), 0);
+    assert_eq!(brams(&["rv32i.veryl"], "RegFile"), 0);
+}
+
+/// BramMix (4 block RAMs on iCE40): TestBramMix's checks
+#[test]
+fn bram_mix() {
+    synth(&["sync_ram.veryl", "bram_tests.veryl"], "BramMix", |s| {
+        s.set("i_sel", 2);
+        reset(s, "i_rst");
+        for _ in 0..20 { s.step(); }
+        assert_eq!(s.get("o_out"), 0x55);
+        for _ in 0..300 { s.step(); }
+        for (sel, want) in [(2, 0x61), (3, 0x3e), (0, 0x83), (1, 0x8c)] {
+            s.set("i_sel", sel);
+            assert_eq!(s.get("o_out"), want, "sel {}", sel);
+        }
+    });
+    assert_eq!(brams(&["sync_ram.veryl", "bram_tests.veryl"], "BramMix"), 4);
 }

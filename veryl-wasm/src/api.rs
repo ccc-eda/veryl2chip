@@ -74,7 +74,7 @@ fn asic(v: &Value) -> R<Value> {
         "counts": o.counts,
         "area": o.area,
         "die": { "w": pl.w, "h": pl.h, "rows": pl.rows, "sites": pl.sites, "util": pl.util, "row_h": asic::lib::ROW_H, "site_w": asic::lib::SITE_W },
-        "cells": o.mapped.cells.iter().enumerate().map(|(i, c)| json!([pl.pos[i].0, pl.pos[i].1, asic::lib::cell(&c.typ).width, (tm.arrival[i] * 1000.0).round() / 1000.0, crit.contains(&i) as u8])).collect::<Vec<_>>(),
+        "cells": o.mapped.cells.iter().enumerate().map(|(i, c)| { let (w, h) = asic::lib::dims(c); json!([pl.pos[i].0, pl.pos[i].1, w, (tm.arrival[i] * 1000.0).round() / 1000.0, crit.contains(&i) as u8, h]) }).collect::<Vec<_>>(),
         "pins": pl.pins.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "x": p.x, "y": p.y })).collect::<Vec<_>>(),
         "history": frames.iter().map(|&k| { let f = &pl.history[k]; json!({ "temp": f.temp, "cost": f.cost, "accept": f.accept, "pos": f.pos.iter().flat_map(|p| [p.0, p.1]).collect::<Vec<_>>() }) }).collect::<Vec<_>>(),
         "route": {
@@ -130,7 +130,15 @@ fn pnr(v: &Value) -> R<Value> {
         let history: Vec<Value> = out.placement.history.iter().map(|f| json!({
             "temp": f.temp, "cost": f.cost, "accept": f.accept,
             "pos": f.lc.iter().flat_map(|(x, y, z)| [*x, *y, *z as i32]).collect::<Vec<_>>(),
+            "ram": f.ram.iter().flat_map(|(x, y)| [*x, *y]).collect::<Vec<_>>(),
         })).collect();
+        let rams: Vec<Value> = out.packed.rams.iter().enumerate().map(|(i, r)| {
+            let (x, y) = out.placement.ram[i];
+            let mode = |m: u8| ["256×16", "512×8", "1024×4", "2048×2"][m as usize & 3];
+            json!({ "x": x, "y": y, "read": mode(r.read_mode), "write": mode(r.write_mode),
+                "ins": r.ins.iter().map(|(p, b)| json!([p, names(Some(*b))])).collect::<Vec<_>>(),
+                "outs": r.outs.iter().map(|(p, b)| json!([p, names(Some(*b))])).collect::<Vec<_>>() })
+        }).collect();
         // route trees as tile-to-tile segments: from the tile of the pip that
         // drove a wire to the tile of the pip it drives
         let crit: std::collections::HashSet<u32> = out.timing.crit_pips.iter().copied().collect();
@@ -174,6 +182,7 @@ fn pnr(v: &Value) -> R<Value> {
             "lcs": lcs,
             "chains": out.packed.chains.iter().map(|c| c.lcs.clone()).collect::<Vec<_>>(),
             "ios": ios,
+            "rams": rams,
             "history": history,
             "nets": nets,
             "route_iters": out.route_iters,

@@ -22,6 +22,9 @@ struct Cut {
 const PAT: [u16; 4] = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00];
 
 pub fn map(nl: &Netlist) -> R<Netlist> {
+    // synchronous-read memories -> SB_RAM40_4K (they take no part in LUT mapping)
+    let inf = crate::bram::infer(nl);
+    let nl = &inf.nl;
     // combinational gates by output wire; nl.cells keeps them in topological order
     let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
     let mut node: HashMap<u32, usize> = HashMap::new();
@@ -57,7 +60,7 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
 
     // roots: everything sequential logic and output ports look at
     let mut roots: Vec<Bit> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
-    for c in nl.cells.iter().filter(|c| c.is_ff()) {
+    for c in nl.cells.iter().filter(|c| c.is_ff()).chain(&inf.rams) {
         for (p, b) in &c.conns { if !is_out(p) { roots.push(*b); } }
     }
 
@@ -199,8 +202,9 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
         cells.push(Cell { typ: format!("SB_DFF{}{}{}", neg, sync, kind), conns: vec![("C", ck), (pin, r), ("D", d), ("Q", q)], params: vec![] });
     }
 
+    cells.extend(inf.rams.iter().cloned());
     // keep only net names whose bits still exist
-    let mut live: std::collections::HashSet<Bit> = cells.iter().map(|c| c.out()).collect();
+    let mut live: std::collections::HashSet<Bit> = cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| is_out(p)).map(|x| x.1)).collect();
     for p in &nl.ports { live.extend(p.bits.iter().copied()); }
     let nets = nl.nets.iter().filter(|(_, b)| b.iter().all(|x| x.is_const() || live.contains(x))).cloned().collect();
     let ports = nl.ports.iter().map(|p| Port { name: p.name.clone(), dir: p.dir, bits: p.bits.clone() }).collect();

@@ -2,7 +2,7 @@
 //! half-perimeter wirelength. Every move keeps the placement legal (a cell
 //! moves into a free run of sites, or two cells swap places).
 
-use super::lib::{cell, ROW_H, SITE_W};
+use super::lib::{ROW_H, SITE_W};
 use crate::netlist::{Bit, Dir, Netlist};
 use crate::pnr::place::Rng;
 use std::collections::HashMap;
@@ -61,14 +61,39 @@ pub fn special_nets(nl: &Netlist) -> std::collections::HashSet<Bit> {
 
 pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
     let n = nl.cells.len();
-    let widths: Vec<u32> = nl.cells.iter().map(|c| cell(&c.typ).width).collect();
-    let total: u32 = widths.iter().sum::<u32>().max(1);
+    let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
+    let widths: Vec<u32> = dims.iter().map(|d| d.0).collect();
+    let heights: Vec<u32> = dims.iter().map(|d| d.1).collect();
+    let fixed: Vec<bool> = heights.iter().map(|h| *h > 1).collect();
+    let total: u32 = (0..n).filter(|c| !fixed[*c]).map(|c| widths[c]).sum::<u32>().max(1);
+    // macro area in site-rows, with some room around them
+    let macro_area: f64 = (0..n).filter(|c| fixed[*c]).map(|c| (widths[c] * heights[c]) as f64 * 1.1).sum();
     let util = 0.65;
-    let side = ((total as f64 * SITE_W * ROW_H) / util).sqrt();
-    let rows = ((side / ROW_H).round() as u32).max(1);
+    let need = total as f64 / util + macro_area;
+    let side = (need * SITE_W * ROW_H).sqrt();
+    let max_h = *heights.iter().max().unwrap_or(&1);
+    let mut rows = ((side / ROW_H).round() as u32).max(1).max(max_h + 1);
     let max_w = *widths.iter().max().unwrap_or(&1);
-    let sites = ((total as f64 / util / rows as f64).ceil() as u32).max(max_w + 2);
+    let mut sites = ((need / rows as f64).ceil() as u32).max(max_w + 2);
+    // macros: shelf packing from the bottom left (grow the die until they fit)
+    let mut mpos: Vec<(usize, u32, u32)> = vec![];
+    loop {
+        mpos.clear();
+        let (mut x, mut y, mut shelf) = (0u32, 0u32, 0u32);
+        let mut ok = true;
+        for c in (0..n).filter(|c| fixed[*c]) {
+            if x + widths[c] > sites { x = 0; y += shelf; shelf = 0; }
+            if y + heights[c] > rows || x + widths[c] > sites { ok = false; break; }
+            mpos.push((c, y, x));
+            x += widths[c];
+            shelf = shelf.max(heights[c]);
+        }
+        if ok { break; }
+        rows += 1;
+        sites += sites / 20 + 1;
+    }
     let (w, h) = (sites as f64 * SITE_W, rows as f64 * ROW_H);
+    let used_sites: u32 = (0..n).map(|c| widths[c] * heights[c]).sum();
 
     // IO pins evenly around the die: inputs on the left and top, outputs right and bottom
     let mut pins = vec![];
@@ -88,42 +113,66 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
     let mut cell_nets: Vec<Vec<usize>> = vec![vec![]; n];
     for (k, p) in pnets.iter().enumerate() { for &c in &p.cells { cell_nets[c].push(k); } }
 
-    // initial: cells in netlist order (topological, so connected cells are near), rows filled evenly
     let mut occ: Vec<Vec<i32>> = vec![vec![-1; sites as usize]; rows as usize];
     let mut pos = vec![(0u32, 0u32); n];
-    let per_row = total as f64 / rows as f64;
-    let (mut r, mut acc, mut placed_in_row) = (0u32, 0.0f64, vec![]);
-    let flush = |r: u32, list: &Vec<usize>, occ: &mut Vec<Vec<i32>>, pos: &mut Vec<(u32, u32)>| {
-        let used: u32 = list.iter().map(|&c| widths[c]).sum();
-        let gap = if list.is_empty() { 0.0 } else { (sites - used.min(sites)) as f64 / list.len() as f64 };
-        let mut x = 0.0f64;
-        for &c in list {
-            let xs = (x.round() as u32).min(sites - widths[c]);
-            // nudge right past anything already there
-            let mut xs2 = xs;
-            while xs2 + widths[c] <= sites && (xs2..xs2 + widths[c]).any(|s| occ[r as usize][s as usize] >= 0) { xs2 += 1; }
-            if xs2 + widths[c] > sites { xs2 = (0..=sites - widths[c]).find(|&s| (s..s + widths[c]).all(|t| occ[r as usize][t as usize] < 0)).unwrap_or(0); }
-            for s in xs2..xs2 + widths[c] { occ[r as usize][s as usize] = c as i32; }
-            pos[c] = (r, xs2);
-            x += widths[c] as f64 + gap;
+    for &(c, y, x) in &mpos {
+        for r in y..y + heights[c] { for s in x..x + widths[c] { occ[r as usize][s as usize] = c as i32; } }
+        pos[c] = (y, x);
+    }
+    // standard cells: netlist order (topological, so connected cells are near),
+    // rows in snake order, each row filled in proportion to its free sites
+    let free_sites: Vec<u32> = occ.iter().map(|row| row.iter().filter(|o| **o < 0).count() as u32).collect();
+    let total_free: f64 = free_sites.iter().map(|f| *f as f64).sum::<f64>().max(1.0);
+    let order: Vec<usize> = (0..n).filter(|c| !fixed[*c]).collect();
+    let mut next = 0usize;
+    let mut placed_w = 0.0f64;
+    let mut quota = 0.0f64;
+    for r in 0..rows {
+        quota += total as f64 * free_sites[r as usize] as f64 / total_free;
+        let mut list = vec![];
+        while next < order.len() && (placed_w < quota || r + 1 == rows) {
+            list.push(order[next]);
+            placed_w += widths[order[next]] as f64;
+            next += 1;
         }
-    };
-    // snake order keeps neighbours of row ends close
-    for c in 0..n {
-        placed_in_row.push(c);
-        acc += widths[c] as f64;
-        if acc >= per_row * (r + 1) as f64 && r + 1 < rows {
-            if r % 2 == 1 { placed_in_row.reverse(); }
-            flush(r, &placed_in_row, &mut occ, &mut pos);
-            placed_in_row.clear();
-            r += 1;
+        if r % 2 == 1 { list.reverse(); }
+        let used: u32 = list.iter().map(|&c| widths[c]).sum();
+        let gap = if list.is_empty() { 0.0 } else { free_sites[r as usize].saturating_sub(used) as f64 / list.len() as f64 };
+        let row = &mut occ[r as usize];
+        let mut x = 0.0f64;
+        let mut spill = vec![];
+        for &c in &list {
+            let wc = widths[c];
+            let mut xs = (x.round() as u32).min(sites.saturating_sub(wc));
+            while xs + wc <= sites && (xs..xs + wc).any(|t| row[t as usize] >= 0) { xs += 1; }
+            if xs + wc > sites {
+                match (0..=sites - wc).find(|&t| (t..t + wc).all(|u| row[u as usize] < 0)) { Some(t) => xs = t, None => { spill.push(c); continue; } }
+            }
+            for t in xs..xs + wc { row[t as usize] = c as i32; }
+            pos[c] = (r, xs);
+            x = (xs + wc) as f64 + gap;
+        }
+        // a cell that did not fit is placed below, in the first free run anywhere
+        let _ = spill;
+    }
+    // anything left over (rounding): first free run anywhere
+    for &c in &order {
+        let (r, x) = pos[c];
+        if occ[r as usize][x as usize] == c as i32 { continue; }
+        let wc = widths[c];
+        'find: for rr in 0..rows {
+            for t in 0..=sites - wc {
+                if (t..t + wc).all(|u| occ[rr as usize][u as usize] < 0) {
+                    for u in t..t + wc { occ[rr as usize][u as usize] = c as i32; }
+                    pos[c] = (rr, t);
+                    break 'find;
+                }
+            }
         }
     }
-    if r % 2 == 1 { placed_in_row.reverse(); }
-    flush(r, &placed_in_row, &mut occ, &mut pos);
 
     // ---- annealing ----
-    let cx = |c: usize, pos: &Vec<(u32, u32)>| ((pos[c].1 as f64 + widths[c] as f64 / 2.0) * SITE_W, (pos[c].0 as f64 + 0.5) * ROW_H);
+    let cx = |c: usize, pos: &Vec<(u32, u32)>| ((pos[c].1 as f64 + widths[c] as f64 / 2.0) * SITE_W, (pos[c].0 as f64 + heights[c] as f64 / 2.0) * ROW_H);
     let hpwl = |k: usize, pos: &Vec<(u32, u32)>| -> f64 {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for &c in &pnets[k].cells { let (x, y) = cx(c, pos); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
@@ -134,12 +183,13 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
     let mut cost: f64 = ncost.iter().sum();
     let mut history = vec![Frame { temp: 0.0, cost, accept: 1.0, pos: pos.clone() }];
     if n < 2 || pnets.is_empty() {
-        return RowPlacement { rows, sites, w, h, pos, pins, history, util: total as f64 / (rows * sites) as f64 };
+        return RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64 };
     }
     let mut rng = Rng::new(seed);
     let mut temp = {
         let mut d = vec![];
-        for _ in 0..200 { let c = rng.below(n); d.push(cell_nets[c].iter().map(|k| ncost[*k]).sum::<f64>()); }
+        for _ in 0..200 { let c = rng.below(n); if fixed[c] { continue; } d.push(cell_nets[c].iter().map(|k| ncost[*k]).sum::<f64>()); }
+        if d.is_empty() { d.push(1.0); }
         let m = d.iter().sum::<f64>() / d.len() as f64;
         (d.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / d.len() as f64).sqrt().max(1.0)
     };
@@ -155,6 +205,7 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
         let mut accepted = 0usize;
         for _ in 0..moves {
             let a = rng.below(n);
+            if fixed[a] { continue; }
             let (ra, xa) = pos[a];
             let wa = widths[a];
             let rr = rlim.max(1.0) as i64;
@@ -167,7 +218,7 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
             let mut plan: Vec<(usize, u32, u32)> = vec![];
             if free_run(&occ, r2, x2, wa, &[a as i32]) {
                 plan.push((a, r2, x2));
-            } else if b >= 0 && b as usize != a {
+            } else if b >= 0 && b as usize != a && !fixed[b as usize] {
                 let b = b as usize;
                 let (rb, xb) = pos[b];
                 let wb = widths[b];
@@ -208,5 +259,5 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
         let keep: std::collections::HashSet<usize> = (0..40).map(|i| i * (m - 1) / 39).collect();
         history = history.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|x| x.1).collect();
     }
-    RowPlacement { rows, sites, w, h, pos, pins, history, util: total as f64 / (rows * sites) as f64 }
+    RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64 }
 }

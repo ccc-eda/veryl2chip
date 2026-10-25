@@ -340,6 +340,7 @@
   // src/synth/asic.ts
   var S = 4;
   function stdColor(t) {
+    if (t === "SRAM") return "#7d6b9e";
     if (t.startsWith("DFF")) return "#d08770";
     if (t === "MUX2") return "#ebcb8b";
     if (t === "BUF") return "#8fbcbb";
@@ -355,15 +356,18 @@
     const H = d.h * S;
     const bg = [{ x: -2, y: -2, w: d.w * S + 4, h: H + 4, fill: "#2a3441" }];
     for (let row = 0; row < d.rows; row++) bg.push({ x: 0, y: H - (row + 1) * d.row_h * S, w: d.w * S, h: d.row_h * S, fill: row % 2 ? "#1f2833" : "#222c38" });
-    const boxes = r.cells.map(([row, site, w], i) => {
+    const boxes = r.cells.map(([row, site, w, , , hh], i) => {
       const [rr, ss] = pos ? [pos[2 * i], pos[2 * i + 1]] : [row, site];
+      const macro = r.map.cells[i].t === "SRAM";
       return {
         id: i,
         x: ss * d.site_w * S + 0.25,
-        y: H - (rr + 1) * d.row_h * S + 0.6,
+        y: H - (rr + hh) * d.row_h * S + 0.6,
         w: w * d.site_w * S - 0.5,
-        h: d.row_h * S - 1.2,
-        fill: colorOf ? colorOf(i) : stdColor(r.map.cells[i].t)
+        h: hh * d.row_h * S - 1.2,
+        fill: colorOf && !macro ? colorOf(i) : stdColor(r.map.cells[i].t),
+        label: macro ? "SRAM" : void 0,
+        stroke: macro ? "#c3b2e0" : void 0
       };
     });
     const texts = [];
@@ -475,7 +479,8 @@
     const w = (T - 3) / 2, h = (T - 3) / 4;
     return [tx + 1 + z % 2 * (w + 0.5), ty + 1 + (3 - Math.floor(z / 2)) * (h + 0.3), w, h];
   }
-  function deviceScene(r, pos, colorOf) {
+  var RAM_COLOR = "#b48ead";
+  function deviceScene(r, pos, colorOf, ramPos) {
     const dev = r.device;
     const bg = dev.tiles.map(([x, y, t]) => {
       const [tx, ty] = tileXY(dev, x, y);
@@ -491,6 +496,11 @@
       const [tx, ty] = tileXY(dev, io.x, io.y);
       boxes.push({ id: r.lcs.length + k, x: tx + 1 + io.z * 5.5, y: ty + 3, w: 4.5, h: 5, fill: io.dir === "in" ? "#57c27a" : "#e06c75", stroke: "#0f1318" });
       texts.push({ x: tx + 3 + io.z * 5.5, y: io.y === 0 ? ty + T + 3 : ty - 3, s: io.name, color: io.dir === "in" ? "#8fe0a8" : "#f0a0a8", size: 9, align: "center" });
+    });
+    r.rams.forEach((ram, k) => {
+      const [x, y] = ramPos ? [ramPos[2 * k], ramPos[2 * k + 1]] : [ram.x, ram.y];
+      const [tx, ty] = tileXY(dev, x, y + 1);
+      boxes.push({ id: r.lcs.length + r.ios.length + k, x: tx + 1, y: ty + 1, w: T - 3, h: 2 * T - 3, fill: RAM_COLOR, stroke: "#0f1318", label: "RAM" });
     });
     for (const [x, y, t] of dev.tiles) {
       if (t !== "logic") continue;
@@ -528,8 +538,8 @@
 
   // src/synth/model.ts
   var OUTS = /* @__PURE__ */ new Set(["Y", "Q", "O", "CO"]);
-  var isOut = (pin) => OUTS.has(pin);
-  var isFF = (t) => t.includes("DFF");
+  var isOut = (pin) => OUTS.has(pin) || pin.startsWith("RDATA");
+  var isFF = (t) => t.includes("DFF") || t === "SB_RAM40_4K";
   function netNames(nl) {
     const m = /* @__PURE__ */ new Map();
     const add = (name, bits) => bits.forEach((b, i) => {
@@ -614,6 +624,7 @@
     $_NOT_: "#a3be8c",
     $_MUX_: "#ebcb8b",
     SB_CARRY: "#e5c07b",
+    SB_RAM40_4K: "#b48ead",
     PI: "#57c27a",
     PO: "#e06c75"
   };
@@ -627,6 +638,7 @@
   function shortType(t) {
     if (t === "SB_LUT4") return "LUT4";
     if (t === "SB_CARRY") return "CARRY";
+    if (t === "SB_RAM40_4K") return "BRAM";
     if (t.startsWith("SB_DFF")) return t.slice(3);
     return t.replace(/^\$_/, "").replace(/_$/, "").replace(/^DFF_.*/, "DFF").replace(/^SDFF_.*/, "SDFF");
   }
@@ -645,7 +657,7 @@
     const items = [];
     nl.cells.forEach((c, i) => {
       items.push({ fill: cellColor(c.t, c.t === "SB_LUT4" ? lutInputs(c) : 4), label: shortType(c.t) });
-      put(c.t.includes("DFF") ? 1 : 1 + Math.max(lev.level[i], 1), i);
+      put(isFF(c.t) ? 1 : 1 + Math.max(lev.level[i], 1), i);
     });
     const portBox = /* @__PURE__ */ new Map();
     const pinPorts = /* @__PURE__ */ new Map();
@@ -982,8 +994,9 @@
       }
       const m = r.map.cells;
       const luts = m.filter((c) => c.t === "SB_LUT4").length;
-      const ffs = m.filter((c) => isFF(c.t)).length;
+      const ffs = m.filter((c) => c.t.includes("DFF")).length;
       const carry = m.filter((c) => c.t === "SB_CARRY").length;
+      const brams = m.filter((c) => c.t === "SB_RAM40_4K").length;
       const lev = this.netView("map").lev;
       const items = [
         `\u9802\u5C64 <b>${r.top}</b>`,
@@ -991,12 +1004,14 @@
         `LUT4 <b>${luts}</b>`,
         `CARRY <b>${carry}</b>`,
         `DFF <b>${ffs}</b>`,
+        ...brams ? [`BRAM <b>${brams}</b>`] : [],
         `LUT \u5C64\u6578 <b>${lev.depth}</b>`
       ];
       if (this.pnr) {
         const p = this.pnr;
         items.push(
           `LC <b>${p.lcs.length}</b>/5280\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09`,
+          ...p.rams.length ? [`BRAM <b>${p.rams.length}</b>/30`] : [],
           `pip <b>${p.pips}</b>`,
           `F<sub>max</sub> <b>${p.timing.fmax.toFixed(1)}</b> MHz`,
           `\u95DC\u9375\u8DEF\u5F91 <b>${p.timing.period.toFixed(2)}</b> ns`
@@ -1010,7 +1025,7 @@
       const items = [`\u9802\u5C64 <b>${r.top}</b>`, `\u9598 <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`];
       const a = this.asic;
       if (a) {
-        const ffs = a.map.cells.filter((c) => isFF(c.t)).length;
+        const ffs = a.map.cells.filter((c) => c.t.includes("DFF")).length;
         items.push(
           `\u6A19\u6E96\u5143\u4EF6 <b>${a.map.cells.length}</b>\uFF08DFF ${ffs}\uFF09`,
           `\u9762\u7A4D <b>${fmtArea(a.area)}</b>`,
@@ -1114,7 +1129,7 @@
           "\u2464 Placement \u9000\u706B\uFF08iCE40UP5K\uFF1A26\xD732 tile\uFF0C\u908F\u8F2F tile \u6BCF\u500B 8 \u500B LC\uFF09",
           "\u5148\u6253\u5305\uFF08LUT+FF+CARRY \u2192 LC\uFF09\uFF0C\u9032\u4F4D\u93C8\u653E\u5728\u6574\u6B04\u908F\u8F2F tile \u4E26\u5F9E LC 0 \u958B\u59CB\uFF1B\u5176\u9918\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316\u7DDA\u9577\uFF08HPWL\uFF09\uFF0C\u540C\u4E00 tile \u7684 DFF \u5FC5\u9808\u540C clock / reset / \u908A\u7DE3\u3002",
           "",
-          `LC ${p.lcs.length} \u500B\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0C\u9032\u4F4D\u93C8 ${chains.length} \u689D${chains.length ? `\uFF08${chains.join(", ")} LC\uFF09` : ""}\uFF0CIO ${p.ios.length} \u500B`,
+          `LC ${p.lcs.length} \u500B\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0C\u9032\u4F4D\u93C8 ${chains.length} \u689D${chains.length ? `\uFF08${chains.join(", ")} LC\uFF09` : ""}\uFF0CIO ${p.ios.length} \u500B${p.rams.length ? `\uFF0Cblock RAM ${p.rams.length} \u500B\uFF08RAM \u6B04 x = 6 / 19\uFF0C\u6BCF\u500B\u4F54\u4E0A\u4E0B\u5169\u500B tile\uFF09` : ""}`,
           `HPWL\uFF1A\u521D\u59CB ${h[0].cost.toFixed(0)} \u2192 \u9000\u706B\u5F8C ${h[h.length - 1].cost.toFixed(0)}\uFF08${h.length - 1} \u500B\u6EAB\u5EA6\u5FEB\u7167\uFF09\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`
         ];
       }
@@ -1184,7 +1199,7 @@
       let f = 0;
       const step = () => {
         const fr = p.history[f];
-        const scene = deviceScene(p, fr.pos);
+        const scene = deviceScene(p, fr.pos, void 0, fr.ram);
         this.view.set(scene, false);
         $("synInfo").textContent = `\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`;
         f++;
@@ -1288,7 +1303,12 @@
         }
         div.appendChild(list);
       } else {
-        div.innerHTML = `<h3>\u5143\u4EF6\u6578\u91CF</h3>` + table(["\u5143\u4EF6", "\u6578\u91CF", "\u9762\u7A4D \xB5m\xB2"], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (n * (a.lib.find((l) => l.name === t)?.area ?? 0)).toFixed(0)]));
+        const areaOf = /* @__PURE__ */ new Map();
+        a.cells.forEach(([, , w, , , h], i) => {
+          const t = a.map.cells[i].t;
+          areaOf.set(t, (areaOf.get(t) ?? 0) + w * a.die.site_w * h * a.die.row_h);
+        });
+        div.innerHTML = `<h3>\u5143\u4EF6\u6578\u91CF</h3>` + table(["\u5143\u4EF6", "\u6578\u91CF", "\u9762\u7A4D \xB5m\xB2"], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (areaOf.get(t) ?? 0).toFixed(0)]));
       }
       div.innerHTML += `<h3>IO \u8173</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "x \xB5m", "y \xB5m"], a.pins.map((p) => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)]));
       d.appendChild(div);
@@ -1309,6 +1329,10 @@
       let h = `<h3><span class="sw" style="background:${stdColor(c.t)}"></span>#${this.sel} ${c.t}${crit ? "\uFF08\u95DC\u9375\u8DEF\u5F91\uFF09" : ""}</h3>`;
       h += `<p>\u7B2C ${row} \u5217\uFF0Csite ${site}\u2013${site + w - 1}\uFF08x = ${(site * a.die.site_w).toFixed(1)} \xB5m\uFF09<br>\u8F38\u51FA\u5230\u9054\u6642\u9593 ${arr.toFixed(3)} ns</p>`;
       if (lib) h += `<p><code>${esc(lib.verilog)}</code></p>`;
+      if (c.t === "SRAM") {
+        const n = (k) => parseInt(c.p?.[k] ?? "0", 2);
+        h += `<p>SRAM \u5DE8\u96C6\uFF08\u8A18\u61B6\u9AD4\u7DE8\u8B6F\u5668\u7522\u751F\u7684\u786C\u5DE8\u96C6\uFF09\uFF1A${n("DEPTH")} \u5B57 \xD7 ${n("WIDTH")} bit\uFF0C\u4E00\u500B\u5BEB\u5165\u57E0\u3001\u4E00\u500B\u540C\u6B65\u8B80\u53D6\u57E0\uFF08RA \u5728 CK \u6B63\u7DE3\u53D6\u6A23\uFF0CRDATA \u4E0B\u4E00\u62CD\u6709\u6548\uFF09\uFF1B\u4F54 ${w} site \xD7 ${a.cells[this.sel][5]} \u5217\u3002</p>`;
+      }
       h += table(["\u63A5\u8173", "\u8A0A\u865F"], c.c.map(([p, b]) => [p, esc(bitName(v.names, b))]));
       det.innerHTML = h;
     }
@@ -1338,7 +1362,7 @@
     netReport(key, v) {
       const r = this.res;
       const types = countTypes(v.nl).map(([t, n]) => `${shortType(t)} ${n}`).join("  ");
-      const ffs = v.nl.cells.filter((c) => isFF(c.t)).length;
+      const ffs = v.nl.cells.filter((c) => c.t.includes("DFF")).length;
       const big = edgeCount(v.nl) > 6e3 ? "\uFF08\u9023\u7DDA\u592A\u591A\uFF1A\u53EA\u756B\u9078\u53D6\u5143\u4EF6\u7684\u6247\u5165/\u6247\u51FA\uFF09" : "";
       if (key === "raw") return [
         "\u2461 Logic Netlist",
@@ -1350,7 +1374,7 @@
       ];
       if (key === "opt") {
         const d = r.raw.cells.length - r.opt.cells.length;
-        const rf = r.raw.cells.filter((c) => isFF(c.t)).length;
+        const rf = r.raw.cells.filter((c) => c.t.includes("DFF")).length;
         return [
           "\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09",
           "\u4F9D\u62D3\u64B2\u9806\u5E8F\u91CD\u5EFA\u6574\u500B\u7DB2\u8868\uFF1A\u5E38\u6578\u50B3\u64AD\u3001structural hashing\u3001x&!x \u7B49\u5316\u7C21\u3001\u7D44\u5408\u8FF4\u8DEF\u6AA2\u67E5\u3001\u79FB\u9664\u4E0D\u5F71\u97FF\u8F38\u51FA\u7684\u908F\u8F2F\uFF1B",
@@ -1366,7 +1390,7 @@
         const bufs = v.nl.cells.filter((c) => c.t === "BUF").length;
         return [
           "A \u2463 Standard Cell Map\uFF08vlib\uFF1A\u5217\u9AD8 4.0 \xB5m\u3001site 0.5 \xB5m\uFF0C\u7D04 130 nm \u6162\u901F\u89D2\uFF09",
-          "\u628A\u7DB2\u8868\u5728\u591A\u6247\u51FA\u9EDE\u5207\u6210\u6A39\uFF0C\u5C0D\u6BCF\u68F5\u6A39\u505A\u52D5\u614B\u898F\u5283\u7684 tree covering\uFF08\u6700\u5C0F\u9762\u7A4D\uFF09\uFF1A\u53CD\u76F8\u5668\u4F75\u5165 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21\uFF1B\u540C\u6B65 set/reset \u8B8A\u6210 D \u524D\u7684\u908F\u8F2F\uFF0C\u975E\u540C\u6B65\u7684\u7528 DFFR / DFFS\uFF08\u4F4E\u614B\u6709\u6548\uFF0C\u5FC5\u8981\u6642\u52A0 INV\uFF09\uFF1B\u6247\u51FA > 12 \u7684\u8A0A\u865F\u63D2\u5165 BUF \u6A39\u3002",
+          "\u628A\u7DB2\u8868\u5728\u591A\u6247\u51FA\u9EDE\u5207\u6210\u6A39\uFF0C\u5C0D\u6BCF\u68F5\u6A39\u505A\u52D5\u614B\u898F\u5283\u7684 tree covering\uFF08\u6700\u5C0F\u9762\u7A4D\uFF09\uFF1A\u53CD\u76F8\u5668\u4F75\u5165 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21\uFF1B\u540C\u6B65 set/reset \u8B8A\u6210 D \u524D\u7684\u908F\u8F2F\uFF0C\u975E\u540C\u6B65\u7684\u7528 DFFR / DFFS\uFF08\u4F4E\u614B\u6709\u6548\uFF0C\u5FC5\u8981\u6642\u52A0 INV\uFF09\uFF1B\u6247\u51FA > 12 \u7684\u8A0A\u865F\u63D2\u5165 BUF \u6A39\uFF1B\u540C\u6B65\u8B80\u53D6\u7684\u8A18\u61B6\u9AD4\u8B8A\u6210 SRAM \u5DE8\u96C6\uFF08\u6BCF\u500B\u8B80\u53D6\u57E0\u4E00\u500B\uFF09\u3002",
           "",
           `${types}`,
           `\u5143\u4EF6\u9762\u7A4D ${fmtArea(a.area)}\uFF0CBUF ${bufs} \u500B\uFF0C\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`
@@ -1437,9 +1461,11 @@
       const k = this.stage;
       if (PNR.has(k)) {
         if (!this.pnr || this.anim) return;
-        this.sel = b && b.id < this.pnr.lcs.length ? b.id : null;
+        const n = this.pnr.lcs.length + this.pnr.ios.length;
+        this.sel = b && (b.id < this.pnr.lcs.length || b.id >= n) ? b.id : null;
         this.drawPnr(false);
-        this.lcDetail();
+        if (this.sel !== null && this.sel >= n) this.ramDetail(this.sel - n);
+        else this.lcDetail();
         return;
       }
       if (APHYS.has(k)) {
@@ -1457,6 +1483,15 @@
         const v = this.netView(k);
         if (b.id < v.nl.cells.length) this.select(b.id);
       }
+    }
+    ramDetail(k) {
+      const det = document.getElementById("synDetail");
+      if (!det || !this.pnr) return;
+      const r = this.pnr.rams[k];
+      let h = `<h3><span class="sw" style="background:${RAM_COLOR}"></span>block RAM #${k}\u3000tile (${r.x},${r.y})\u2013(${r.x},${r.y + 1})</h3>`;
+      h += `<p>SB_RAM40_4K\uFF084 Kbit\uFF09\uFF0C\u8B80 ${r.read}\u3001\u5BEB ${r.write}\uFF1B\u540C\u6B65\u8B80\u53D6\uFF1ARADDR \u5728 RCLK \u6B63\u7DE3\u53D6\u6A23\uFF0CRDATA \u4E0B\u4E00\u62CD\u6709\u6548\u3002</p>`;
+      h += table(["\u63A5\u8173", "\u8A0A\u865F"], [...r.ins.map(([p, n]) => [p, esc(n)]), ...r.outs.map(([p, n]) => [p + " \u2192", esc(n)])]);
+      det.innerHTML = h;
     }
     lcDetail() {
       const det = document.getElementById("synDetail");

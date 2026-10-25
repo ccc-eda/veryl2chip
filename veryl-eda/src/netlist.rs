@@ -29,7 +29,7 @@ pub struct Cell {
     pub params: Vec<(&'static str, String)>,
 }
 
-pub fn is_out(p: &str) -> bool { p == "Y" || p == "Q" || p == "O" || p == "CO" }
+pub fn is_out(p: &str) -> bool { p == "Y" || p == "Q" || p == "O" || p == "CO" || p.starts_with("RDATA") }
 
 impl Cell {
     pub fn out(&self) -> Bit {
@@ -469,9 +469,12 @@ fn rebuild(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: Vec<(S
         ffs.push(Cell { typ: c.typ.clone(), conns, params: vec![] });
     }
     let mut nets2 = vec![];
-    for (n, bits) in nets {
+    for (n, bits) in nets.iter() {
+        let n = n.clone();
         let mut v = vec![];
-        for x in &bits {
+        for x in bits {
+            // memory ports are rebuilt like outputs (a technology mapper may need them)
+            if n.starts_with("$mem:") { v.push(map(*x, &mut nb, &mut memo)?); continue; }
             let r = resolve(*x)?;
             v.push(match r { Bit::W(w) => *memo.get(&w).unwrap_or(&r), k => k });
         }
@@ -479,7 +482,19 @@ fn rebuild(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: Vec<(S
     }
     let mut cells = nb.cells;
     cells.extend(ffs);
-    let roots: Vec<Bit> = ports2.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
+    let mut roots: Vec<Bit> = ports2.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
+    // the write port of a memory that is still read stays (a mapper may turn it into a RAM)
+    let mut probe = cells.clone();
+    sweep(&mut probe, &roots);
+    let used: HashSet<Bit> = probe.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| !is_out(p)).map(|x| x.1)).chain(roots.iter().copied()).collect();
+    for (n, bits) in &nets2 {
+        let Some(rest) = n.strip_prefix("$mem:") else { continue };
+        let Some((q, port)) = rest.rsplit_once(':') else { continue };
+        if !port.starts_with("rd") || !bits.iter().any(|b| used.contains(b)) { continue; }
+        for (m, b) in &nets2 {
+            if [":clk", ":we", ":wa", ":wd"].iter().any(|s| *m == format!("$mem:{}{}", q, s)) { roots.extend(b.iter().copied()); }
+        }
+    }
     sweep(&mut cells, &roots);
     Ok(Netlist { name: name.to_string(), ports: ports2, nets: nets2, cells })
 }
@@ -574,7 +589,7 @@ fn const_nodes(nl: &Netlist) -> HashMap<u32, Bit> {
 /// Remove cells whose output reaches no output port (also dead registers).
 pub fn sweep(cells: &mut Vec<Cell>, roots: &[Bit]) {
     let mut live: HashSet<Bit> = roots.iter().copied().collect();
-    let by_out: HashMap<Bit, usize> = cells.iter().enumerate().map(|(i, c)| (c.out(), i)).collect();
+    let by_out: HashMap<Bit, usize> = cells.iter().enumerate().flat_map(|(i, c)| c.conns.iter().filter(|(p, _)| is_out(p)).map(move |(_, b)| (*b, i))).collect();
     let mut keep = vec![false; cells.len()];
     let mut work: Vec<Bit> = roots.to_vec();
     while let Some(x) = work.pop() {

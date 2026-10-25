@@ -31,11 +31,12 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Timing {
     let mut fanout: HashMap<Bit, u32> = HashMap::new();
     for c in &nl.cells { for (p, b) in &c.conns { if !is_out(p) { *fanout.entry(*b).or_default() += 1; } } }
     for p in nl.ports.iter().filter(|p| p.dir == Dir::Out) { for b in &p.bits { *fanout.entry(*b).or_default() += 1; } }
-    let driver: HashMap<Bit, usize> = nl.cells.iter().enumerate().map(|(i, c)| (c.out(), i)).collect();
+    let driver: HashMap<Bit, usize> = nl.cells.iter().enumerate().flat_map(|(i, c)| c.conns.iter().filter(|(p, _)| is_out(p)).map(move |(_, b)| (*b, i))).collect();
     let input_name: HashMap<Bit, String> = nl.ports.iter().filter(|p| p.dir == Dir::In)
         .flat_map(|p| p.bits.iter().enumerate().map(move |(i, b)| (*b, if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }))).collect();
     let n = nl.cells.len();
-    let at = |i: usize| { let (r, x) = pl.pos[i]; ((x as f64 + cell(&nl.cells[i].typ).width as f64 / 2.0) * SITE_W, (r as f64 + 0.5) * ROW_H) };
+    let is_macro = |i: usize| nl.cells[i].typ == "SRAM";
+    let at = |i: usize| { let (r, x) = pl.pos[i]; let (w, h) = super::lib::dims(&nl.cells[i]); ((x as f64 + w as f64 / 2.0) * SITE_W, (r as f64 + h as f64 / 2.0) * ROW_H) };
     let pin_at: HashMap<Bit, (f64, f64)> = pl.pins.iter().map(|p| (p.bit, (p.x, p.y))).collect();
     // where each net starts: its driver cell or input pin
     let src = |b: Bit| -> (f64, f64) { driver.get(&b).map(|&i| at(i)).or_else(|| pin_at.get(&b).copied()).unwrap_or((0.0, 0.0)) };
@@ -43,15 +44,24 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Timing {
     let mut arrival = vec![0.0f64; n];
     // time each net leaves its driver (output of a cell, or 0 at an input pin)
     let mut net_at: HashMap<Bit, f64> = HashMap::new();
-    let out_delay = |i: usize| { let c = &nl.cells[i]; let l = cell(&c.typ); l.delay + l.load * *fanout.get(&c.out()).unwrap_or(&0) as f64 };
+    let out_delay = |i: usize| {
+        let c = &nl.cells[i];
+        if c.typ == "SRAM" { return super::lib::SRAM_CLK_Q; }
+        let l = cell(&c.typ);
+        l.delay + l.load * *fanout.get(&c.out()).unwrap_or(&0) as f64
+    };
     for (b, _) in &input_name { net_at.insert(*b, 0.0); }
     // flip-flop outputs first (the netlist keeps them last), then gates in order
     let mut pred: Vec<Option<Bit>> = vec![None; n];
     for (i, c) in nl.cells.iter().enumerate() {
         if c.is_ff() { arrival[i] = out_delay(i); net_at.insert(c.out(), arrival[i]); }
+        if is_macro(i) {
+            arrival[i] = out_delay(i);
+            for (p, b) in &c.conns { if is_out(p) { net_at.insert(*b, arrival[i]); } }
+        }
     }
     for (i, c) in nl.cells.iter().enumerate() {
-        if c.is_ff() { continue; }
+        if c.is_ff() || is_macro(i) { continue; }
         let mut best: (f64, Option<Bit>) = (0.0, None);
         for (p, b) in &c.conns {
             if is_out(p) || b.is_const() { continue; }
@@ -74,6 +84,15 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Timing {
         let su = cell(&c.typ).setup;
         let t = net_at.get(&d).unwrap_or(&0.0) + wire(d, at(i)) + su;
         if t > worst.0 { worst = (t, Some(d), format!("{} D (setup)", c.typ), su); end_at = at(i); }
+    }
+    // SRAM macro inputs (setup to its clock)
+    for (i, c) in nl.cells.iter().enumerate().filter(|(i, _)| is_macro(*i)) {
+        for (p, d) in &c.conns {
+            if is_out(p) || *p == "CK" || d.is_const() { continue; }
+            endpoints += 1;
+            let t = net_at.get(d).unwrap_or(&0.0) + wire(*d, at(i)) + super::lib::SRAM_SETUP;
+            if t > worst.0 { worst = (t, Some(*d), format!("SRAM {} (setup)", p), super::lib::SRAM_SETUP); end_at = at(i); }
+        }
     }
     for p in nl.ports.iter().filter(|p| p.dir == Dir::Out) {
         for (k, b) in p.bits.iter().enumerate() {
@@ -99,10 +118,10 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Timing {
                 Some(&i) => {
                     let c = &nl.cells[i];
                     steps.push(Step { what: label, delay: w, at: arrival[i] + w });
-                    steps.push(Step { what: format!("{}{}", c.typ, if c.is_ff() { " clk→Q" } else { "" }), delay: out_delay(i), at: arrival[i] });
+                    steps.push(Step { what: format!("{}{}", c.typ, if c.is_ff() || is_macro(i) { " clk→Q" } else { "" }), delay: out_delay(i), at: arrival[i] });
                     crit_cells.push(i);
                     to = at(i);
-                    match pred[i] { Some(p) if !c.is_ff() => b = p, _ => break }
+                    match pred[i] { Some(p) if !c.is_ff() && !is_macro(i) => b = p, _ => break }
                 }
                 None => {
                     steps.push(Step { what: label, delay: w, at: w });

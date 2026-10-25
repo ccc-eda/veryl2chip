@@ -18,6 +18,14 @@ const SETUP: [f64; 4] = [1.232, 1.060, 0.980, 0.728];
 const CARRY_IN1: f64 = 0.675;
 const CARRY_IN2: f64 = 0.609;
 const CARRY_CIN: f64 = 0.278;
+// block RAM: RCLK -> RDATA, setup of its inputs (SB_RAM40_4K in timings_up5k.txt)
+const RAM_CLK_Q: f64 = 1.179;
+
+/// setup time of a block RAM input pin
+pub fn ram_setup(pin: &str) -> f64 {
+    if pin.starts_with("RADDR") { 0.384 } else if pin.starts_with("WADDR") { 0.424 } else if pin.starts_with("WDATA") { 0.305 }
+    else if pin.starts_with("MASK") { 0.517 } else if pin == "WE" { 0.252 } else if pin == "RE" { 0.185 } else { 0.503 }
+}
 // pad delays as icetime counts them (PRE_IO -> DIN0; output pad up to its input)
 const IO_IN: f64 = 1.105;
 const IO_OUT: f64 = 0.187;
@@ -29,6 +37,9 @@ pub enum Ep {
     LcIn(usize, u8),
     IoIn(usize),
     IoOut(usize),
+    RamOut(usize),
+    /// block RAM input with its setup time
+    RamIn(usize, f64),
 }
 
 pub fn hop_delay(src: Kind, dst: Kind) -> f64 {
@@ -97,13 +108,16 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
     // the sink wire feeding each LC input, and the source endpoint of each net
     let mut lc_in_wire: HashMap<(usize, u8), u32> = HashMap::new();
     let mut io_out_wire: HashMap<usize, u32> = HashMap::new();
+    let mut ram_in_wires: Vec<(u32, usize, f64)> = vec![];
     for (&w, ep) in eps {
         match *ep {
             Ep::LcIn(l, k) => { lc_in_wire.insert((l, k), w); }
             Ep::IoOut(i) => { io_out_wire.insert(i, w); }
+            Ep::RamIn(r, su) => ram_in_wires.push((w, r, su)),
             _ => {}
         }
     }
+    ram_in_wires.sort_by_key(|x| x.0);
     let net_src: Vec<Ep> = nets.iter().map(|n| eps.get(&n.src).copied().unwrap_or(Ep::IoIn(usize::MAX))).collect();
     // carry chain neighbours
     let mut chain_prev: Vec<Option<usize>> = vec![None; p.lcs.len()];
@@ -118,7 +132,7 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
     let input_arr = |l: usize, k: u8, out_arr: &Vec<f64>| -> Option<f64> {
         let w = lc_in_wire.get(&(l, k))?;
         let (ni, d, _) = sink_route.get(w)?;
-        let s = match net_src[*ni] { Ep::LcOut(j) => out_arr[j], Ep::IoIn(_) => IO_IN, _ => 0.0 };
+        let s = match net_src[*ni] { Ep::LcOut(j) => out_arr[j], Ep::IoIn(_) => IO_IN, Ep::RamOut(_) => RAM_CLK_Q, _ => 0.0 };
         Some(s + d)
     };
     // evaluate in dependency order with an explicit stack
@@ -168,8 +182,8 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
         }
     }
 
-    // endpoints: flip-flop inputs (setup) and output pins
-    enum End { Ff(usize, u8), Io(usize) }
+    // endpoints: flip-flop inputs (setup), block RAM inputs and output pins
+    enum End { Ff(usize, u8), Io(usize), Ram(u32, usize, f64) }
     let mut worst = (0.0f64, None::<End>);
     let mut endpoints = 0;
     for (l, lc) in p.lcs.iter().enumerate() {
@@ -181,10 +195,20 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
             }
         }
     }
+    let src_arr = |ni: usize, out_arr: &Vec<f64>| -> f64 {
+        match net_src[ni] { Ep::LcOut(j) => if out_arr[j].is_nan() { 0.0 } else { out_arr[j] }, Ep::IoIn(_) => IO_IN, Ep::RamOut(_) => RAM_CLK_Q, _ => 0.0 }
+    };
+    for &(w, r, su) in &ram_in_wires {
+        if let Some((ni, d, _)) = sink_route.get(&w) {
+            endpoints += 1;
+            let t = src_arr(*ni, &out_arr) + d + su;
+            if t > worst.0 { worst = (t, Some(End::Ram(w, r, su))); }
+        }
+    }
     for (&i, w) in &io_out_wire {
         if let Some((ni, d, _)) = sink_route.get(w) {
             endpoints += 1;
-            let s = match net_src[*ni] { Ep::LcOut(j) => out_arr[j], Ep::IoIn(_) => IO_IN, _ => 0.0 };
+            let s = match net_src[*ni] { Ep::LcOut(j) => out_arr[j], Ep::IoIn(_) => IO_IN, Ep::RamOut(_) => RAM_CLK_Q, _ => 0.0 };
             if s + d + IO_OUT > worst.0 { worst = (s + d + IO_OUT, Some(End::Io(i))); }
         }
     }
@@ -207,6 +231,11 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
             crit_lcs.push(l);
             cur = route_step(lc_in_wire[&(l, k)], &mut rev, &mut crit_pips);
         }
+        Some(End::Ram(w, r, su)) => {
+            let (x, y) = pl.ram[r];
+            rev.push(Step { what: format!("RAM({},{}) {} setup", x, y, chip.label(w).rsplit('/').next().unwrap_or("")), delay: su, at: 0.0 });
+            cur = route_step(w, &mut rev, &mut crit_pips);
+        }
         Some(End::Io(i)) => {
             rev.push(Step { what: format!("輸出腳 {}", p.ios[i].name), delay: IO_OUT, at: 0.0 });
             cur = route_step(io_out_wire[&i], &mut rev, &mut crit_pips);
@@ -221,6 +250,7 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
         if guard > 10000 { break; }
         match ep {
             Ep::IoIn(i) => { rev.push(Step { what: format!("輸入腳 {}", p.ios.get(i).map(|o| o.name.as_str()).unwrap_or("?")), delay: IO_IN, at: 0.0 }); }
+            Ep::RamOut(r) => { let (x, y) = pl.ram[r]; rev.push(Step { what: format!("RAM({},{}) clk→RDATA", x, y), delay: RAM_CLK_Q, at: 0.0 }); }
             Ep::LcOut(l) => {
                 crit_lcs.push(l);
                 if p.lcs[l].ff.is_some() { rev.push(Step { what: format!("{} clk→Q", loc(l)), delay: CLK_Q, at: 0.0 }); break; }

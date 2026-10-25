@@ -1,0 +1,185 @@
+// Block RAM inference tests: SyncRam (examples/src/sync_ram.veryl) in every
+// iCE40 RAM mode, a word wider than one block, and two read ports.
+
+module Bram256x16 (
+    i_clk  : input  clock,
+    i_we   : input  logic,
+    i_waddr: input  logic<8>,
+    i_wdata: input  logic<16>,
+    i_re   : input  logic,
+    i_raddr: input  logic<8>,
+    o_rdata: output logic<16>,
+) {
+    inst u: SyncRam #(ADDR_W: 8, DATA_W: 16) (
+        i_clk,
+        i_we,
+        i_waddr,
+        i_wdata,
+        i_re,
+        i_raddr,
+        o_rdata,
+    );
+}
+
+module Bram1024x4 (
+    i_clk  : input  clock,
+    i_we   : input  logic,
+    i_waddr: input  logic<10>,
+    i_wdata: input  logic<4>,
+    i_re   : input  logic,
+    i_raddr: input  logic<10>,
+    o_rdata: output logic<4>,
+) {
+    inst u: SyncRam #(ADDR_W: 10, DATA_W: 4) (
+        i_clk,
+        i_we,
+        i_waddr,
+        i_wdata,
+        i_re,
+        i_raddr,
+        o_rdata,
+    );
+}
+
+module Bram2048x2 (
+    i_clk  : input  clock,
+    i_we   : input  logic,
+    i_waddr: input  logic<11>,
+    i_wdata: input  logic<2>,
+    i_re   : input  logic,
+    i_raddr: input  logic<11>,
+    o_rdata: output logic<2>,
+) {
+    inst u: SyncRam #(ADDR_W: 11, DATA_W: 2) (
+        i_clk,
+        i_we,
+        i_waddr,
+        i_wdata,
+        i_re,
+        i_raddr,
+        o_rdata,
+    );
+}
+
+module Bram512x20 (
+    i_clk  : input  clock,
+    i_we   : input  logic,
+    i_waddr: input  logic<9>,
+    i_wdata: input  logic<20>,
+    i_re   : input  logic,
+    i_raddr: input  logic<9>,
+    o_rdata: output logic<20>,
+) {
+    inst u: SyncRam #(ADDR_W: 9, DATA_W: 20) (
+        i_clk,
+        i_we,
+        i_waddr,
+        i_wdata,
+        i_re,
+        i_raddr,
+        o_rdata,
+    );
+}
+
+// two synchronous read ports: one block RAM copy per port
+module Bram2Read (
+    i_clk  : input  clock,
+    i_we   : input  logic,
+    i_waddr: input  logic<8>,
+    i_wdata: input  logic<16>,
+    i_re   : input  logic,
+    i_raddr: input  logic<8>,
+    i_raddr2: input logic<8>,
+    o_rdata: output logic<16>,
+    o_rdata2: output logic<16>,
+) {
+    var mem: logic<16> [256];
+
+    always_ff (i_clk) {
+        if i_we {
+            mem[i_waddr] = i_wdata;
+        }
+        if i_re {
+            o_rdata = mem[i_raddr];
+        }
+        o_rdata2 = mem[i_raddr2];
+    }
+}
+
+// block RAMs inside logic, few IO pins (for place & route): a 256 x 32
+// memory (two blocks side by side) written with a pattern every cycle and
+// read by two ports (two more blocks)
+module BramMix (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    i_sel: input  logic<2>,
+    o_out: output logic<8>,
+) {
+    var mem: logic<32> [256];
+    var wa : logic<8>;
+    var ra : logic<8>;
+    var rb : logic<8>;
+    var qa : logic<32>;
+    var qb : logic<32>;
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            wa = 0;
+            ra = 0;
+            rb = 0;
+        } else {
+            wa = wa + 8'd1;
+            ra = wa - 8'd3;
+            rb = ~wa;
+        }
+    }
+
+    always_ff (i_clk) {
+        mem[wa] = {wa, wa ^ 8'h5a, ~wa, wa + 8'd7};
+        qa      = mem[ra];
+        qb      = mem[rb];
+    }
+
+    always_comb {
+        case i_sel {
+            2'd0   : o_out = qa[7:0] ^ qb[31:24];
+            2'd1   : o_out = qa[15:8] + qb[7:0];
+            2'd2   : o_out = qa[23:16];
+            default: o_out = qb[15:8];
+        }
+    }
+}
+
+#[test(bram_mix_test)]
+module TestBramMix {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var sel: logic<2>;
+    var out: logic<8>;
+
+    inst u: BramMix (
+        i_clk: clk,
+        i_rst: rst,
+        i_sel: sel,
+        o_out: out,
+    );
+
+    initial {
+        sel = 2'd2;
+        rst.assert();
+        // port A reads the word written 4 cycles earlier: qa[23:16] = ~address
+        clk.next(20);
+        $assert(out == 8'h55, "sel 2 after 20 cycles");
+        // after a full pass every word is written
+        clk.next(300);
+        $assert(out == 8'h61, "sel 2: ~address of port A");
+        sel = 2'd3;
+        $assert(out == 8'h3e, "sel 3: address of port B ^ 8'h5a");
+        sel = 2'd0;
+        $assert(out == 8'h83, "sel 0");
+        sel = 2'd1;
+        $assert(out == 8'h8c, "sel 1");
+        $finish();
+    }
+}

@@ -27,6 +27,21 @@ struct Match {
 }
 
 pub fn map(nl: &Netlist) -> R<Netlist> {
+    // memories with synchronous reads become SRAM macros (one per read port)
+    let (nl_owned, mems) = crate::bram::find_mems(nl);
+    let nl = &nl_owned;
+    let mut macros: Vec<Cell> = vec![];
+    for m in &mems {
+        let abits = m.waddr.len();
+        for r in &m.reads {
+            let mut conns: Vec<(&'static str, Bit)> = vec![("CK", m.clk), ("WE", m.we), ("RE", r.en)];
+            for i in 0..abits { conns.push((super::lib::pin("WA", i), m.waddr[i])); conns.push((super::lib::pin("RA", i), r.addr.get(i).copied().unwrap_or(Bit::C0))); }
+            for i in 0..m.width { conns.push((super::lib::pin("WD", i), m.wdata[i])); }
+            for (i, d) in r.data.iter().enumerate() { if let Some(d) = d { conns.push((super::lib::pin("RDATA", i), *d)); } }
+            let params = vec![("DEPTH", format!("{:032b}", m.depth)), ("WIDTH", format!("{:032b}", m.width)), ("ABITS", format!("{:032b}", abits))];
+            macros.push(Cell { typ: "SRAM".into(), conns, params });
+        }
+    }
     let next = nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()))
         .filter_map(|b| if let Bit::W(w) = b { Some(w) } else { None }).max().unwrap_or(1) + 1;
     let mut b = Builder::new();
@@ -69,6 +84,7 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
         for x in [Some(*ck), Some(*d), *r].into_iter().flatten() { *fanout.entry(x).or_default() += 1; seq_use.insert(x, true); }
     }
     for p in nl.ports.iter().filter(|p| p.dir == Dir::Out) { for x in &p.bits { *fanout.entry(*x).or_default() += 1; seq_use.insert(*x, true); } }
+    for c in &macros { for (p, x) in &c.conns { if !is_out(p) { *fanout.entry(*x).or_default() += 1; seq_use.insert(*x, true); } } }
     // a gate absorbed into its single user's pattern
     let internal = |x: Bit| -> Option<usize> {
         let &i = node.get(&x)?;
@@ -171,6 +187,13 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
         conns.push(("Q", q));
         cells.push(Cell { typ: name.into(), conns, params: vec![] });
     }
+    for mut c in macros {
+        for k in 0..c.conns.len() {
+            let (p, x) = c.conns[k];
+            if !is_out(p) && x.is_const() { c.conns[k].1 = tie(x, &mut cells, &mut next_wire); }
+        }
+        cells.push(c);
+    }
     // constant output ports
     let mut ports = vec![];
     for p in &nl.ports {
@@ -179,12 +202,12 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
     }
     buffer(&mut cells, &mut next_wire);
     // topological order (constants first, flip-flops last), as the netlist users expect
-    let (seqs, comb): (Vec<Cell>, Vec<Cell>) = cells.into_iter().partition(|c| c.is_ff());
+    let (seqs, comb): (Vec<Cell>, Vec<Cell>) = cells.into_iter().partition(|c| c.is_ff() || c.typ == "SRAM");
     let cnode: HashMap<Bit, usize> = comb.iter().enumerate().map(|(i, c)| (c.out(), i)).collect();
     let ord = topo(&comb, &cnode);
     let mut cells: Vec<Cell> = ord.into_iter().map(|i| comb[i].clone()).collect();
     cells.extend(seqs);
-    let live: std::collections::HashSet<Bit> = cells.iter().map(|c| c.out()).chain(ports.iter().flat_map(|p| p.bits.iter().copied())).collect();
+    let live: std::collections::HashSet<Bit> = cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| is_out(p)).map(|x| x.1)).chain(ports.iter().flat_map(|p| p.bits.iter().copied())).collect();
     let nets = nl.nets.iter().filter(|(_, b)| b.iter().all(|x| x.is_const() || live.contains(x))).cloned().collect();
     Ok(Netlist { name: nl.name.clone(), ports, nets, cells })
 }

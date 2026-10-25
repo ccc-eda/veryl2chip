@@ -46,10 +46,11 @@ pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing {
     let gx = ((pl.w / g).ceil() as u32).max(1);
     let gy = pl.rows.max(1);
     let id = |x: u32, y: u32| y * gx + x;
-    let widths: Vec<u32> = nl.cells.iter().map(|c| super::lib::cell(&c.typ).width).collect();
+    let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
     let gcell_of_cell = |c: usize| {
         let (r, s) = pl.pos[c];
-        ((((s as f64 + widths[c] as f64 / 2.0) * SITE_W) / g).floor().min(gx as f64 - 1.0) as u32, r.min(gy - 1))
+        let (w, h) = dims[c];
+        ((((s as f64 + w as f64 / 2.0) * SITE_W) / g).floor().min(gx as f64 - 1.0) as u32, (r + h / 2).min(gy - 1))
     };
     let gcell_of_pin = |k: usize| {
         let p = &pl.pins[k];

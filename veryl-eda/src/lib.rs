@@ -3,6 +3,7 @@
 //! Used by the command line (`main.rs`) and the WebAssembly build.
 
 pub mod asic;
+pub mod bram;
 pub mod elab;
 pub mod expr;
 pub mod ice40;

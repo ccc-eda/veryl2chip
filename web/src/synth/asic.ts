@@ -11,8 +11,8 @@ export interface AsicResult {
   counts: [string, number][];
   area: number;
   die: { w: number; h: number; rows: number; sites: number; util: number; row_h: number; site_w: number };
-  /** per mapped cell: row, site, width (sites), arrival (ns), on the critical path */
-  cells: [number, number, number, number, number][];
+  /** per mapped cell: row, site, width (sites), arrival (ns), on the critical path, height (rows; SRAM macros > 1) */
+  cells: [number, number, number, number, number, number][];
   pins: { name: string; dir: 'in' | 'out'; x: number; y: number }[];
   history: { temp: number; cost: number; accept: number; pos: number[] }[];
   route: {
@@ -28,6 +28,7 @@ export interface AsicResult {
 export const S = 4;
 
 export function stdColor(t: string): string {
+  if (t === 'SRAM') return '#7d6b9e';
   if (t.startsWith('DFF')) return '#d08770';
   if (t === 'MUX2') return '#ebcb8b';
   if (t === 'BUF') return '#8fbcbb';
@@ -45,11 +46,12 @@ export function dieScene(r: AsicResult, pos?: number[], colorOf?: (i: number) =>
   const H = d.h * S;
   const bg = [{ x: -2, y: -2, w: d.w * S + 4, h: H + 4, fill: '#2a3441' }];
   for (let row = 0; row < d.rows; row++) bg.push({ x: 0, y: H - (row + 1) * d.row_h * S, w: d.w * S, h: d.row_h * S, fill: row % 2 ? '#1f2833' : '#222c38' });
-  const boxes: Box[] = r.cells.map(([row, site, w], i) => {
+  const boxes: Box[] = r.cells.map(([row, site, w, , , hh], i) => {
     const [rr, ss] = pos ? [pos[2 * i], pos[2 * i + 1]] : [row, site];
+    const macro = r.map.cells[i].t === 'SRAM';
     return {
-      id: i, x: ss * d.site_w * S + 0.25, y: H - (rr + 1) * d.row_h * S + 0.6, w: w * d.site_w * S - 0.5, h: d.row_h * S - 1.2,
-      fill: colorOf ? colorOf(i) : stdColor(r.map.cells[i].t),
+      id: i, x: ss * d.site_w * S + 0.25, y: H - (rr + hh) * d.row_h * S + 0.6, w: w * d.site_w * S - 0.5, h: hh * d.row_h * S - 1.2,
+      fill: colorOf && !macro ? colorOf(i) : stdColor(r.map.cells[i].t), label: macro ? 'SRAM' : undefined, stroke: macro ? '#c3b2e0' : undefined,
     };
   });
   const texts: Text[] = [];

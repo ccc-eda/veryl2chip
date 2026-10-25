@@ -47,10 +47,23 @@ pub struct Io {
     pub net: Bit,
 }
 
+/// a block RAM (SB_RAM40_4K)
+pub struct Ram {
+    /// input pins by chipdb wire name (`ram/` + this): RADDR_3, WE, RCLK, ...
+    /// constant-0 inputs are left out (unrouted RAM inputs read 0)
+    pub ins: Vec<(String, Bit)>,
+    pub outs: Vec<(String, Bit)>,
+    pub read_mode: u8,
+    pub write_mode: u8,
+    /// INIT_0..INIT_F, 256 bits each, msb first
+    pub init: Vec<String>,
+}
+
 pub struct Packed {
     pub lcs: Vec<Lc>,
     pub chains: Vec<Chain>,
     pub ios: Vec<Io>,
+    pub rams: Vec<Ram>,
 }
 
 const PASS: [u16; 4] = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00];
@@ -293,11 +306,31 @@ pub fn pack(nl: &Netlist) -> R<Packed> {
             }
         }
     }
+    // ---- block RAMs: pins "RADDR[3]" become chipdb wires "ram/RADDR_3" ----
+    let mut rams = vec![];
+    for c in cx.cells.iter().filter(|c| c.typ == "SB_RAM40_4K").cloned().collect::<Vec<_>>() {
+        let wire = |p: &str| p.replace('[', "_").replace(']', "");
+        let mode = |k: &str| c.params.iter().find(|x| x.0 == k).map(|x| u8::from_str_radix(&x.1, 2).unwrap_or(0)).unwrap_or(0);
+        let mut ram = Ram { ins: vec![], outs: vec![], read_mode: mode("READ_MODE"), write_mode: mode("WRITE_MODE"),
+            init: crate::bram::INIT.iter().map(|k| c.params.iter().find(|x| x.0 == *k).map(|x| x.1.clone()).unwrap_or_else(|| "0".repeat(256))).collect() };
+        for (p, b) in &c.conns {
+            if is_out(p) {
+                if cx.users.contains_key(b) || ported(*b, &port_bits) { ram.outs.push((wire(p), *b)); }
+            } else {
+                match b {
+                    Bit::C0 => {}
+                    Bit::C1 => { let n = const_net(Bit::C1, &mut lcs, &mut cx); ram.ins.push((wire(p), n)); }
+                    _ => ram.ins.push((wire(p), *b)),
+                }
+            }
+        }
+        rams.push(ram);
+    }
     let mut ios = vec![];
     for (name, dir, b) in port_bits {
         let net = if b.is_const() { const_net(b, &mut lcs, &mut cx) } else { b };
         ios.push(Io { name, dir, net });
     }
     for lc in lcs.iter_mut() { canon(lc); }
-    Ok(Packed { lcs, chains, ios })
+    Ok(Packed { lcs, chains, ios, rams })
 }

@@ -53,6 +53,47 @@ pub fn is_ff(name: &str) -> bool { name.starts_with("DFF") }
 /// area in µm²
 pub fn area(name: &str) -> f64 { cell(name).width as f64 * SITE_W * ROW_H }
 
+// ---- SRAM macros (what a memory compiler would deliver) ----
+// one write port, one synchronous read port: pins CK, WE, WA[i], WD[i], RE,
+// RA[i], RDATA[i]; parameters DEPTH, WIDTH (binary). A memory with several
+// read ports gets one macro per port.
+
+/// bit cell area (µm², 6T at ~130 nm) and periphery overhead
+const SRAM_BIT: f64 = 2.0;
+pub const SRAM_CLK_Q: f64 = 0.65;
+pub const SRAM_SETUP: f64 = 0.15;
+
+pub fn param(c: &crate::netlist::Cell, k: &str) -> usize {
+    c.params.iter().find(|p| p.0 == k).map(|p| usize::from_str_radix(&p.1, 2).unwrap_or(0)).unwrap_or(0)
+}
+
+/// SRAM macro size in (sites, rows): bit array plus decoder / sense-amp periphery, roughly square
+pub fn sram_dims(depth: usize, width: usize) -> (u32, u32) {
+    let area = (depth * width) as f64 * SRAM_BIT * 1.3 + 300.0;
+    let rows = ((area.sqrt() / ROW_H).round() as u32).max(2);
+    let sites = (area / (rows as f64 * ROW_H) / SITE_W).ceil() as u32;
+    (sites, rows)
+}
+
+/// (width in sites, height in rows) of any cell of a mapped netlist
+pub fn dims(c: &crate::netlist::Cell) -> (u32, u32) {
+    if c.typ == "SRAM" { sram_dims(param(c, "DEPTH"), param(c, "WIDTH")) } else { (cell(&c.typ).width, 1) }
+}
+
+pub fn cell_area(c: &crate::netlist::Cell) -> f64 { let (w, h) = dims(c); w as f64 * SITE_W * h as f64 * ROW_H }
+
+/// static pin names "BASE[i]"
+pub fn pin(base: &str, i: usize) -> &'static str {
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<std::collections::HashMap<String, &'static str>>> = OnceLock::new();
+    let key = format!("{}[{}]", base, i);
+    let mut m = NAMES.get_or_init(|| Mutex::new(std::collections::HashMap::new())).lock().unwrap();
+    if let Some(s) = m.get(&key) { return s; }
+    let s: &'static str = Box::leak(key.clone().into_boxed_str());
+    m.insert(key, s);
+    s
+}
+
 /// Verilog models of the library (for simulation and formal checks)
 pub fn verilog_models() -> String {
     let mut s = String::from("// vlib standard cells (veryl-eda), behavioural models\n");
@@ -63,5 +104,6 @@ pub fn verilog_models() -> String {
         let init = if is_ff(c.name) { "\n  initial Q = 1'b0;" } else { "" };
         s += &format!("module {} ({});{}\n  {}\nendmodule\n", c.name, ports, init, c.verilog);
     }
+    s += "module SRAM #(parameter DEPTH = 256, parameter WIDTH = 8, parameter ABITS = 8) (\n  input CK, input WE, input [ABITS-1:0] WA, input [WIDTH-1:0] WD,\n  input RE, input [ABITS-1:0] RA, output reg [WIDTH-1:0] RDATA);\n  reg [WIDTH-1:0] mem [0:DEPTH-1];\n  always @(posedge CK) begin\n    if (RE) RDATA <= mem[RA];\n    if (WE) mem[WA] <= WD;\n  end\nendmodule\n";
     s
 }
