@@ -1,12 +1,4 @@
-mod elab;
-mod expr;
-mod ice40;
-mod netlist;
-#[cfg(test)]
-mod netsim;
-mod output;
-mod pnr;
-mod value;
+use veryl_eda::{elab, ice40, netlist, output, pnr};
 
 use std::path::PathBuf;
 use veryl_parser::Parser;
@@ -133,6 +125,3 @@ fn main() {
         println!("wrote {}", p);
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -100,6 +100,12 @@ fn find_pip(chip: &Chip, x: i32, y: i32, dst: &str, src: &str) -> R<u32> {
 pub fn place_and_route(nl: &Netlist, o: &Opts) -> R<Output> {
     let path = o.chipdb.clone().or_else(chipdb::default_path).ok_or("IceStorm chipdb-5k.txt not found (set VERYL_EDA_CHIPDB)")?;
     let chip = Chip::load(&path, &o.package)?;
+    place_and_route_on(&chip, nl, o)
+}
+
+/// place and route on an already loaded chip database
+pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
+    let chip = chip;
     let p = pack::pack(nl)?;
     if o.verbose { eprintln!("  packed: {} LCs, {} carry chains, {} IOs", p.lcs.len(), p.chains.len(), p.ios.len()); }
 

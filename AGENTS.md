@@ -35,6 +35,17 @@ cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--ice40 [
 - Own P&R (`--pnr veryl`, `src/pnr/`) reads IceStorm's `chipdb-5k.txt` (`VERYL_EDA_CHIPDB`, else oss-cad-suite's `share/icebox`). Correctness oracle: `fpga/cosim.py` (icebox_vlog of the routed `.asc` vs the mapped netlist, random inputs). `icebox_vlog` ignores column buffers / IO electrical bits, so those are written exactly as nextpnr does (incl. the UP5K tile 25,14 exception for the DSP/IPCON `Cascade.*_inmux02_5` defaults). `icetime` needs `-C <chipdb>`.
 - The optimizer assumes flip-flops power up at 0 (true on iCE40); never-written registers become constants. Equivalence checks therefore use `-set-init-zero`.
 
+```sh
+cd web
+npm install                        # esbuild + typescript (dev only)
+npm run build                      # cargo build veryl-wasm (wasm32) + bundle into web/dist/
+npm test                           # Node: every example through the built dist/ (same wasm + TS API as the page)
+open dist/index.html               # front-end only, works from file:// (no server, no fetch)
+```
+
+- Web architecture (`web/PLAN.md`): `veryl-sim` and `veryl-eda` are lib+bin crates; `veryl-wasm/` is a cdylib with a C ABI (`alloc`/`call(JSON)`/`result_len`/`dealloc`, zero imports, panic message via `panic_message`). The wasm is embedded as base64 in `dist/wasm.js` and examples in `dist/examples.js`, so the page needs no fetch. `src/api.ts` has no DOM and is also bundled as `dist/api.cjs` for the Node tests. `web/dist` is committed (open-and-use); rebuild it after changing Rust or TS.
+- The browser preview pane snapshots `file://` pages without their scripts; test the page over HTTP (`.claude/launch.json` serves `web/dist` on 8766).
+
 ## Veryl 0.22.0 quirks (verified against `veryl check`/`veryl test`)
 
 - Bare `<` / `>` in expressions inside `function` bodies break the parser (generic scanner); use `<=` / `>=` / `<:` / `>:` instead.

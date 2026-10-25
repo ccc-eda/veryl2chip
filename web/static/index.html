@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>veryl2chip — Veryl 模擬與 FPGA/ASIC 流程</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>veryl2chip <small>Veryl → Chip</small></h1>
+  <select id="example" title="範例專案"></select>
+  <select id="top" title="模擬的頂層模組（預設：全部 #[test]）"></select>
+  <button id="run" disabled>▶ 模擬</button>
+  <button id="synth" disabled title="合成 → FPGA / ASIC 流程">⚙ 合成</button>
+  <span id="status">載入 WebAssembly…</span>
+</header>
+<main>
+  <section class="col">
+    <h2>① 來源</h2>
+    <div class="panel grow">
+      <div id="tabs"></div>
+      <div id="edwrap"><pre id="gutter"></pre><textarea id="editor" spellcheck="false" wrap="off"></textarea></div>
+      <div class="row small">
+        <span id="exnote"></span>
+        <span class="spacer"></span>
+        <button id="revert" class="small" title="捨棄修改，回到範例原始碼">還原範例</button>
+      </div>
+    </div>
+  </section>
+  <section class="col">
+    <h2>② 執行結果</h2>
+    <div id="banner" class="hidden"></div>
+    <div class="panel grow">
+      <h3>模擬輸出</h3>
+      <pre id="log"></pre>
+    </div>
+    <div class="panel" id="msgpanel">
+      <h3>錯誤 / 訊息</h3>
+      <pre id="msg"></pre>
+    </div>
+  </section>
+</main>
+<script src="wasm.js"></script>
+<script src="examples.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

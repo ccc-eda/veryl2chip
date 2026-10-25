@@ -2,7 +2,7 @@
 
 use crate::expr::*;
 use crate::value::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
@@ -87,6 +87,10 @@ pub struct Sim {
     pub ret_val: Option<Val>,
     pub ret_now: bool,
     pub in_call: Vec<String>,
+    /// everything the simulation prints ($display, assertions, warnings)
+    pub log: RefCell<String>,
+    /// also print it to stdout as it happens (command line)
+    pub echo: bool,
 }
 
 fn bitv(v: &Val) -> u8 {
@@ -94,8 +98,16 @@ fn bitv(v: &Val) -> u8 {
 }
 
 impl Sim {
+    /// print a line (or a fragment when `nl` is false) to the simulation log
+    pub fn say(&self, s: &str, nl: bool) {
+        if self.echo { if nl { println!("{}", s); } else { print!("{}", s); } }
+        let mut l = self.log.borrow_mut();
+        l.push_str(s);
+        if nl { l.push('\n'); }
+    }
+
     pub fn new() -> Self {
-        Sim { sigs: vec![], funcs: HashMap::new(), time: 0, changed: false, nba: vec![], finished: false, fails: 0, rng: Cell::new(0x2545F4914F6CDD1D), ret_val: None, ret_now: false, in_call: vec![] }
+        Sim { sigs: vec![], funcs: HashMap::new(), time: 0, changed: false, nba: vec![], finished: false, fails: 0, rng: Cell::new(0x2545F4914F6CDD1D), ret_val: None, ret_now: false, in_call: vec![], log: RefCell::new(String::new()), echo: false }
     }
 
     // ---------- expression evaluation ----------
@@ -212,7 +224,7 @@ impl Sim {
     /// body, and return the value assigned by `return`.
     fn call_user(&mut self, name: &str, args: &[Expr]) -> Val {
         if self.in_call.iter().any(|n| n == name) {
-            eprintln!("warning: recursion into function '{}' is not supported", name);
+            self.say(&format!("warning: recursion into function '{}' is not supported", name), true);
             return Val::allx(1);
         }
         let Some(f) = self.funcs.get(name) else { return Val::allx(1) };
@@ -496,7 +508,7 @@ impl Sim {
                         self.call_user(name, &vals);
                     }
                 }
-                Stmt::Wait(..) => eprintln!("warning: clk.next() is only valid inside `initial`"),
+                Stmt::Wait(..) => self.say("warning: clk.next() is only valid inside `initial`", true),
             }
         }
     }
@@ -505,23 +517,23 @@ impl Sim {
         match name {
             "$display" | "$info" | "$write" => {
                 let s = self.format(args);
-                if name == "$write" { print!("{}", s); } else { println!("{}", s); }
+                self.say(&s, name != "$write");
             }
-            "$warning" => println!("WARNING: {}", self.format(args)),
-            "$error" => { println!("ERROR: {}", self.format(args)); self.fails += 1; }
-            "$fatal" => { println!("FATAL: {}", self.format(args)); self.fails += 1; self.finished = true; }
+            "$warning" => { let m = format!("WARNING: {}", self.format(args)); self.say(&m, true); }
+            "$error" => { let m = format!("ERROR: {}", self.format(args)); self.say(&m, true); self.fails += 1; }
+            "$fatal" => { let m = format!("FATAL: {}", self.format(args)); self.say(&m, true); self.fails += 1; self.finished = true; }
             "$assert" => {
                 let ok = args.first().map(|e| self.eval(e, 0).truth() == Some(true)).unwrap_or(false);
                 if !ok {
                     let msg = if args.len() > 1 { self.format(&args[1..]) } else { String::new() };
-                    println!("ASSERTION FAILED at time {} {}", self.time, msg);
+                    self.say(&format!("ASSERTION FAILED at time {} {}", self.time, msg), true);
                     self.fails += 1;
                 }
             }
             "$finish" | "$stop" => {
                 self.finished = true;
             }
-            _ => eprintln!("warning: unsupported system task {}", name),
+            _ => self.say(&format!("warning: unsupported system task {}", name), true),
         }
     }
 
@@ -574,7 +586,7 @@ fn mask_digits(w: u32) -> usize { mask(w).to_string().len() }
 
 // ====================================================================
 pub struct Vcd {
-    out: std::io::BufWriter<std::fs::File>,
+    out: Vec<u8>,
     ids: Vec<String>,
     last: Vec<Option<Val>>,
 }
@@ -596,8 +608,9 @@ impl Design {
         Design { sim, procs, inits, watched, prev: vec![2; n], vcd: None }
     }
 
-    pub fn enable_vcd(&mut self, path: &str) -> std::io::Result<()> {
-        let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+    /// record a VCD waveform in memory (`take_vcd` returns it after `run`)
+    pub fn enable_vcd(&mut self) -> std::io::Result<()> {
+        let mut out = Vec::new();
         writeln!(out, "$timescale 1ns $end\n$scope module top $end")?;
         let mut ids = vec![];
         for (i, s) in self.sim.sigs.iter().enumerate() {
@@ -637,7 +650,7 @@ impl Design {
             }
             let same = self.sim.sigs.iter().zip(&before).all(|(s, b)| (s.val.v, s.val.x) == *b);
             if same { return; }
-            if it == 499 { eprintln!("warning: combinational loop did not settle at time {}", self.sim.time); }
+            if it == 499 { self.sim.say(&format!("warning: combinational loop did not settle at time {}", self.sim.time), true); }
         }
     }
 
@@ -672,7 +685,7 @@ impl Design {
             }
             self.sim.apply_nba();
         }
-        eprintln!("warning: event loop did not settle at time {}", self.sim.time);
+        self.sim.say(&format!("warning: event loop did not settle at time {}", self.sim.time), true);
     }
 
     fn run_init(&mut self, k: usize) {
@@ -727,7 +740,7 @@ impl Design {
         self.dump();
         while !self.sim.finished {
             let Some(Reverse((t, _))) = heap.peek().copied() else { break };
-            if t > max_time { println!("simulation stopped: reached max time {}", max_time); break; }
+            if t > max_time { self.sim.say(&format!("simulation stopped: reached max time {}", max_time), true); break; }
             self.sim.time = t;
             while let Some(Reverse((t2, i))) = heap.peek().copied() {
                 if t2 != t { break; }
@@ -742,10 +755,14 @@ impl Design {
             while self.resume_ready() && !self.sim.finished { self.settle(); }
             self.dump();
         }
-        if self.sim.finished { println!("$finish called at time {}", self.sim.time); }
+        if self.sim.finished { self.sim.say(&format!("$finish called at time {}", self.sim.time), true); }
         self.dump();
-        if let Some(v) = self.vcd.as_mut() { let _ = writeln!(v.out, "#{}", self.sim.time); let _ = v.out.flush(); }
+        if let Some(v) = self.vcd.as_mut() { let _ = writeln!(v.out, "#{}", self.sim.time); }
     }
+}
+
+impl Design {
+    pub fn take_vcd(&mut self) -> Option<Vec<u8>> { self.vcd.take().map(|v| v.out) }
 }
 
 fn vcd_id(mut i: usize) -> String {

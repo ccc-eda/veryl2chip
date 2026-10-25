@@ -75,6 +75,12 @@ pub fn default_path() -> Option<String> {
 impl Chip {
     pub fn load(path: &str, package: &str) -> R<Chip> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path, e))?;
+        Self::parse(&text, package).map_err(|e| format!("{}: {}", path, e))
+    }
+
+    /// parse the text of a chipdb file
+    pub fn parse(text: &str, package: &str) -> R<Chip> {
+        let path = "chipdb";
         let mut c = Chip {
             w: 0, h: 0, tiles: vec![], tile_type: HashMap::new(), dims: HashMap::new(), tile_bits: HashMap::new(),
             by_name: HashMap::new(), net_box: vec![], net_label: vec![], pips: vec![], groups: vec![], fanout: vec![],

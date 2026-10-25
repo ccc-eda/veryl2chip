@@ -1,0 +1,20 @@
+[package]
+name = "veryl-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly build of veryl-sim + veryl-eda for the browser environment"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+veryl-parser = "0.22"
+veryl-sim = { path = "../veryl-sim" }
+veryl-eda = { path = "../veryl-eda" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

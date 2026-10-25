@@ -1,0 +1,15 @@
+{
+  "name": "veryl2chip-web",
+  "private": true,
+  "description": "Front-end-only web environment for veryl2chip (Veryl simulation + FPGA/ASIC flow in WebAssembly)",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:web": "node build.mjs --skip-wasm",
+    "test": "node test/run.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}
