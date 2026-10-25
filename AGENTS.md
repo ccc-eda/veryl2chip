@@ -57,7 +57,7 @@ open dist/index.html               # front-end only, works from file:// (no serv
 
 ## Architecture (veryl-sim)
 
-Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracking in Veryl.lock/examples). Flow: `main.rs` (CLI, parse, top selection) → `elab.rs` (syntax tree → sim IR, hierarchy/inst expansion) → `sim.rs` (eval, delta cycles, NBA scheduling, clock gen, VCD). `expr.rs` is a Pratt parser over veryl-parser tokens; `value.rs` is 4-state (0/1/x) bit vectors, max 128 bits.
+Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracking in Veryl.lock/examples). Flow: `main.rs` (CLI, parse, top selection) → `elab.rs` (syntax tree → sim IR, hierarchy/inst expansion) → `sim.rs` (eval, delta cycles, NBA scheduling, clock gen, VCD). `expr.rs` is a Pratt parser over veryl-parser tokens; `value.rs` is 4-state (0/1/x) bit vectors over a fixed-width multi-limb integer `Bits` (max `MAXW` = 256 bits); veryl-eda reuses it for constants. `iface.rs` (interfaces, modport resolution) and `gen.rs` (generate-for indices) are shared with veryl-eda (path dependency).
 
 ## Architecture (veryl-eda)
 
@@ -66,7 +66,8 @@ Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax
 ## Limits / gotchas
 
 - Supported by the simulator: module/param/const/port/var/let/assign/always_comb/always_ff (if_reset, sync/async reset)/if/case/switch/for/inst/initial/final, packages (enums `Pkg::Enum::Member`, consts `Pkg::NAME`), structs (field access + whole-value; first field is the MSB, as in SV), arrays (1-D, element sigs are contiguous: `sigs[first + i]`), user functions (non-recursive; args bound to param signals, `return` via `ret_val`/`ret_now`), generate for (loop var is a const param in a cloned scope), generate if/else and generate blocks, `import Pkg::*`.
-- Still NOT supported: interfaces/modports, `rev`/`step` in generate-for, recursion, `inout`, widths > 128 bit.
+- Interfaces: an instance `inst b: Bus;` becomes signals `b.member`; a `modport Bus::m` port becomes ports `port.member`; in expressions `x.y` that is not a struct field is the signal `x.y`. Veryl 0.22's own simulator mis-simulates interfaces (`veryl test` gives 0 for TestHs in `veryl-eda/examples/lang.veryl`; iverilog and veryl-sim give 145).
+- Still NOT supported: generic `interface` ports (name the modport), recursion, `inout`, widths > 256 bit.
 - Testbench support is via `$tb::clock_gen` (the inst IS the clock), `$tb::reset_gen` (`rst.assert()` with no args uses the clock recorded from `inst rst: $tb::reset_gen(clk)`), `initial` blocks with `clk.next(n)`.
 - The sim settles combinational logic after every `initial` statement (delta cycles), so clock-less comb testbenches work.
 - `examples/` is a separate Veryl project (own Veryl.toml/lock); `_doc/` holds a Veryl grammar reference (`grammar.md`).

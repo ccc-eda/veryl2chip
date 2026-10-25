@@ -158,11 +158,14 @@ module / 參數（`#(param ..)`、`const`、inst 參數覆寫）/ port / `var` /
 `inst` 階層（攤平，名稱如 `u_rf.rf`）/ package（enum、struct、const）/ `import` / struct 欄位 / 一維陣列（變數索引讀寫 → mux/解碼器）/
 使用者 function（inline，可巢狀、`return` 可在分支中）/ generate for、generate if /
 運算子：`+ - *`、位元/邏輯/化簡、比較（`$signed` 時為有號）、`<< >> >>>`（常數或變數）、串接與 `repeat`、三元運算、
-`$signed $unsigned $clog2 $bits`；`/ % **` 僅限常數。`initial`/`final` 與 `$display` 類呼叫會被忽略。
+`$signed $unsigned $clog2 $bits`；`/ %`（非常數時為還原式除法器，有號依 SystemVerilog 向零截斷）；`**` 僅限常數。
+interface 與 modport（成員攤平成 `inst.member` 訊號，modport 埠變成 `port.member` 埠）、generate for 的 `rev` / `step`、
+任意寬度（常數最多 256 bit）、時脈域註記。`initial`/`final` 與 `$display` 類呼叫會被忽略。
 
 ## 尚未支援
-interface/modport、`inout`、遞迴、非常數的除法、latch（不完整賦值的 always_comb 會報組合迴路）、
-寬度 > 128 bit 的常數、非同步讀取的記憶體放進 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL、多時脈域的 netsim；
+泛型 interface 埠、`inout`、遞迴、latch（不完整賦值的 always_comb 會報組合迴路）、
+寬度 > 256 bit 的常數、非同步讀取的記憶體放進 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL；
+（netsim 用 `tick(clk)` 模擬多個時脈域與負緣正反器，`step()` 則是所有正反器同時一拍）
 自己的佈局繞線：只支援 UP5K、沒有 LUT 輸入腳交換。
 
 ## 驗證結果（`./test.sh`）

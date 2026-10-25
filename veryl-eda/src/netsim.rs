@@ -29,19 +29,32 @@ impl<'n> NetSim<'n> {
     /// drive an input port without settling (call `settle` after the last one)
     pub fn poke(&mut self, name: &str, val: u128) {
         for (i, b) in self.port(name).bits.iter().enumerate() {
-            if let Bit::W(w) = b { self.v.insert(*w, (val >> i) & 1 == 1); }
+            if let Bit::W(w) = b { self.v.insert(*w, i < 128 && (val >> i) & 1 == 1); }
         }
     }
 
     pub fn set(&mut self, name: &str, val: u128) {
         for (i, b) in self.port(name).bits.iter().enumerate() {
-            if let Bit::W(w) = b { self.v.insert(*w, (val >> i) & 1 == 1); }
+            if let Bit::W(w) = b { self.v.insert(*w, i < 128 && (val >> i) & 1 == 1); }
         }
         self.settle();
     }
 
+    /// ports wider than 128 bits
+    pub fn set_wide(&mut self, name: &str, val: crate::value::Bits) {
+        for (i, b) in self.port(name).bits.iter().enumerate() {
+            if let Bit::W(w) = b { self.v.insert(*w, val.bit(i as u32)); }
+        }
+        self.settle();
+    }
+    pub fn get_wide(&self, name: &str) -> crate::value::Bits {
+        let mut v = crate::value::Bits::ZERO;
+        for (i, b) in self.port(name).bits.iter().enumerate() { if self.get_bit(*b) { v.0[i / 64] |= 1 << (i % 64); } }
+        v
+    }
+
     pub fn get(&self, name: &str) -> u128 {
-        self.port(name).bits.iter().enumerate().fold(0, |acc, (i, b)| acc | ((self.get_bit(*b) as u128) << i))
+        self.port(name).bits.iter().enumerate().take(128).fold(0, |acc, (i, b)| acc | ((self.get_bit(*b) as u128) << i))
     }
 
     /// (reset pin, active-high, async, value) of a flip-flop with reset/set
@@ -114,9 +127,42 @@ impl<'n> NetSim<'n> {
     }
 
     /// one active clock edge on every flip-flop
-    pub fn step(&mut self) {
+    pub fn step(&mut self) { self.capture(&vec![true; self.nl.cells.len()]); }
+
+    /// clock pin and active edge (true = rising) of a sequential cell
+    fn clock_of(c: &Cell) -> Option<(Bit, bool)> {
+        let t = c.typ.as_str();
+        let pin = ["C", "CK", "RCLK"].iter().find_map(|p| c.port(p))?;
+        let rising = match t {
+            "SB_RAM40_4K" | "SRAM" => true,
+            _ if t.starts_with("SB_DFFN") || t.starts_with("DFFN") => false,
+            _ if t.starts_with("$_DFF_N") || t.starts_with("$_SDFF_N") => false,
+            _ => true,
+        };
+        (c.is_ff() || t == "SB_RAM40_4K" || t == "SRAM").then_some((pin, rising))
+    }
+
+    /// one full cycle (rise, then fall) of the input clock `clk`: only the
+    /// flip-flops / RAMs whose clock pin sees their active edge capture (several
+    /// clock domains, negative-edge flip-flops, clocks through buffers)
+    pub fn tick(&mut self, clk: &str) {
+        let cells: Vec<Option<(Bit, bool)>> = self.nl.cells.iter().map(Self::clock_of).collect();
+        self.set(clk, 0);
+        for level in [1u128, 0] {
+            let before: Vec<bool> = cells.iter().map(|c| c.map(|(p, _)| self.get_bit(p)).unwrap_or(false)).collect();
+            self.set(clk, level);
+            let sel: Vec<bool> = cells.iter().zip(&before).map(|(c, b)| match c {
+                Some((p, rising)) => { let now = self.get_bit(*p); now != *b && now == *rising }
+                None => false,
+            }).collect();
+            if sel.iter().any(|x| *x) { self.capture(&sel); }
+        }
+    }
+
+    /// the selected flip-flops and RAMs take their next state
+    fn capture(&mut self, sel: &[bool]) {
         let mut next = vec![];
-        for c in self.nl.cells.iter().filter(|c| c.is_ff()) {
+        for (_, c) in self.nl.cells.iter().enumerate().filter(|(i, c)| c.is_ff() && sel[*i]) {
             let mut d = self.get_bit(c.port("D").unwrap());
             if let Some((pin, hi, _, val)) = Self::reset_of(c) {
                 if self.get_bit(c.port(pin).unwrap()) == hi { d = val; }
@@ -126,7 +172,7 @@ impl<'n> NetSim<'n> {
         // block RAMs (yosys cells_sim.v): registered read of the old contents, then the write;
         // in mode m data bit d is physical bit (d << m) | lane, lane = the address bits above 7
         let mut next_ram = vec![];
-        for (i, c) in self.nl.cells.iter().enumerate().filter(|(_, c)| c.typ == "SB_RAM40_4K") {
+        for (i, c) in self.nl.cells.iter().enumerate().filter(|(i, c)| c.typ == "SB_RAM40_4K" && sel[*i]) {
             let g = |p: &str| self.get_bit(c.port(p).unwrap_or(Bit::C0));
             let bus = |name: &[&str]| name.iter().enumerate().fold(0usize, |a, (k, p)| a | ((g(p) as usize) << k));
             let mode = |p: &str| c.params.iter().find(|x| x.0 == p).map(|x| usize::from_str_radix(&x.1, 2).unwrap_or(0)).unwrap_or(0);
@@ -158,7 +204,7 @@ impl<'n> NetSim<'n> {
             }
         }
         // SRAM macros (asic::lib): registered read of the old word, then the write
-        for (i, c) in self.nl.cells.iter().enumerate().filter(|(_, c)| c.typ == "SRAM") {
+        for (i, c) in self.nl.cells.iter().enumerate().filter(|(i, c)| c.typ == "SRAM" && sel[*i]) {
             let depth = crate::asic::lib::param(c, "DEPTH");
             let bus = |base: &str| c.conns.iter().filter_map(|(p, b)| {
                 let k: usize = p.strip_prefix(base)?.strip_prefix('[')?.strip_suffix(']')?.parse().ok()?;

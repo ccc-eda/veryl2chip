@@ -1,0 +1,260 @@
+// Language features beyond the basics: non-constant division / remainder
+// (unsigned and signed) and interfaces with modports.
+
+module Div (
+    i_a : input  logic<8>,
+    i_b : input  logic<8>,
+    o_q : output logic<8>,
+    o_r : output logic<8>,
+    o_sq: output logic<8>,
+    o_sr: output logic<8>,
+) {
+    assign o_q  = i_a / i_b;
+    assign o_r  = i_a % i_b;
+    assign o_sq = $signed(i_a) / $signed(i_b);
+    assign o_sr = $signed(i_a) % $signed(i_b);
+}
+
+#[test(div_test)]
+module TestDiv {
+    var a : logic<8>;
+    var b : logic<8>;
+    var q : logic<8>;
+    var r : logic<8>;
+    var sq: logic<8>;
+    var sr: logic<8>;
+
+    inst u: Div (
+        i_a : a,
+        i_b : b,
+        o_q : q,
+        o_r : r,
+        o_sq: sq,
+        o_sr: sr,
+    );
+
+    initial {
+        a = 8'd200;
+        b = 8'd7;
+        $assert(q == 8'd28, "200 / 7");
+        $assert(r == 8'd4, "200 % 7");
+        a = 8'hF6; // -10
+        b = 8'd3;
+        $assert(sq == 8'hFD, "-10 / 3 = -3");
+        $assert(sr == 8'hFF, "-10 % 3 = -1");
+        $finish();
+    }
+}
+
+// a valid / ready handshake as an interface; `fire` is computed inside the
+// interface, the monitor modport is "everything an input" (..input)
+interface Handshake #(
+    param W: u32 = 8,
+) {
+    var valid: logic;
+    var ready: logic;
+    var data : logic<W>;
+    let fire : logic = valid && ready;
+
+    modport source {
+        valid: output,
+        data : output,
+        ready: input,
+        fire : input,
+    }
+
+    modport sink {
+        valid: input,
+        data : input,
+        ready: output,
+        fire : input,
+    }
+
+    modport monitor {
+        ..input
+    }
+}
+
+module HsSource (
+    i_clk: input clock,
+    i_rst: input reset,
+    hs   : modport Handshake::source,
+) {
+    var cnt: logic<8>;
+
+    always_ff {
+        if_reset {
+            cnt = 8'd1;
+        } else if hs.fire {
+            cnt = cnt + 8'd3;
+        }
+    }
+
+    assign hs.valid = 1'b1;
+    assign hs.data  = cnt;
+}
+
+module HsSink (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    hs   : modport Handshake::sink,
+    o_sum: output logic<16>,
+) {
+    var sum: logic<16>;
+    var rdy: logic;
+
+    always_ff {
+        if_reset {
+            sum = 0;
+            rdy = 0;
+        } else {
+            rdy = ~rdy;
+            if hs.fire {
+                sum = sum + {8'd0, hs.data};
+            }
+        }
+    }
+
+    assign hs.ready = rdy;
+    assign o_sum    = sum;
+}
+
+module HsTop (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    o_sum: output logic<16>,
+) {
+    inst h  : Handshake;
+    inst src: HsSource (
+        i_clk,
+        i_rst,
+        hs   : h,
+    );
+    inst snk: HsSink (
+        i_clk,
+        i_rst,
+        hs   : h,
+        o_sum,
+    );
+}
+
+#[test(hs_test)]
+module TestHs {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var sum: logic<16>;
+
+    inst u: HsTop (
+        i_clk: clk,
+        i_rst: rst,
+        o_sum: sum,
+    );
+
+    initial {
+        rst.assert();
+        clk.next(20);
+        // 1 + 4 + 7 + ... over the cycles the sink is ready (iverilog agrees;
+        // veryl 0.22's own simulator reads 0 here, it mishandles interfaces)
+        $assert(sum == 16'd145, "handshake sum");
+        $finish();
+    }
+}
+
+// wider than 128 bits: a 200-bit adder and shifter
+module Wide (
+    i_a: input  logic<200>,
+    i_b: input  logic<200>,
+    o_s: output logic<200>,
+    o_x: output logic<200>,
+    o_c: output logic,
+) {
+    var sum: logic<201>;
+
+    assign sum = {1'b0, i_a} + {1'b0, i_b};
+    assign o_s = sum[199:0];
+    assign o_c = sum[200];
+    assign o_x = i_a ^ (i_b << 150);
+}
+
+#[test(wide_test)]
+module TestWide {
+    var a: logic<200>;
+    var b: logic<200>;
+    var s: logic<200>;
+    var x: logic<200>;
+    var c: logic;
+
+    inst u: Wide (
+        i_a: a,
+        i_b: b,
+        o_s: s,
+        o_x: x,
+        o_c: c,
+    );
+
+    initial {
+        // a carry rippling through all 200 bits
+        a = ~200'd0;
+        b = 200'd1;
+        $assert(s == 200'd0, "wrap to zero");
+        $assert(c == 1'b1, "carry out of bit 199");
+        // a carry across the 128-bit boundary
+        a = 200'h0_0000_0000_0000_0000_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF;
+        b = 200'd1;
+        $assert(s[128] == 1'b1, "carry into bit 128");
+        $assert(s[127:0] == 128'd0, "low half zero");
+        // shift past bit 128
+        a = 200'd0;
+        b = 200'd5;
+        $assert(x[150] == 1'b1 && x[151] == 1'b0 && x[152] == 1'b1, "shifted to bit 150");
+        $assert(x[199:153] == 47'd0, "nothing above");
+        $finish();
+    }
+}
+
+// two clock domains and a negative-edge flip-flop (each domain annotated
+// with its own clock and reset, as Veryl requires)
+module TwoClk (
+    i_clka: input  'a clock        ,
+    i_rsta: input  'a reset        ,
+    i_clkb: input  'b clock        ,
+    i_rstb: input  'b reset        ,
+    i_clkn: input  'c clock_negedge,
+    i_rstn: input  'c reset        ,
+    o_a   : output 'a logic<8>     ,
+    o_b   : output 'b logic<8>     ,
+    o_n   : output 'c logic<8>     ,
+) {
+    var ca: 'a logic<8>;
+    var cb: 'b logic<8>;
+    var cn: 'c logic<8>;
+
+    always_ff (i_clka, i_rsta) {
+        if_reset {
+            ca = 0;
+        } else {
+            ca = ca + 8'd1;
+        }
+    }
+
+    always_ff (i_clkb, i_rstb) {
+        if_reset {
+            cb = 0;
+        } else {
+            cb = cb + 8'd2;
+        }
+    }
+
+    always_ff (i_clkn, i_rstn) {
+        if_reset {
+            cn = 0;
+        } else {
+            cn = cn + 8'd3;
+        }
+    }
+
+    assign o_a = ca;
+    assign o_b = cb;
+    assign o_n = cn;
+}

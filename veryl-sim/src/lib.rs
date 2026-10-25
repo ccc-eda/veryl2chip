@@ -2,6 +2,8 @@
 //! Used by the command line (`main.rs`) and the WebAssembly build.
 
 pub mod elab;
+pub mod gen;
+pub mod iface;
 pub mod expr;
 pub mod sim;
 pub mod value;
@@ -78,6 +80,11 @@ pub fn run(files: &[(String, String)], top: Option<&str>, max_time: u64, vcd: bo
         say(&format!("=== simulating {} ===", t), &mut res);
         let mut e = elab::Elab::new(HashMap::new());
         e.lib = mods.iter().map(|(m, test)| (m.identifier.identifier_token.to_string(), elab::ModInfo { decl: m, is_test: *test })).collect();
+        for p in &parsers {
+            let mut v = vec![];
+            for l in &p.veryl.veryl_list { iface::collect(&l.description_group, &mut v); }
+            for d in v { e.ifaces.insert(iface::name(d), d); }
+        }
         for p in &parsers {
             for l in &p.veryl.veryl_list { elab::collect_packages(&l.description_group, &mut e); }
         }

@@ -41,6 +41,7 @@ const EX = [
   { id: 'counter', group: '時序', title: 'Counter（veryl-sim 範例）', files: ['veryl-sim/examples/counter.veryl'], synth: 'Counter' },
   { id: 'features', group: '綜合', title: 'features：移位/函式/範圍/計數器', files: ['veryl-eda/examples/features.veryl'], synth: 'Top' },
   { id: 'bram', group: '綜合', title: 'BramMix：4 個 block RAM + 邏輯', files: ['examples/src/sync_ram.veryl', 'veryl-eda/examples/bram_tests.veryl'], synth: 'BramMix' },
+  { id: 'lang', group: '綜合', title: 'lang：除法、interface、200 位元、雙時脈', files: ['veryl-eda/examples/lang.veryl'], synth: 'HsTop' },
   { id: 'acc', group: '綜合', title: 'AccTest 32-bit 進位鏈', files: ['veryl-eda/examples/pnr_tests.veryl'], synth: 'AccTest' },
   { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },

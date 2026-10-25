@@ -94,7 +94,7 @@ pub struct Sim {
 }
 
 fn bitv(v: &Val) -> u8 {
-    if v.x & 1 == 1 { 2 } else { (v.v & 1) as u8 }
+    if v.x.bit(0) { 2 } else { v.v.bit(0) as u8 }
 }
 
 impl Sim {
@@ -116,7 +116,7 @@ impl Sim {
             Expr::Num(v) => *v,
             Expr::AllBit(b) => {
                 let w = ctx.max(1);
-                match b { 0 => Val::new(w, 0), 1 => Val::new(w, mask(w)), _ => Val::allx(w) }
+                match b { 0 => Val::new(w, 0), 1 => Val::of(w, mask(w)), _ => Val::allx(w) }
             }
             Expr::Str(s) => {
                 let mut v = 0u128;
@@ -127,14 +127,14 @@ impl Sim {
             Expr::Elem(base, idx) => {
                 let n = self.sigs[*base].arr.unwrap_or(1);
                 let idx = self.eval(idx, 0);
-                if idx.x != 0 || idx.v >= n as u128 { return Val::allx(self.sigs[*base].w); }
-                self.sigs[*base + idx.v as usize].val
+                if idx.x != 0u128 || idx.v >= n as u128 { return Val::allx(self.sigs[*base].w); }
+                self.sigs[*base + idx.v.sat() as usize].val
             }
             Expr::Index(b, i) => {
                 let base = self.eval(b, 0);
                 let idx = self.eval(i, 0);
-                if idx.x != 0 || idx.v >= base.w as u128 { return Val::allx(1); }
-                let k = idx.v as u32;
+                if idx.x != 0u128 || idx.v >= base.w as u128 { return Val::allx(1); }
+                let k = idx.v.sat() as u32;
                 Val { w: 1, v: (base.v >> k) & 1, x: (base.x >> k) & 1, s: false }
             }
             Expr::Slice(b, a, c, kind) => {
@@ -142,31 +142,32 @@ impl Sim {
                 let (lo, w) = match kind {
                     0 => {
                         let (hi, lo) = (self.eval(a, 0), self.eval(c, 0));
-                        if hi.x != 0 || lo.x != 0 || hi.v < lo.v { return Val::allx(1); }
-                        (lo.v as u32, (hi.v - lo.v + 1) as u32)
+                        if hi.x != 0u128 || lo.x != 0u128 || hi.v < lo.v { return Val::allx(1); }
+                        (lo.v.sat() as u32, (hi.v.sat() - lo.v.sat() + 1) as u32)
                     }
                     1 => {
                         let (bs, w) = (self.eval(a, 0), self.eval(c, 0));
-                        if bs.x != 0 || w.x != 0 { return Val::allx(w.v.max(1) as u32); }
-                        (bs.v as u32, w.v as u32)
+                        if bs.x != 0u128 || w.x != 0u128 { return Val::allx(w.v.sat().max(1) as u32); }
+                        (bs.v.sat() as u32, w.v.sat() as u32)
                     }
                     _ => {
                         let (bs, w) = (self.eval(a, 0), self.eval(c, 0));
-                        if bs.x != 0 || w.x != 0 || bs.v + 1 < w.v { return Val::allx(w.v.max(1) as u32); }
-                        ((bs.v + 1 - w.v) as u32, w.v as u32)
+                        let (b, n) = (bs.v.sat(), w.v.sat());
+                        if bs.x != 0u128 || w.x != 0u128 || b + 1 < n { return Val::allx(n.max(1) as u32); }
+                        ((b + 1 - n) as u32, n as u32)
                     }
                 };
-                if lo >= 128 { return Val::allx(w); }
-                let w = w.clamp(1, 128);
+                if lo >= MAXW { return Val::allx(w); }
+                let w = w.clamp(1, MAXW);
                 Val { w, v: (base.v >> lo) & mask(w), x: (base.x >> lo) & mask(w), s: false }
             }
             Expr::Concat(items) => {
-                let (mut v, mut x, mut w) = (0u128, 0u128, 0u32);
+                let (mut v, mut x, mut w) = (Bits::ZERO, Bits::ZERO, 0u32);
                 for (cnt, it) in items {
-                    let c = self.eval(cnt, 0).v as u32;
+                    let c = self.eval(cnt, 0).v.sat() as u32;
                     let iv = self.eval(it, 0);
                     for _ in 0..c {
-                        if w + iv.w > 128 { break; }
+                        if w + iv.w > MAXW { break; }
                         v = (v << iv.w) | iv.v;
                         x = (x << iv.w) | iv.x;
                         w += iv.w;
@@ -202,8 +203,8 @@ impl Sim {
         match name {
             "$clog2" => {
                 let v = self.eval(&args[0], 0);
-                if v.x != 0 { return Val::allx(32); }
-                let n = if v.v <= 1 { 0 } else { 128 - (v.v - 1).leading_zeros() };
+                if v.x != 0u128 { return Val::allx(32); }
+                let n = if v.v <= 1 { 0 } else { MAXW - v.v.wrapping_sub(Bits::from_u128(1)).leading_zeros() };
                 Val::new(32, n as u128)
             }
             "$signed" => self.eval(&args[0], 0).signed(true),
@@ -259,8 +260,8 @@ impl Sim {
             "-" => {
                 let w = v.w.max(ctx);
                 let v = v.resize(w);
-                if v.x != 0 { return Val::allx(w).signed(v.s); }
-                Val { w, v: v.v.wrapping_neg() & mask(w), x: 0, s: v.s }
+                if v.x != 0u128 { return Val::allx(w).signed(v.s); }
+                Val { w, v: v.v.wrapping_neg() & mask(w), x: Bits::ZERO, s: v.s }
             }
             "~" => {
                 let w = v.w.max(ctx);
@@ -269,21 +270,21 @@ impl Sim {
             }
             "!" => match v.truth() { Some(t) => Val::bit(!t), None => Val::allx(1) },
             "&" | "~&" => {
-                let r = if (!v.v & !v.x & m) != 0 { Val::bit(false) } else if v.x != 0 { Val::allx(1) } else { Val::bit(true) };
+                let r = if (!v.v & !v.x & m) != 0 { Val::bit(false) } else if v.x != 0u128 { Val::allx(1) } else { Val::bit(true) };
                 if op == "~&" { Self::inv1(r) } else { r }
             }
             "|" | "~|" => {
-                let r = if v.v != 0 { Val::bit(true) } else if v.x != 0 { Val::allx(1) } else { Val::bit(false) };
+                let r = if v.v != 0u128 { Val::bit(true) } else if v.x != 0u128 { Val::allx(1) } else { Val::bit(false) };
                 if op == "~|" { Self::inv1(r) } else { r }
             }
             _ => { // ^ ~^ ^~
-                let r = if v.x != 0 { Val::allx(1) } else { Val::bit(v.v.count_ones() % 2 == 1) };
+                let r = if v.x != 0u128 { Val::allx(1) } else { Val::bit(v.v.count_ones() % 2 == 1) };
                 if op == "^" { r } else { Self::inv1(r) }
             }
         }
     }
 
-    fn inv1(r: Val) -> Val { if r.x != 0 { r } else { Val::bit(r.v == 0) } }
+    fn inv1(r: Val) -> Val { if r.x != 0u128 { r } else { Val::bit(r.v == 0) } }
 
     fn eval_bin(&mut self, op: &str, a: &Expr, b: &Expr, ctx: u32) -> Val {
         match op {
@@ -309,7 +310,7 @@ impl Sim {
                         Some(if op == "==?" { eq } else { !eq })
                     }
                     _ => {
-                        if va.x != 0 || vb.x != 0 { None } else {
+                        if va.x != 0u128 || vb.x != 0u128 { None } else {
                             let ord = if sg { va.to_i128().cmp(&vb.to_i128()) } else { va.v.cmp(&vb.v) };
                             Some(match op {
                                 "==" => ord.is_eq(),
@@ -329,16 +330,17 @@ impl Sim {
                 let w = va.w.max(ctx);
                 let va = va.resize(w);
                 let vb = self.eval(b, 0);
-                if vb.x != 0 { return Val::allx(w).signed(va.s); }
-                let n = vb.v.min(200) as u32;
+                if vb.x != 0u128 { return Val::allx(w).signed(va.s); }
+                let n = vb.v.sat().min(MAXW as u128 + 1) as u32;
                 let m = mask(w);
                 let (v, x) = match op {
-                    "<<" | "<<<" => (if n >= 128 { 0 } else { (va.v << n) & m }, if n >= 128 { 0 } else { (va.x << n) & m }),
+                    "<<" | "<<<" => ((va.v << n) & m, (va.x << n) & m),
                     ">>>" if va.s => {
-                        let r = (va.to_i128() >> n.min(127)) as u128 & m;
-                        (r, 0)
+                        // arithmetic: the sign bit fills from the left
+                        let fill = if va.negative() { m & !(mask(w.saturating_sub(n))) } else { Bits::ZERO };
+                        ((va.v >> n) | fill, va.x >> n)
                     }
-                    _ => (if n >= 128 { 0 } else { va.v >> n }, if n >= 128 { 0 } else { va.x >> n }),
+                    _ => (va.v >> n, va.x >> n),
                 };
                 return Val { w, v, x, s: va.s };
             }
@@ -346,7 +348,7 @@ impl Sim {
         }
         // arithmetic / bitwise: context-determined width
         let (va, vb) = (self.eval(a, ctx), self.eval(b, ctx));
-        let w = ctx.max(va.w).max(vb.w).clamp(1, 128);
+        let w = ctx.max(va.w).max(vb.w).clamp(1, MAXW);
         let (va2, vb2) = (self.eval(a, w).resize(w), self.eval(b, w).resize(w));
         let (va, vb) = (if va2.w == w { va2 } else { va.resize(w) }, if vb2.w == w { vb2 } else { vb.resize(w) });
         let sg = va.s && vb.s;
@@ -363,7 +365,7 @@ impl Sim {
             "^" => { let x = va.x | vb.x; Val { w, v: (va.v ^ vb.v) & !x, x, s: sg } }
             "~^" | "^~" => { let x = va.x | vb.x; Val { w, v: !(va.v ^ vb.v) & !x & m, x, s: sg } }
             _ => {
-                if va.x != 0 || vb.x != 0 { return Val::allx(w).signed(sg); }
+                if va.x != 0u128 || vb.x != 0u128 { return Val::allx(w).signed(sg); }
                 let (ua, ub) = (va.v, vb.v);
                 let r = match op {
                     "+" => ua.wrapping_add(ub),
@@ -372,14 +374,22 @@ impl Sim {
                     "/" | "%" => {
                         if ub == 0 { return Val::allx(w).signed(sg); }
                         if sg {
-                            let (x, y) = (va.to_i128(), vb.to_i128());
-                            (if op == "/" { x.wrapping_div(y) } else { x.wrapping_rem(y) }) as u128
-                        } else if op == "/" { ua / ub } else { ua % ub }
+                            // on magnitudes; the quotient is negative when the signs differ,
+                            // the remainder takes the dividend's sign
+                            let (q, r) = va.abs().divrem(vb.abs());
+                            let neg = |x: Bits, n: bool| if n { x.wrapping_neg() } else { x };
+                            if op == "/" { neg(q, va.negative() != vb.negative()) } else { neg(r, va.negative()) }
+                        } else { let (q, r) = ua.divrem(ub); if op == "/" { q } else { r } }
                     }
-                    "**" => ua.wrapping_pow(ub.min(u32::MAX as u128) as u32),
+                    "**" => {
+                        let mut r = Bits::from_u128(1);
+                        let (mut b, mut e) = (ua, ub.sat().min(4096));
+                        while e > 0 { if e & 1 == 1 { r = r.wrapping_mul(b); } b = b.wrapping_mul(b); e >>= 1; }
+                        r
+                    }
                     _ => return Val::allx(w),
                 };
-                Val { w, v: r & m, x: 0, s: sg }
+                Val { w, v: r & m, x: Bits::ZERO, s: sg }
             }
         }
     }
@@ -393,25 +403,26 @@ impl Sim {
             Sel::All => base(lv.sig, 0, sw),
             Sel::Bit(i) => {
                 let i = self.eval(i, 0);
-                if i.x != 0 || i.v >= sw as u128 { None } else { base(lv.sig, i.v as u32, 1) }
+                if i.x != 0u128 || i.v >= sw as u128 { None } else { base(lv.sig, i.v.sat() as u32, 1) }
             }
             Sel::Range(h, l) => {
                 let (h, l) = (self.eval(h, 0), self.eval(l, 0));
-                if h.x != 0 || l.x != 0 || h.v < l.v || h.v >= sw as u128 { None } else { base(lv.sig, l.v as u32, (h.v - l.v + 1) as u32) }
+                if h.x != 0u128 || l.x != 0u128 || h.v < l.v || h.v >= sw as u128 { None } else { base(lv.sig, l.v.sat() as u32, (h.v.sat() - l.v.sat() + 1) as u32) }
             }
             Sel::Plus(b, w) => {
                 let (b, w) = (self.eval(b, 0), self.eval(w, 0));
-                if b.x != 0 || w.x != 0 || b.v + w.v > sw as u128 { None } else { base(lv.sig, b.v as u32, w.v as u32) }
+                if b.x != 0u128 || w.x != 0u128 || b.v.sat().saturating_add(w.v.sat()) > sw as u128 { None } else { base(lv.sig, b.v.sat() as u32, w.v.sat() as u32) }
             }
             Sel::Minus(b, w) => {
                 let (b, w) = (self.eval(b, 0), self.eval(w, 0));
-                if b.x != 0 || w.x != 0 || b.v + 1 < w.v || b.v >= sw as u128 { None } else { base(lv.sig, (b.v + 1 - w.v) as u32, w.v as u32) }
+                let (bb, ww) = (b.v.sat(), w.v.sat());
+                if b.x != 0u128 || w.x != 0u128 || bb + 1 < ww || bb >= sw as u128 { None } else { base(lv.sig, (bb + 1 - ww) as u32, ww as u32) }
             }
             Sel::Elem(idx) => {
                 let n = self.sigs[lv.sig].arr.unwrap_or(1);
                 let i = self.eval(idx, 0);
-                if i.x != 0 || i.v >= n as u128 { None } else {
-                    let es = lv.sig + i.v as usize;
+                if i.x != 0u128 || i.v >= n as u128 { None } else {
+                    let es = lv.sig + i.v.sat() as usize;
                     base(es, 0, self.sigs[es].w)
                 }
             }
@@ -490,7 +501,7 @@ impl Sim {
                     if !hit { self.exec(def, nb); }
                 }
                 Stmt::For { var, from, to, incl, body } => {
-                    let (f, t) = (self.eval(from, 0).v, self.eval(to, 0).v);
+                    let (f, t) = (self.eval(from, 0).v.sat(), self.eval(to, 0).v.sat());
                     let t = if *incl { t + 1 } else { t };
                     let w = self.sigs[*var].w;
                     let mut i = f;
@@ -567,9 +578,9 @@ impl Sim {
                 'h' | 'x' => (v.fmt_hex(), '0', ((v.w + 3) / 4) as usize),
                 'o' => (v.fmt_oct(), '0', ((v.w + 2) / 3) as usize),
                 't' => (v.fmt_dec(), ' ', 0),
-                'c' => (((v.v as u8) as char).to_string(), ' ', 0),
+                'c' => (((v.v.lo() as u8) as char).to_string(), ' ', 0),
                 's' => {
-                    let bytes: Vec<u8> = (0..v.w / 8).rev().map(|k| (v.v >> (k * 8)) as u8).filter(|b| *b != 0).collect();
+                    let bytes: Vec<u8> = (0..v.w / 8).rev().map(|k| (v.v >> (k * 8)).lo() as u8).filter(|b| *b != 0).collect();
                     (String::from_utf8_lossy(&bytes).to_string(), ' ', 0)
                 }
                 _ => (v.fmt_dec(), ' ', 0),
@@ -582,7 +593,7 @@ impl Sim {
     }
 }
 
-fn mask_digits(w: u32) -> usize { mask(w).to_string().len() }
+fn mask_digits(w: u32) -> usize { mask(w).to_dec().len() }
 
 // ====================================================================
 pub struct Vcd {
@@ -644,7 +655,7 @@ impl Design {
         for it in 0..500 {
             // compare the state before/after a whole pass: a block may legitimately
             // write a signal twice (`x = 0; x += 1;`) without the result changing.
-            let before: Vec<(u128, u128)> = self.sim.sigs.iter().map(|s| (s.val.v, s.val.x)).collect();
+            let before: Vec<(Bits, Bits)> = self.sim.sigs.iter().map(|s| (s.val.v, s.val.x)).collect();
             for p in &self.procs {
                 if let Proc::Comb(b) = p { self.sim.exec(b, false); }
             }
@@ -708,7 +719,7 @@ impl Design {
                     if self.sim.eval(&c, 0).truth() != Some(true) { self.inits[k].pc = t; }
                 }
                 Op::Wait(clk, n) => {
-                    let n = self.sim.eval(&n, 0).v;
+                    let n = self.sim.eval(&n, 0).v.sat();
                     if n > 0 { self.inits[k].wait = Some((clk, n)); return; }
                 }
             }
@@ -746,8 +757,8 @@ impl Design {
                 if t2 != t { break; }
                 heap.pop();
                 if let Proc::ClockGen { sig, half } = &self.procs[i] {
-                    let cur = self.sim.sigs[*sig].val.v & 1;
-                    self.sim.write_bits(*sig, 0, 1, Val::new(1, cur ^ 1));
+                    let cur = self.sim.sigs[*sig].val.v.bit(0);
+                    self.sim.write_bits(*sig, 0, 1, Val::bit(!cur));
                     heap.push(Reverse((t + *half, i)));
                 }
             }

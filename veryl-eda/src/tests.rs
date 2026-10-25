@@ -434,3 +434,86 @@ fn power_activity() {
     assert!(p.e_clock > 0.0 && p.e_nets > 0.0 && p.leakage > 0.0 && p.ir_worst >= 0.0);
     assert!((p.total - p.dynamic - p.leakage).abs() < 1e-9);
 }
+
+/// non-constant division: every 8-bit pair against Rust (x / 0 is x in SV)
+#[test]
+fn division() {
+    synth(&["lang.veryl"], "Div", |s| {
+        for a in 0..256u32 {
+            for b in 1..256u32 {
+                s.set("i_a", a as u128);
+                s.set("i_b", b as u128);
+                let (sa, sb) = (a as u8 as i8, b as u8 as i8);
+                assert_eq!(s.get("o_q"), (a / b) as u128, "{} / {}", a, b);
+                assert_eq!(s.get("o_r"), (a % b) as u128, "{} % {}", a, b);
+                assert_eq!(s.get("o_sq"), sa.wrapping_div(sb) as u8 as u128, "{} / {} signed", sa, sb);
+                assert_eq!(s.get("o_sr"), sa.wrapping_rem(sb) as u8 as u128, "{} % {} signed", sa, sb);
+            }
+        }
+    });
+}
+
+/// an interface between two modules (modports, a `let` inside the
+/// interface): TestHs's result on every netlist
+#[test]
+fn interface_handshake() {
+    synth(&["lang.veryl"], "HsTop", |s| {
+        reset(s, "i_rst");
+        for _ in 0..20 { s.step(); }
+        assert_eq!(s.get("o_sum"), 145);
+    });
+}
+
+/// modport defaults: ..converse / ..same / ..input / ..output
+#[test]
+fn modport_defaults() {
+    let src = "interface I {\n var a: logic;\n var b: logic;\n var c: logic;\n modport m { a: output, b: input, ..output }\n modport conv { ..converse(m) }\n modport sm { ..same(m) }\n modport all_in { ..input }\n}\n";
+    let p = Parser::parse(src, &"i.veryl").unwrap();
+    let mut v = vec![];
+    for l in &p.veryl.veryl_list { veryl_sim::iface::collect(&l.description_group, &mut v); }
+    let d = v[0];
+    let m = |mp: &str| veryl_sim::iface::modport(d, mp).unwrap();
+    let s = |v: &[(&str, bool)]| v.iter().map(|(n, o)| (n.to_string(), *o)).collect::<Vec<_>>();
+    assert_eq!(m("m"), s(&[("a", true), ("b", false), ("c", true)]));
+    assert_eq!(m("conv"), s(&[("a", false), ("b", true), ("c", false)]));
+    assert_eq!(m("sm"), m("m"));
+    assert_eq!(m("all_in"), s(&[("a", false), ("b", false), ("c", false)]));
+}
+
+/// 200-bit add and shift against the simulator's wide integers
+#[test]
+fn wide_200_bits() {
+    use crate::value::{mask, Bits};
+    synth(&["lang.veryl"], "Wide", |s| {
+        let mut x = 0x9e3779b97f4a7c15u64;
+        let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        let m = mask(200);
+        for k in 0..200 {
+            let mut a = Bits([rnd(), rnd(), rnd(), rnd()]) & m;
+            let b = Bits([rnd(), rnd(), rnd(), rnd()]) & m;
+            if k % 3 == 0 { a = m; } // carries through every bit
+            s.set_wide("i_a", a);
+            s.set_wide("i_b", b);
+            let sum = a.wrapping_add(b);
+            assert_eq!(s.get_wide("o_s"), sum & m);
+            assert_eq!(s.get("o_c"), sum.bit(200) as u128);
+            assert_eq!(s.get_wide("o_x"), (a ^ (b << 150)) & m);
+        }
+    });
+}
+
+/// several clock domains in netsim: each `tick` clocks only its own domain
+#[test]
+fn clock_domains() {
+    synth(&["lang.veryl"], "TwoClk", |s| {
+        for r in ["i_rsta", "i_rstb", "i_rstn"] { s.set(r, 0); }
+        s.tick("i_clka");
+        s.tick("i_clkb");
+        s.tick("i_clkn");
+        for r in ["i_rsta", "i_rstb", "i_rstn"] { s.set(r, 1); }
+        for _ in 0..3 { s.tick("i_clka"); }
+        for _ in 0..5 { s.tick("i_clkb"); }
+        for _ in 0..2 { s.tick("i_clkn"); }
+        assert_eq!((s.get("o_a"), s.get("o_b"), s.get("o_n")), (3, 10, 6));
+    });
+}

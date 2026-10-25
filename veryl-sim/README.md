@@ -10,7 +10,9 @@
 ## 架構
 | 檔案 | 內容 |
 |---|---|
-| `value.rs` | 4 態 (0/1/x) 位元向量，最多 128 bit |
+| `value.rs` | 4 態 (0/1/x) 位元向量，最多 256 bit（`LIMBS` × 64，可調） |
+| `iface.rs` | interface：收集宣告、展開內容、解析 modport（與 veryl-eda 共用） |
+| `gen.rs`   | generate-for 的索引序列（`rev`、`step +=` 等；與 veryl-eda 共用） |
 | `expr.rs`  | 運算式 IR + 優先權解析器（吃 veryl-parser 的 token 串） |
 | `elab.rs`  | 走訪 veryl-parser 語法樹、展開階層、轉成模擬 IR |
 | `sim.rs`   | 求值、delta-cycle 排程、非阻塞賦值 (NBA)、clock 產生器、VCD |
@@ -20,8 +22,13 @@ module / 參數 (`#(param ..)`, `const`) / port / `var` / `let` / `assign` / `al
 (含 `if_reset`、同步/非同步 reset、posedge/negedge) / `if` / `case` / `switch` / `for` / `inst`（含參數覆寫、階層）/
 `initial`（`clk.next(n)`、`rst.assert(clk)`）/ `$tb::clock_gen`、`$tb::reset_gen` /
 package / enum（`Pkg::Enum::Member`）/ package const / struct（欄位存取、整體賦值；第一個欄位在最高位，與 SystemVerilog 相同）/ 一維陣列 /
-使用者 function（不可遞迴）/ generate for、generate if / `import Pkg::*` /
+使用者 function（不可遞迴）/ generate for（含 `rev`、`step += k` 等）、generate if / `import Pkg::*` /
+interface（`inst b: Bus;`、`port: modport Bus::master`、modport 的 `..input` / `..output` / `..same(m)` / `..converse(m)`；成員以 `b.valid` 存取）/
+最多 256 bit 的寬度 / 時脈域註記（`'a clock`）/
 `$display $write $info $warning $error $fatal $assert $finish $time $clog2 $signed $unsigned $bits $random`。
 
 ## 尚未支援
-interface/modport、generate 的 `rev`/`step`、遞迴、`inout`、寬度 > 128 bit。
+泛型 interface 埠（`port: interface`，需指名 modport）、遞迴、`inout`（三態需要 z 平面與多驅動者決議）、寬度 > 256 bit。
+
+注意：Veryl 0.22 內建模擬器（`veryl test`）在 interface 設計上會算錯（例如 `veryl-eda/examples/lang.veryl` 的 TestHs 它得 0），
+iverilog 與 veryl-sim 都是 145。

@@ -185,6 +185,14 @@ impl<'a> P<'a> {
                     self.i += 1;
                     path.push(self.next().unwrap());
                 }
+                // interface members are signals named `inst.member`
+                while path.len() == 1 && self.peek() == Some(".") {
+                    let Some(m) = self.t.get(self.i + 1) else { break };
+                    let cand = format!("{}.{}", path[0], m);
+                    if (self.r)(&[cand.clone()]).is_none() { break; }
+                    self.i += 2;
+                    path[0] = cand;
+                }
                 match (self.r)(&path) {
                     Some(Res::Sig(i)) => Expr::Sig(i),
                     Some(Res::Arr(i)) => Expr::Elem(i, Box::new(Expr::Num(Val::new(32, 0)))), // replaced below by [..]
@@ -270,21 +278,22 @@ pub fn parse_num(s: &str) -> Option<Expr> {
         let bits = match c.to_ascii_lowercase() { 'b' => 1, 'o' => 3, 'h' => 4, 'd' => 0, _ => return None };
         let digits: Vec<char> = r.collect();
         let w: u32 = if wpart.is_empty() { 32 } else { wpart.parse().ok()? };
-        let w = w.clamp(1, 128);
-        let (mut v, mut x) = (0u128, 0u128);
+        let w = w.clamp(1, MAXW);
+        let (mut v, mut x) = (Bits::ZERO, Bits::ZERO);
         if bits == 0 {
             if digits.len() == 1 && matches!(digits[0], 'x' | 'X' | 'z' | 'Z') {
                 x = mask(w);
             } else {
-                v = digits.iter().collect::<String>().parse().ok()?;
+                // decimal, any width: v = v * 10 + d
+                for d in digits { v = v.wrapping_mul(Bits::from_u128(10)).wrapping_add(Bits::from_u128(d.to_digit(10)? as u128)); }
             }
         } else {
             for d in digits {
-                v <<= bits;
-                x <<= bits;
+                v = v << bits;
+                x = x << bits;
                 match d {
-                    'x' | 'X' | 'z' | 'Z' | '?' => x |= (1u128 << bits) - 1,
-                    _ => v |= d.to_digit(1 << bits)? as u128,
+                    'x' | 'X' | 'z' | 'Z' | '?' => x = x | ((1u128 << bits) - 1),
+                    _ => v = v | d.to_digit(1 << bits)? as u128,
                 }
             }
         }

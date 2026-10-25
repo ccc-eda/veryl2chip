@@ -1341,6 +1341,7 @@ name = "veryl-eda"
 version = "0.1.0"
 dependencies = [
  "veryl-parser",
+ "veryl-sim",
 ]
 
 [[package]]
@@ -1360,6 +1361,13 @@ dependencies = [
  "scnr2",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "veryl-sim"
+version = "0.1.0"
+dependencies = [
+ "veryl-parser",
 ]
 
 [[package]]

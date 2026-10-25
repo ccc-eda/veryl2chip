@@ -183,6 +183,41 @@ impl Builder {
     }
     pub fn neg(&mut self, a: &[Bit]) -> Vec<Bit> { self.sub(&vec![Bit::C0; a.len()], a) }
 
+    /// unsigned quotient and remainder (restoring division, one subtract-and-
+    /// compare stage per bit); x / 0 gives all ones and remainder x, like the
+    /// hardware it describes
+    pub fn udivmod(&mut self, a: &[Bit], b: &[Bit]) -> (Vec<Bit>, Vec<Bit>) {
+        let w = a.len();
+        let bx = pad(b, w + 1);
+        let mut r = vec![Bit::C0; w + 1];
+        let mut q = vec![Bit::C0; w];
+        for i in (0..w).rev() {
+            // shift the next dividend bit in
+            let mut t = vec![a[i]];
+            t.extend_from_slice(&r[..w]);
+            let lt = self.ult(&t, &bx);
+            let ge = self.not(lt);
+            let d = self.sub(&t, &bx);
+            r = self.muxv(ge, &t, &d);
+            q[i] = ge;
+        }
+        r.truncate(w);
+        (q, r)
+    }
+
+    /// signed (two's complement) division truncating toward zero, as in
+    /// SystemVerilog: the remainder takes the sign of the dividend
+    pub fn sdivmod(&mut self, a: &[Bit], b: &[Bit]) -> (Vec<Bit>, Vec<Bit>) {
+        let (sa, sb) = (*a.last().unwrap_or(&Bit::C0), *b.last().unwrap_or(&Bit::C0));
+        let (na, nb) = (self.neg(a), self.neg(b));
+        let ua = self.muxv(sa, a, &na);
+        let ub = self.muxv(sb, b, &nb);
+        let (q, r) = self.udivmod(&ua, &ub);
+        let (nq, nr) = (self.neg(&q), self.neg(&r));
+        let sq = self.xor(sa, sb);
+        (self.muxv(sq, &q, &nq), self.muxv(sa, &r, &nr))
+    }
+
     /// shift-and-add array multiplier, truncated to the operand width
     pub fn mul(&mut self, a: &[Bit], b: &[Bit]) -> Vec<Bit> {
         let w = a.len().max(b.len());
@@ -298,8 +333,9 @@ pub fn bits_for(n: usize) -> usize {
     k
 }
 
-pub fn const_bits(v: u128, w: u32) -> Vec<Bit> {
-    (0..w).map(|i| Bit::of(i < 128 && (v >> i) & 1 == 1)).collect()
+pub fn const_bits(v: impl Into<crate::value::Bits>, w: u32) -> Vec<Bit> {
+    let v = v.into();
+    (0..w).map(|i| Bit::of(v.bit(i))).collect()
 }
 
 pub fn const_of(bits: &[Bit]) -> Option<u128> {

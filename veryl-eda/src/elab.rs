@@ -39,6 +39,7 @@ pub struct PkgDef {
 
 pub struct Lib<'a> {
     pub modules: HashMap<String, (&'a ModuleDeclaration, bool)>,
+    pub ifaces: HashMap<String, &'a InterfaceDeclaration>,
     pub order: Vec<(String, bool)>,
     pub pkgs: HashMap<String, PkgDef>,
     /// "Pkg::Enum::Member" and "Pkg::CONST" -> value
@@ -47,7 +48,7 @@ pub struct Lib<'a> {
 
 impl<'a> Lib<'a> {
     pub fn new() -> Self {
-        Lib { modules: HashMap::new(), order: vec![], pkgs: HashMap::new(), consts: HashMap::new() }
+        Lib { modules: HashMap::new(), ifaces: HashMap::new(), order: vec![], pkgs: HashMap::new(), consts: HashMap::new() }
     }
 
     pub fn add(&mut self, v: &'a Veryl) {
@@ -69,6 +70,10 @@ impl<'a> Lib<'a> {
                             self.modules.insert(name, (m, is_test));
                         }
                         PublicDescriptionItem::PackageDeclaration(z) => self.package(&z.package_declaration),
+                        PublicDescriptionItem::InterfaceDeclaration(z) => {
+                            let d = &z.interface_declaration;
+                            self.ifaces.insert(d.identifier.identifier_token.to_string(), d);
+                        }
                         _ => {}
                     }
                 }
@@ -126,7 +131,7 @@ impl<'a> Lib<'a> {
                     };
                     let mut next = 0u128;
                     for (m, ex) in members {
-                        let v = match ex { Some(t) => self.const_of(&sc, &t).map(|v| v.v).unwrap_or(next), None => next };
+                        let v = match ex { Some(t) => self.const_of(&sc, &t).map(|v| v.v.lo()).unwrap_or(next), None => next };
                         next = v + 1;
                         self.consts.insert(format!("{}::{}::{}", pname, ename, m), Val::new(w, v));
                     }
@@ -158,6 +163,57 @@ impl<'a> Lib<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// module / interface parameters: overrides, else the defaults
+    pub fn params(&self, sc: &mut Scope, wp: &WithParameter, ov: &HashMap<String, Val>) -> R<()> {
+        let mut items = vec![];
+        if let Some(o) = &wp.with_parameter_opt { wp_list(&o.with_parameter_list, &mut items); }
+        for it in items {
+            let name = it.identifier.identifier_token.to_string();
+            let mut val = match (ov.get(&name), &it.with_parameter_item_opt) {
+                (Some(v), _) => *v,
+                (None, Some(o)) => self.const_of(sc, &toks(|c| c.expression(&o.expression)))?,
+                _ => return Err(format!("parameter '{}' has no value", name)),
+            };
+            if let WithParameterItemGroup0::ArrayType(a) = &*it.with_parameter_item_group0 {
+                if let Ok(ty) = self.parse_type(sc, &toks(|c| c.array_type(&a.array_type))) { val = val.resize(ty.w); }
+            }
+            sc.consts.insert(name, val);
+        }
+        Ok(())
+    }
+
+    /// types of an interface's variables (with its default parameters)
+    pub fn iface_types(&self, iface: &str) -> R<HashMap<String, TypeInfo>> {
+        let d = *self.ifaces.get(iface).ok_or(format!("unknown interface '{}'", iface))?;
+        let mut sc = Scope::default();
+        if let Some(wp) = &d.interface_declaration_opt1 { self.params(&mut sc, &wp.with_parameter, &HashMap::new())?; }
+        let mut out = HashMap::new();
+        for it in Self::iface_items(d) {
+            match it {
+                GenerateItem::ConstDeclaration(x) => { let c = &x.const_declaration; if let Ok(v) = self.const_of(&sc, &toks(|k| k.expression(&c.expression))) { sc.consts.insert(c.identifier.identifier_token.to_string(), v); } }
+                GenerateItem::VarDeclaration(x) => {
+                    let v = &x.var_declaration;
+                    if let Some(o) = &v.var_declaration_opt { out.insert(v.identifier.identifier_token.to_string(), self.parse_type(&sc, &toks(|c| c.array_type(&o.array_type)))?); }
+                }
+                GenerateItem::LetDeclaration(x) => {
+                    let l = &x.let_declaration;
+                    if let Some(o) = &l.let_declaration_opt { out.insert(l.identifier.identifier_token.to_string(), self.parse_type(&sc, &toks(|c| c.array_type(&o.array_type)))?); }
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    /// the generate items of an interface (its modports left out)
+    pub fn iface_items(d: &'a InterfaceDeclaration) -> Vec<&'a GenerateItem> { veryl_sim::iface::items(d) }
+
+    /// members of modport `mp` of interface `iface` with their direction (seen from the module)
+    pub fn modport(&self, iface: &str, mp: &str) -> R<Vec<(String, Dir)>> {
+        let d = *self.ifaces.get(iface).ok_or(format!("unknown interface '{}'", iface))?;
+        Ok(veryl_sim::iface::modport(d, mp)?.into_iter().map(|(n, out)| (n, if out { Dir::Out } else { Dir::In })).collect())
     }
 
     // ---------------- name resolution / parsing ----------------
@@ -209,7 +265,7 @@ impl<'a> Lib<'a> {
             loop {
                 // `bin` (not `expr`) so the closing '>' is not taken as an operator
                 let e = p.bin(0)?;
-                w *= const_eval(&e)?.v.max(1);
+                w *= const_eval(&e)?.v.sat().max(1);
                 match p.peek() { Some(",") => p.i += 1, _ => break }
             }
             if p.peek() != Some(close) { return Err(format!("expected '{}' in type", close)); }
@@ -606,9 +662,9 @@ impl<'a> Lib<'a> {
                 let f = &x.for_statement;
                 if f.for_statement_opt0.is_some() { return Err("`for ... step` is not supported".into()); }
                 let var = f.identifier.identifier_token.to_string();
-                let from = self.const_of(sc, &toks(|k| k.expression(&f.range.expression)))?.v;
+                let from = self.const_of(sc, &toks(|k| k.expression(&f.range.expression)))?.v.sat();
                 let o = f.range.range_opt.as_ref().ok_or("for range needs `a..b`")?;
-                let to = self.const_of(sc, &toks(|k| k.expression(&o.expression)))?.v;
+                let to = self.const_of(sc, &toks(|k| k.expression(&o.expression)))?.v.sat();
                 let incl = toks(|k| k.range_operator(&o.range_operator)).join("") == "..=";
                 let end = if incl { to + 1 } else { to };
                 let mut idx: Vec<u128> = (from..end).collect();
@@ -760,24 +816,7 @@ impl<'l, 'a> Synth<'l, 'a> {
         let lib = self.lib();
         let mut sc = Scope { prefix: prefix.to_string(), ..Default::default() };
 
-        if let Some(wp) = &m.module_declaration_opt1 {
-            let mut items = vec![];
-            if let Some(o) = &wp.with_parameter.with_parameter_opt { wp_list(&o.with_parameter_list, &mut items); }
-            for it in items {
-                let name = it.identifier.identifier_token.to_string();
-                let mut val = match (ov.get(&name), &it.with_parameter_item_opt) {
-                    (Some(v), _) => *v,
-                    (None, Some(o)) => lib.const_of(&sc, &toks(|c| c.expression(&o.expression)))?,
-                    _ => return Err(format!("parameter '{}' has no value", name)),
-                };
-                if let WithParameterItemGroup0::ArrayType(a) = &*it.with_parameter_item_group0 {
-                    if let Ok(ty) = lib.parse_type(&sc, &toks(|c| c.array_type(&a.array_type))) {
-                        val = val.resize(ty.w);
-                    }
-                }
-                sc.consts.insert(name, val);
-            }
-        }
+        if let Some(wp) = &m.module_declaration_opt1 { lib.params(&mut sc, &wp.with_parameter, ov)?; }
 
         let mut port_items = vec![];
         if let Some(pd) = &m.module_declaration_opt2 {
@@ -786,13 +825,26 @@ impl<'l, 'a> Synth<'l, 'a> {
         for it in port_items {
             let name = it.identifier.identifier_token.to_string();
             let PortDeclarationItemGroup::PortTypeConcrete(pt) = &*it.port_declaration_item_group else {
-                return Err(format!("port '{}': interface/modport ports are not supported", name));
+                return Err(format!("port '{}': generic interface ports are not supported (name the modport)", name));
             };
             let pt = &pt.port_type_concrete;
             let dir = match &*pt.direction {
                 Direction::Input(_) => Dir::In,
                 Direction::Output(_) => Dir::Out,
-                _ => return Err(format!("port '{}': only input/output ports are supported", name)),
+                Direction::Modport(_) => {
+                    // `bus: modport Bus::master`: one port per member, `bus.member`
+                    let t = toks(|c| c.array_type(&pt.array_type));
+                    let (iface, mp) = match t.as_slice() { [i, c, m] if c == "::" => (i.clone(), m.clone()), _ => return Err(format!("port '{}': expected modport Interface::name", name)) };
+                    let types = lib.iface_types(&iface)?;
+                    for (member, d) in lib.modport(&iface, &mp)? {
+                        let ty = types.get(&member).cloned().ok_or_else(|| format!("modport {}::{}: no variable '{}'", iface, mp, member))?;
+                        let full = format!("{}.{}", name, member);
+                        self.declare(&mut sc, &full, ty);
+                        sc.ports.push((full, d));
+                    }
+                    continue;
+                }
+                _ => return Err(format!("port '{}': only input/output/modport ports are supported", name)),
             };
             let ty = lib.parse_type(&sc, &toks(|c| c.array_type(&pt.array_type))).map_err(|e| format!("port '{}': {}", name, e))?;
             self.declare(&mut sc, &name, ty);
@@ -917,15 +969,17 @@ impl<'l, 'a> Synth<'l, 'a> {
             GenerateItem::InstDeclaration(x) => self.instantiate(sc, &x.inst_declaration)?,
             GenerateItem::GenerateForDeclaration(x) => {
                 let g = &x.generate_for_declaration;
-                if g.generate_for_declaration_opt0.is_some() { return Err("generate `step` is not supported".into()); }
                 let var = g.identifier.identifier_token.to_string();
                 let label = g.generate_named_block.identifier.identifier_token.to_string();
-                let from = lib.const_of(sc, &toks(|k| k.expression(&g.range.expression)))?.v;
+                let from = lib.const_of(sc, &toks(|k| k.expression(&g.range.expression)))?.v.sat();
                 let o = g.range.range_opt.as_ref().ok_or("generate for needs `a..b`")?;
-                let to = lib.const_of(sc, &toks(|k| k.expression(&o.expression)))?.v;
-                let end = if toks(|k| k.range_operator(&o.range_operator)).join("") == "..=" { to + 1 } else { to };
-                let mut idx: Vec<u128> = (from..end).collect();
-                if g.generate_for_declaration_opt.is_some() { idx.reverse(); }
+                let to = lib.const_of(sc, &toks(|k| k.expression(&o.expression)))?.v.sat();
+                let incl = toks(|k| k.range_operator(&o.range_operator)).join("") == "..=";
+                let step = match &g.generate_for_declaration_opt0 {
+                    Some(st) => Some((toks(|k| k.assignment_operator(&st.assignment_operator)).join(""), lib.const_of(sc, &toks(|k| k.expression(&st.expression)))?.v.sat())),
+                    None => None,
+                };
+                let idx = veryl_sim::gen::for_indices(from, to, incl, g.generate_for_declaration_opt.is_some(), step.as_ref().map(|(o, k)| (o.as_str(), *k)))?;
                 let items = named_items(&g.generate_named_block);
                 for i in idx {
                     let mut inner = sc.clone();
@@ -973,6 +1027,24 @@ impl<'l, 'a> Synth<'l, 'a> {
         if kind.starts_with("$tb::") {
             return Err(format!("'{}' is a testbench component ({}); pick a design module with --top", iname, kind));
         }
+        if let Some(&d) = lib.ifaces.get(&kind) {
+            // an interface instance: its variables become `inst.member` signals here
+            self.insts.push((sc.qual(&iname), kind.clone()));
+            let mut ov = HashMap::new();
+            if let Some(p) = &ci.component_instantiation_opt1 {
+                let mut v = vec![];
+                if let Some(o) = &p.inst_parameter.inst_parameter_opt { ip_list(&o.inst_parameter_list, &mut v); }
+                for (n, e) in v { ov.insert(n.clone(), match e { Some(t) => lib.const_of(sc, &t)?, None => *sc.consts.get(&n).ok_or(format!("parameter '{}' not found", n))? }); }
+            }
+            let mut isc = Scope { prefix: sc.qual(&iname), ..Default::default() };
+            if let Some(wp) = &d.interface_declaration_opt1 { lib.params(&mut isc, &wp.with_parameter, &ov)?; }
+            let items = Lib::iface_items(d);
+            self.items(&mut isc, &items)?;
+            let mut names: Vec<String> = isc.sigs.keys().cloned().collect();
+            names.sort();
+            for n in names { let si = isc.sigs[&n].clone(); sc.sigs.insert(format!("{}.{}", iname, n), si); }
+            return Ok(());
+        }
         let child = lib.modules.get(&kind).ok_or(format!("unknown module '{}'", kind))?.0;
         self.insts.push((sc.qual(&iname), kind.clone()));
         let mut ov = HashMap::new();
@@ -994,11 +1066,14 @@ impl<'l, 'a> Synth<'l, 'a> {
         let csc = self.module(child, &sc.qual(&iname), &ov)?;
         for (pname, dir) in &csc.ports {
             let pbits = csc.sigs[pname].bits.clone();
-            let Some((_, expr)) = conns.iter().find(|(n, _)| n == pname) else {
+            // a modport member `bus.valid` connects through the connection of `bus`
+            let (base, member) = match pname.split_once('.') { Some((b, m)) => (b.to_string(), Some(m.to_string())), None => (pname.clone(), None) };
+            let Some((_, expr)) = conns.iter().find(|(n, _)| *n == base) else {
                 if *dir == Dir::In { self.warnings.push(format!("{}.{}: input port left unconnected", iname, pname)); }
                 continue;
             };
-            let t = expr.clone().unwrap_or_else(|| vec![pname.clone()]);
+            let mut t = expr.clone().unwrap_or_else(|| vec![base.clone()]);
+            if let Some(m) = member { t.push(".".into()); t.push(m); }
             let e = lib.parse(sc, &t)?;
             match dir {
                 Dir::In => {
@@ -1577,16 +1652,15 @@ impl<'l, 'a> Synth<'l, 'a> {
                     "+" => self.b.add(&av, &bv),
                     "-" => self.b.sub(&av, &bv),
                     "*" => self.b.mul(&av, &bv),
-                    "/" | "%" | "**" => {
+                    "/" | "%" => {
+                        let (q, r) = if sg { self.b.sdivmod(&av, &bv) } else { self.b.udivmod(&av, &bv) };
+                        if op == "/" { q } else { r }
+                    }
+                    "**" => {
                         let (Some(x), Some(y)) = (const_of(&av), const_of(&bv)) else {
-                            return Err(format!("operator '{}' is only synthesizable on constants", op));
+                            return Err("operator '**' is only synthesizable on constants".into());
                         };
-                        let r = match op {
-                            "/" => x.checked_div(y).ok_or("division by zero")?,
-                            "%" => x.checked_rem(y).ok_or("division by zero")?,
-                            _ => x.wrapping_pow(y as u32),
-                        };
-                        const_bits(r, w)
+                        const_bits(x.wrapping_pow(y as u32), w)
                     }
                     o => return Err(format!("operator '{}' not supported", o)),
                 })

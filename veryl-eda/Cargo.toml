@@ -6,3 +6,4 @@ description = "Veryl synthesis: Veryl -> gate-level netlist -> yosys JSON (yosys
 
 [dependencies]
 veryl-parser = "0.22"
+veryl-sim = { path = "../veryl-sim" }

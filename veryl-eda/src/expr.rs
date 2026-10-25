@@ -182,12 +182,14 @@ impl<'a> P<'a> {
             }
             _ => return Err(format!("unexpected token '{}' in expression", t)),
         };
-        // struct field access becomes a constant slice of the packed value
+        // struct field access becomes a constant slice of the packed value,
+        // interface member access the member's signal
         while self.peek() == Some(".") {
             let Expr::Sym(sig) = &e else { return Err("field access on a non-signal".into()) };
             self.i += 1;
             let fname = self.next().ok_or("expected field name after '.'")?;
-            let (lo, w) = (self.f)(sig, &fname).ok_or_else(|| format!("no field '{}' on '{}'", fname, sig))?;
+            // not a struct field: an interface member, the signal `sig.member`
+            let Some((lo, w)) = (self.f)(sig, &fname) else { e = Expr::Sym(format!("{}.{}", sig, fname)); continue };
             let num = |v: u32| Box::new(Expr::Num(Val::new(32, v as u128)));
             e = Expr::Slice(Box::new(e), num(lo + w - 1), num(lo), 0);
         }
@@ -247,21 +249,22 @@ pub fn parse_num(s: &str) -> Option<Expr> {
         let bits = match c.to_ascii_lowercase() { 'b' => 1, 'o' => 3, 'h' => 4, 'd' => 0, _ => return None };
         let digits: Vec<char> = r.collect();
         let w: u32 = if wpart.is_empty() { 32 } else { wpart.parse().ok()? };
-        let w = w.clamp(1, 128);
-        let (mut v, mut x) = (0u128, 0u128);
+        let w = w.clamp(1, MAXW);
+        let (mut v, mut x) = (Bits::ZERO, Bits::ZERO);
         if bits == 0 {
             if digits.len() == 1 && matches!(digits[0], 'x' | 'X' | 'z' | 'Z') {
                 x = mask(w);
             } else {
-                v = digits.iter().collect::<String>().parse().ok()?;
+                // decimal, any width: v = v * 10 + d
+                for d in digits { v = v.wrapping_mul(Bits::from_u128(10)).wrapping_add(Bits::from_u128(d.to_digit(10)? as u128)); }
             }
         } else {
             for d in digits {
-                v <<= bits;
-                x <<= bits;
+                v = v << bits;
+                x = x << bits;
                 match d {
-                    'x' | 'X' | 'z' | 'Z' | '?' => x |= (1u128 << bits) - 1,
-                    _ => v |= d.to_digit(1 << bits)? as u128,
+                    'x' | 'X' | 'z' | 'Z' | '?' => x = x | ((1u128 << bits) - 1),
+                    _ => v = v | d.to_digit(1 << bits)? as u128,
                 }
             }
         }

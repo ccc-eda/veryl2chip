@@ -62,6 +62,7 @@ pub struct ModInfo<'a> { pub decl: &'a ModuleDeclaration, pub is_test: bool }
 
 pub struct Elab<'a> {
     pub lib: HashMap<String, ModInfo<'a>>,
+    pub ifaces: HashMap<String, &'a InterfaceDeclaration>,
     pub pkgs: HashMap<String, PkgDef>,
     /// "Pkg::Enum::Member" -> value
     pub enum_vals: HashMap<String, Val>,
@@ -194,7 +195,7 @@ pub fn collect_packages(g: &DescriptionGroup, elab: &mut Elab) {
                     let v = match mex {
                         Some(x) => {
                             let t = toks(|c| c.expression(x));
-                            elab.const_in(&Scope::default(), &t).unwrap_or(Val::new(32, 0)).v
+                            elab.const_in(&Scope::default(), &t).unwrap_or(Val::new(32, 0)).v.lo()
                         }
                         None => next,
                     };
@@ -304,7 +305,7 @@ fn call_args(f: &FunctionCall) -> Vec<Vec<String>> {
 
 impl<'a> Elab<'a> {
     pub fn new(lib: HashMap<String, ModInfo<'a>>) -> Self {
-        Elab { lib, pkgs: HashMap::new(), enum_vals: HashMap::new(), tb_clk: HashMap::new(), sim: Sim::new(), procs: vec![], inits: vec![], watched: vec![] }
+        Elab { lib, ifaces: HashMap::new(), pkgs: HashMap::new(), enum_vals: HashMap::new(), tb_clk: HashMap::new(), sim: Sim::new(), procs: vec![], inits: vec![], watched: vec![] }
     }
 
     // ---------------- scope helpers ----------------
@@ -424,10 +425,10 @@ impl<'a> Elab<'a> {
                     let mut w = 1u128;
                     loop {
                         let e = p.expr()?;
-                        w *= Self::const_eval(&e).v.max(1);
+                        w *= Self::const_eval(&e).v.sat().max(1);
                         match p.peek() { Some(",") => p.i += 1, _ => break }
                     }
-                    info.w = w.clamp(1, 128) as u32;
+                    info.w = w.clamp(1, MAXW as u128) as u32;
                     i = p.i + if p.peek() == Some(">") { 1 } else { 0 };
                 } else { i += 1; }
             }
@@ -488,7 +489,7 @@ impl<'a> Elab<'a> {
             let mut p = P { t, i: i + 1, r: &r2, f: &|_, _| None };
             let cnt = p.expr()?;
             if p.peek() != Some("]") { return Err("expected ']' in array type".into()); }
-            info.arr = Some(Self::const_eval(&cnt).v as u32);
+            info.arr = Some(Self::const_eval(&cnt).v.sat() as u32);
         }
         Ok(info)
     }
@@ -498,26 +499,7 @@ impl<'a> Elab<'a> {
         let mut sc = Scope { prefix: prefix.to_string(), ..Default::default() };
 
         // parameters
-        if let Some(wp) = &m.module_declaration_opt1 {
-            let mut items = vec![];
-            if let Some(o) = &wp.with_parameter.with_parameter_opt { wp_list(&o.with_parameter_list, &mut items); }
-            for it in items {
-                let name = it.identifier.identifier_token.to_string();
-                let ty = match &*it.with_parameter_item_group0 {
-                    WithParameterItemGroup0::ArrayType(a) => {
-                        let t = toks(|c| c.array_type(&a.array_type));
-                        self.parse_type(&sc, &t).ok()
-                    }
-                    _ => None,
-                };
-                let mut val = if let Some(v) = ov.get(&name) { *v } else if let Some(o) = &it.with_parameter_item_opt {
-                    let t = toks(|c| c.expression(&o.expression));
-                    self.const_in(&sc, &t)?
-                } else { return Err(format!("parameter '{}' has no value", name)) };
-                if let Some(ty) = ty { val = val.resize(ty.w).signed(ty.signed); }
-                sc.params.insert(name, val);
-            }
-        }
+        if let Some(wp) = &m.module_declaration_opt1 { self.params(&mut sc, &wp.with_parameter, ov)?; }
 
         // ports
         let mut port_items = vec![];
@@ -527,13 +509,27 @@ impl<'a> Elab<'a> {
         for it in port_items {
             let name = it.identifier.identifier_token.to_string();
             let PortDeclarationItemGroup::PortTypeConcrete(pt) = &*it.port_declaration_item_group else {
-                return Err(format!("port '{}': interface/modport ports are not supported", name));
+                return Err(format!("port '{}': generic interface ports are not supported (name the modport)", name));
             };
             let pt = &pt.port_type_concrete;
             let dir = match &*pt.direction {
                 Direction::Input(_) => Dir::In,
                 Direction::Output(_) => Dir::Out,
                 Direction::Inout(_) => Dir::Inout,
+                Direction::Modport(_) => {
+                    // `bus: modport Bus::master`: one port per member, named `bus.member`
+                    let t = toks(|c| c.array_type(&pt.array_type));
+                    let (iname, mp) = match t.as_slice() { [i, c, m] if c == "::" => (i.clone(), m.clone()), _ => return Err(format!("port '{}': expected modport Interface::name", name)) };
+                    let d = *self.ifaces.get(&iname).ok_or(format!("unknown interface '{}'", iname))?;
+                    let types = self.iface_types(d)?;
+                    for (member, out) in crate::iface::modport(d, &mp)? {
+                        let ty = types.get(&member).cloned().ok_or_else(|| format!("modport {}::{}: no variable '{}'", iname, mp, member))?;
+                        let full = format!("{}.{}", name, member);
+                        let id = self.declare(&mut sc, &full, &ty);
+                        sc.ports.push((full, if out { Dir::Out } else { Dir::In }, id));
+                    }
+                    continue;
+                }
                 _ => return Err(format!("port '{}': unsupported direction", name)),
             };
             let t = toks(|c| c.array_type(&pt.array_type));
@@ -552,6 +548,53 @@ impl<'a> Elab<'a> {
         let cx = Cx { reset: None };
         for it in &items { self.pass2(&mut sc, it, &cx)?; }
         Ok(sc)
+    }
+
+    /// module / interface parameters: overrides, else the defaults
+    fn params(&mut self, sc: &mut Scope, wp: &WithParameter, ov: &HashMap<String, Val>) -> R<()> {
+        {
+            let mut items = vec![];
+            if let Some(o) = &wp.with_parameter_opt { wp_list(&o.with_parameter_list, &mut items); }
+            for it in items {
+                let name = it.identifier.identifier_token.to_string();
+                let ty = match &*it.with_parameter_item_group0 {
+                    WithParameterItemGroup0::ArrayType(a) => {
+                        let t = toks(|c| c.array_type(&a.array_type));
+                        self.parse_type(&sc, &t).ok()
+                    }
+                    _ => None,
+                };
+                let mut val = if let Some(v) = ov.get(&name) { *v } else if let Some(o) = &it.with_parameter_item_opt {
+                    let t = toks(|c| c.expression(&o.expression));
+                    self.const_in(&sc, &t)?
+                } else { return Err(format!("parameter '{}' has no value", name)) };
+                if let Some(ty) = ty { val = val.resize(ty.w).signed(ty.signed); }
+                sc.params.insert(name, val);
+            }
+        }
+        Ok(())
+    }
+
+    /// types of an interface's variables (with its default parameters)
+    fn iface_types(&mut self, d: &InterfaceDeclaration) -> R<HashMap<String, TypeInfo>> {
+        let mut sc = Scope::default();
+        if let Some(wp) = &d.interface_declaration_opt1 { self.params(&mut sc, &wp.with_parameter, &HashMap::new())?; }
+        let mut out = HashMap::new();
+        for it in crate::iface::items(d) {
+            match it {
+                GenerateItem::ConstDeclaration(x) => { let c = &x.const_declaration; if let Ok(v) = self.const_in(&sc, &toks(|k| k.expression(&c.expression))) { sc.params.insert(c.identifier.identifier_token.to_string(), v); } }
+                GenerateItem::VarDeclaration(x) => {
+                    let v = &x.var_declaration;
+                    if let Some(o) = &v.var_declaration_opt { out.insert(v.identifier.identifier_token.to_string(), self.parse_type(&sc, &toks(|c| c.array_type(&o.array_type)))?); }
+                }
+                GenerateItem::LetDeclaration(x) => {
+                    let l = &x.let_declaration;
+                    if let Some(o) = &l.let_declaration_opt { out.insert(l.identifier.identifier_token.to_string(), self.parse_type(&sc, &toks(|c| c.array_type(&o.array_type)))?); }
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
     }
 
     fn pass1(&mut self, sc: &mut Scope, it: &GenerateItem) -> R<()> {
@@ -604,7 +647,7 @@ impl<'a> Elab<'a> {
                             let mut v = vec![];
                             if let Some(o) = &p.inst_parameter.inst_parameter_opt { ip_list(&o.inst_parameter_list, &mut v); }
                             for (n, e) in v {
-                                if n == "PERIOD" { if let Some(e) = e { half = (self.const_in(sc, &e)?.v as u64 / 2).max(1); } }
+                                if n == "PERIOD" { if let Some(e) = e { half = (self.const_in(sc, &e)?.v.sat() as u64 / 2).max(1); } }
                             }
                         }
                         let ty = TypeInfo::scalar(1);
@@ -715,8 +758,6 @@ impl<'a> Elab<'a> {
     }
 
     fn gen_for(&mut self, sc: &mut Scope, g: &'a GenerateForDeclaration, cx: &Cx) -> R<()> {
-        if g.generate_for_declaration_opt.is_some() { return Err("`for ... in rev` generate is not supported".into()); }
-        if g.generate_for_declaration_opt0.is_some() { return Err("generate `step` is not supported".into()); }
         let var = g.identifier.identifier_token.to_string();
         let from = Self::const_eval(&self.parse_in(sc, &toks(|k| k.expression(&g.range.expression)))?);
         let o = g.range.range_opt.as_ref().ok_or("generate for needs `a..b`")?;
@@ -724,20 +765,19 @@ impl<'a> Elab<'a> {
         let incl = toks(|k| k.range_operator(&o.range_operator)).join("") == "..=";
         let mut items = vec![];
         collect_gen_items(&g.generate_named_block, &mut items);
-        let n_before = self.sim.sigs.len();
-        let mut i = from.v;
-        loop {
-            let hit_end = if incl { i > to.v } else { i >= to.v };
-            if hit_end { break; }
+        let step = match &g.generate_for_declaration_opt0 {
+            Some(s) => Some((toks(|k| k.assignment_operator(&s.assignment_operator)).join(""), Self::const_eval(&self.parse_in(sc, &toks(|k| k.expression(&s.expression)))?).v.sat())),
+            None => None,
+        };
+        let idx = crate::gen::for_indices(from.v.sat(), to.v.sat(), incl, g.generate_for_declaration_opt.is_some(), step.as_ref().map(|(o, k)| (o.as_str(), *k)))?;
+        for i in idx {
             let mut inner = Scope { prefix: sc.prefix.clone(), sigs: sc.sigs.clone(), params: sc.params.clone(), ports: vec![], imports: sc.imports.clone() };
             inner.params.insert(var.clone(), Val::new(32, i));
             for it in &items { self.pass1(&mut inner, it)?; }
             for it in &items { self.pass2(&mut inner, it, cx)?; }
             // merge any newly declared signals back
             for (k, v) in &inner.sigs { sc.sigs.entry(k.clone()).or_insert(*v); }
-            i += 1;
         }
-        let _ = n_before;
         Ok(())
     }
 
@@ -839,6 +879,24 @@ impl<'a> Elab<'a> {
         let iname = ci.identifier.identifier_token.to_string();
         let kind = toks(|c| c.scoped_identifier(&ci.scoped_identifier)).join("");
         if kind.starts_with("$tb::") { return Ok(()); }
+        if let Some(&d) = self.ifaces.get(&kind) {
+            // an interface instance: its variables become `inst.member` signals here
+            let mut ov = HashMap::new();
+            if let Some(p) = &ci.component_instantiation_opt1 {
+                let mut v = vec![];
+                if let Some(o) = &p.inst_parameter.inst_parameter_opt { ip_list(&o.inst_parameter_list, &mut v); }
+                for (n, e) in v { let val = match e { Some(t) => self.const_in(sc, &t)?, None => *sc.params.get(&n).ok_or(format!("parameter '{}' not found", n))? }; ov.insert(n, val); }
+            }
+            let prefix = if sc.prefix.is_empty() { iname.clone() } else { format!("{}.{}", sc.prefix, iname) };
+            let mut isc = Scope { prefix, ..Default::default() };
+            if let Some(wp) = &d.interface_declaration_opt1 { self.params(&mut isc, &wp.with_parameter, &ov)?; }
+            let items = crate::iface::items(d);
+            for it in &items { self.pass1(&mut isc, it)?; }
+            let cx = Cx { reset: None };
+            for it in &items { self.pass2(&mut isc, it, &cx)?; }
+            for (n, id) in &isc.sigs { sc.sigs.insert(format!("{}.{}", iname, n), *id); }
+            return Ok(());
+        }
         let child = self.lib.get(&kind).ok_or(format!("unknown module '{}'", kind))?.decl;
 
         let mut ov = HashMap::new();
@@ -860,8 +918,11 @@ impl<'a> Elab<'a> {
         let prefix = if sc.prefix.is_empty() { iname.clone() } else { format!("{}.{}", sc.prefix, iname) };
         let csc = self.elab_module(child, &prefix, &ov)?;
         for (pname, dir, psig) in &csc.ports {
-            let Some((_, expr)) = conns.iter().find(|(n, _)| n == pname) else { continue };
-            let t = expr.clone().unwrap_or_else(|| vec![pname.clone()]);
+            // a modport member `bus.valid` connects through the connection of `bus`
+            let (base, member) = match pname.split_once('.') { Some((b, m)) => (b.to_string(), Some(m.to_string())), None => (pname.clone(), None) };
+            let Some((_, expr)) = conns.iter().find(|(n, _)| *n == base) else { continue };
+            let mut t = expr.clone().unwrap_or_else(|| vec![base.clone()]);
+            if let Some(m) = member { t.push(".".into()); t.push(m); }
             let e = self.parse_in(sc, &t)?;
             match dir {
                 Dir::In => self.procs.push(Proc::Comb(vec![Stmt::Assign(LValue { sig: *psig, sel: Sel::All }, e)])),
