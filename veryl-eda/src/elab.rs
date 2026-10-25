@@ -1165,16 +1165,27 @@ impl<'l, 'a> Synth<'l, 'a> {
                 Stmt::Case { sel, arms, def } => {
                     let sv = self.eval(sc, env, sel, 0)?;
                     let mut conds = vec![];
+                    // distinct constant labels are mutually exclusive: parallel one-hot merge
+                    let mut labels: Vec<u128> = vec![];
+                    let mut exclusive = true;
                     for (items, body) in arms {
                         let mut hit = Bit::C0;
                         for it in items {
                             let h = match it {
-                                CaseItem::V(e) => { let v = self.eval(sc, env, e, 0)?; self.b.eq(&sv, &v) }
+                                CaseItem::V(e) => {
+                                    let v = self.eval(sc, env, e, 0)?;
+                                    match const_of(&v) {
+                                        Some(k) if !labels.contains(&k) => labels.push(k),
+                                        _ => exclusive = false,
+                                    }
+                                    self.b.eq(&sv, &v)
+                                }
                                 CaseItem::R(lo, hi, incl) => {
                                     let (l, h) = (self.eval(sc, env, lo, 0)?, self.eval(sc, env, hi, 0)?);
                                     let w = sv.len().max(l.len()).max(h.len());
                                     let ge = { let lt = self.b.ult(&pad(&sv, w), &pad(&l, w)); self.b.not(lt) };
                                     let below = if *incl { let gt = self.b.ult(&pad(&h, w), &pad(&sv, w)); self.b.not(gt) } else { self.b.ult(&pad(&sv, w), &pad(&h, w)) };
+                                    exclusive = false;
                                     self.b.and(ge, below)
                                 }
                             };
@@ -1182,7 +1193,7 @@ impl<'l, 'a> Synth<'l, 'a> {
                         }
                         conds.push((hit, body.as_slice()));
                     }
-                    self.exec_chain(sc, &conds, def, env)?;
+                    if exclusive { self.exec_onehot(sc, &conds, def, env)?; } else { self.exec_chain(sc, &conds, def, env)?; }
                 }
                 Stmt::Switch { arms, def } => {
                     let mut conds = vec![];
@@ -1231,6 +1242,42 @@ impl<'l, 'a> Synth<'l, 'a> {
             let f = f.cloned().unwrap_or(base);
             let m = self.b.muxv(*c, &f, &t);
             env.insert(k, m);
+        }
+        Ok(())
+    }
+
+    /// branches with mutually exclusive conditions: every result bit is
+    /// OR_i(hit_i & value_i) | (no hit & default), a balanced tree instead of
+    /// the priority mux chain of `exec_chain`
+    fn exec_onehot(&mut self, sc: &Scope, conds: &[(Bit, &[Stmt])], def: &[Stmt], env: &mut Env) -> R<()> {
+        let mut envs = vec![];
+        for (c, body) in conds {
+            if *c == Bit::C0 { continue; }
+            let mut e = env.clone();
+            self.exec(sc, body, &mut e)?;
+            envs.push((*c, e));
+        }
+        let hits: Vec<Bit> = envs.iter().map(|x| x.0).collect();
+        let any = self.b.reduce_or(&hits);
+        let none = self.b.not(any);
+        let mut ed = env.clone();
+        self.exec(sc, def, &mut ed)?;
+        envs.push((none, ed));
+        let mut keys: Vec<String> = envs.iter().flat_map(|(_, e)| e.keys().cloned()).collect();
+        keys.sort();
+        keys.dedup();
+        for k in keys {
+            if !env.contains_key(&k) && !sc.sigs.contains_key(&k) { continue; }
+            let base = self.cur(sc, env, &k)?;
+            let vals: Vec<Vec<Bit>> = envs.iter().map(|(_, e)| e.get(&k).cloned().unwrap_or_else(|| base.clone())).collect();
+            if vals.iter().all(|v| *v == base) { continue; }
+            let w = vals.iter().map(|v| v.len()).max().unwrap_or(0);
+            let mut out = vec![];
+            for i in 0..w {
+                let terms: Vec<Bit> = envs.iter().zip(&vals).map(|((h, _), v)| self.b.and(*h, at(v, i))).collect();
+                out.push(self.b.reduce_or(&terms));
+            }
+            env.insert(k, out);
         }
         Ok(())
     }

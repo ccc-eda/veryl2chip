@@ -20,13 +20,16 @@ cargo run --release -- [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.
 ```sh
 cd veryl-eda
 cargo test --release               # synthesizes examples/, runs their testbenches on the gate netlist
-./test.sh                          # + yosys read_json check + formal equivalence vs `veryl build` output
-cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--list] a.veryl ...
+./test.sh                          # + yosys read_json check + FPGA flow + formal equivalence vs `veryl build` output
+./fpga/flow.sh                     # RISC-V SoC -> iCE40 bitstream (nextpnr-ice40, icepack) + post-route simulation
+cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--ice40 [--pcf P] [--asc A] [--bin B]] a.veryl ...
 ```
 
 - veryl-eda default top: the last non-`#[test]` module (testbench modules are not synthesizable).
 - Equivalence checking needs the oss-cad-suite yosys with the slang plugin (`YOSYS_SLANG`, default `/Users/Shared/ccc/oss-cad-suite/bin/yosys`); Homebrew `yosys` cannot parse veryl's enum casts/functions. Gold modules are named `examples_<Module>`.
 - New synthesis test designs go in `veryl-eda/examples/` and the `DESIGNS` list in `veryl-eda/test.sh` (copied into the gold Veryl project, so module names must not clash with `examples/src`).
+- FPGA target: iCE40UP5K-SG48 with iCEBreaker pins (`veryl-eda/examples/icebreaker.pcf`); `RiscvSoc` (`veryl-eda/examples/soc.veryl`) wraps `RiscvCore` from `examples/src/rv32i.veryl` and needs both files. `fpga/flow.sh` checks the routed bitstream by converting it back with `icebox_vlog` (its output needs the perl fix-up in the script for iverilog).
+- The optimizer assumes flip-flops power up at 0 (true on iCE40); never-written registers become constants. Equivalence checks therefore use `-set-init-zero`.
 
 ## Veryl 0.22.0 quirks (verified against `veryl check`/`veryl test`)
 
@@ -42,7 +45,7 @@ Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracki
 
 ## Architecture (veryl-eda)
 
-Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax tree to a name-based statement IR and *symbolically executes* it into gates (if/case → mux, loops unrolled, functions inlined, always_ff → yosys `$_DFF_*`/`$_SDFF_*` cells). Every declared signal gets placeholder wires; drivers are recorded as aliases and resolved in `netlist::optimize`, which also rebuilds with constant folding/hashing, detects comb loops, and sweeps dead logic. Hierarchy is flattened (`inst.sig` net names). `output.rs` writes yosys JSON + structural Verilog; `netsim.rs` is a 2-state gate simulator for tests. Packed structs put the first field at the MSB (matches veryl's SV).
+Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax tree to a name-based statement IR and *symbolically executes* it into gates (if/case → mux, loops unrolled, functions inlined, always_ff → yosys `$_DFF_*`/`$_SDFF_*` cells). Every declared signal gets placeholder wires; drivers are recorded as aliases and resolved in `netlist::optimize`, which also rebuilds with constant folding/hashing, detects comb loops, and sweeps dead logic. Hierarchy is flattened (`inst.sig` net names). `optimize` also iterates constant-node proving (random sim + exhaustive check over ≤16-input supports) and removal of stuck-at-0 flip-flops. `ice40.rs` maps to SB_CARRY (recognized full-adder carries), SB_LUT4 (cut-based, depth-first) and SB_DFF*. `output.rs` writes yosys JSON + structural Verilog; `netsim.rs` is a 2-state gate simulator for tests (generic and iCE40 cells). Packed structs put the first field at the MSB (matches veryl's SV).
 
 ## Limits / gotchas
 

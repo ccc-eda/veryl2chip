@@ -1,0 +1,103 @@
+// ==========================================
+// FPGA 用的 RISC-V SoC：RiscvCore（examples/src/rv32i.veryl）
+// + 程式 ROM + 16 字資料 RAM + LED 暫存器（記憶體映射於 0x100）
+// 頂層只有 clock / reset / 8 顆 LED，可放進 iCE40UP5K（SG48）
+// ==========================================
+
+// 程式：用迴圈算 Fibonacci(10) = 55，寫到 RAM[0] 與 LED
+module ProgRom (
+    i_addr: input  logic<32>,
+    o_inst: output logic<32>,
+) {
+    always_comb {
+        case i_addr[7:0] {
+            8'h00  : o_inst = 32'h00000093; // addi x1, x0, 0      a = 0
+            8'h04  : o_inst = 32'h00100113; // addi x2, x0, 1      b = 1
+            8'h08  : o_inst = 32'h00a00213; // addi x4, x0, 10     n = 10
+            8'h0c  : o_inst = 32'h00000293; // addi x5, x0, 0      i = 0
+            8'h10  : o_inst = 32'h00428c63; // loop: beq x5, x4, done (+24)
+            8'h14  : o_inst = 32'h002081b3; // add  x3, x1, x2     t = a + b
+            8'h18  : o_inst = 32'h00010093; // addi x1, x2, 0      a = b
+            8'h1c  : o_inst = 32'h00018113; // addi x2, x3, 0      b = t
+            8'h20  : o_inst = 32'h00128293; // addi x5, x5, 1      i += 1
+            8'h24  : o_inst = 32'hfedff06f; // jal  x0, loop (-20)
+            8'h28  : o_inst = 32'h00102023; // done: sw x1, 0(x0)  RAM[0] = a
+            8'h2c  : o_inst = 32'h10102023; // sw   x1, 256(x0)    LED = a
+            8'h30  : o_inst = 32'h0000006f; // jal  x0, 0          halt
+            default: o_inst = 32'h00000013; // nop
+        }
+    }
+}
+
+module RiscvSoc (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    o_led: output logic<8>,
+) {
+    var imem_addr : logic<32>;
+    var imem_inst : logic<32>;
+    var dmem_addr : logic<32>;
+    var dmem_wdata: logic<32>;
+    var dmem_rdata: logic<32>;
+    var dmem_we   : logic;
+    var dmem      : logic<32> [16];
+    var led       : logic<8>;
+
+    // 0x000-0x03f: data RAM, 0x100: LED register
+    let is_led: logic = dmem_addr[8];
+
+    inst u_rom: ProgRom (
+        i_addr: imem_addr,
+        o_inst: imem_inst,
+    );
+
+    inst u_cpu: RiscvCore (
+        i_clk                    ,
+        i_rst                    ,
+        o_imem_addr : imem_addr  ,
+        i_imem_inst : imem_inst  ,
+        o_dmem_addr : dmem_addr  ,
+        o_dmem_wdata: dmem_wdata ,
+        i_dmem_rdata: dmem_rdata ,
+        o_dmem_we   : dmem_we    ,
+    );
+
+    #[allow(missing_reset_statement)]
+    always_ff (i_clk, i_rst) {
+        if_reset {
+        } else if dmem_we && !is_led {
+            dmem[dmem_addr[5:2]] = dmem_wdata;
+        }
+    }
+    assign dmem_rdata = dmem[dmem_addr[5:2]];
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            led = 8'd0;
+        } else if dmem_we && is_led {
+            led = dmem_wdata[7:0];
+        }
+    }
+    assign o_led = led;
+}
+
+#[test(test_riscv_soc)]
+module TestRiscvSoc {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var led: logic<8>;
+
+    inst dut: RiscvSoc (
+        i_clk: clk,
+        i_rst: rst,
+        o_led: led,
+    );
+
+    initial {
+        rst.assert();
+        clk.next(100);
+        $assert(led == 8'd55, "fib(10) = 55 on the LEDs");
+        $finish();
+    }
+}

@@ -1,0 +1,12 @@
+# iCEBreaker (iCE40UP5K-SG48): 12 MHz clock, user button (active low),
+# 8 LEDs on PMOD1A (e.g. the 8-LED PMOD). Adjust the pins for other boards.
+set_io i_clk    35
+set_io i_rst    10
+set_io o_led[0] 4
+set_io o_led[1] 2
+set_io o_led[2] 47
+set_io o_led[3] 45
+set_io o_led[4] 3
+set_io o_led[5] 48
+set_io o_led[6] 46
+set_io o_led[7] 44

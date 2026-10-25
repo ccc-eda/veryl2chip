@@ -30,12 +30,18 @@ impl<'n> NetSim<'n> {
         self.port(name).bits.iter().enumerate().fold(0, |acc, (i, b)| acc | ((self.get_bit(*b) as u128) << i))
     }
 
-    fn reset_of(c: &Cell) -> Option<(bool, bool, bool)> {
-        // (active-high, async, value)
+    /// (reset pin, active-high, async, value) of a flip-flop with reset/set
+    fn reset_of(c: &Cell) -> Option<(&'static str, bool, bool, bool)> {
         let t = c.typ.as_str();
+        if let Some(k) = t.strip_prefix("SB_DFF") {
+            // SB_DFF[N][S]{R,S}: iCE40 resets/sets are active-high
+            let k = k.trim_start_matches('N');
+            let (sync, k) = if k.len() == 2 { (true, &k[1..]) } else { (false, k) };
+            return match k { "R" => Some(("R", true, !sync, false)), "S" => Some(("S", true, !sync, true)), _ => None };
+        }
         c.port("R")?;
         let f: Vec<char> = t.trim_start_matches("$_").trim_start_matches('S').trim_start_matches("DFF_").chars().collect();
-        Some((f[1] == 'P', !t.starts_with("$_SDFF"), f[2] == '1'))
+        Some(("R", f[1] == 'P', !t.starts_with("$_SDFF"), f[2] == '1'))
     }
 
     /// evaluate combinational logic (cells are in topological order); async
@@ -51,14 +57,20 @@ impl<'n> NetSim<'n> {
                     "$_OR_" => g("A", self) | g("B", self),
                     "$_XOR_" => g("A", self) ^ g("B", self),
                     "$_MUX_" => if g("S", self) { g("B", self) } else { g("A", self) },
+                    "SB_CARRY" => { let (a, b, ci) = (g("I0", self), g("I1", self), g("CI", self)); (a & b) | ((a | b) & ci) }
+                    "SB_LUT4" => {
+                        let idx = ["I0", "I1", "I2", "I3"].iter().enumerate().fold(0, |a, (i, p)| a | ((g(p, self) as usize) << i));
+                        let init = &c.params.iter().find(|p| p.0 == "LUT_INIT").unwrap().1;
+                        init.as_bytes()[15 - idx] == b'1'
+                    }
                     t => panic!("unknown cell {}", t),
                 };
                 if let Bit::W(w) = c.out() { self.v.insert(w, y); }
             }
             let mut changed = false;
             for c in &self.nl.cells {
-                if let Some((hi, true, val)) = Self::reset_of(c) {
-                    if self.get_bit(c.port("R").unwrap()) == hi {
+                if let Some((pin, hi, true, val)) = Self::reset_of(c) {
+                    if self.get_bit(c.port(pin).unwrap()) == hi {
                         if let Bit::W(w) = c.out() { changed |= self.v.insert(w, val) != Some(val); }
                     }
                 }
@@ -72,8 +84,8 @@ impl<'n> NetSim<'n> {
         let mut next = vec![];
         for c in self.nl.cells.iter().filter(|c| c.is_ff()) {
             let mut d = self.get_bit(c.port("D").unwrap());
-            if let Some((hi, _, val)) = Self::reset_of(c) {
-                if self.get_bit(c.port("R").unwrap()) == hi { d = val; }
+            if let Some((pin, hi, _, val)) = Self::reset_of(c) {
+                if self.get_bit(c.port(pin).unwrap()) == hi { d = val; }
             }
             if let Bit::W(w) = c.out() { next.push((w, d)); }
         }

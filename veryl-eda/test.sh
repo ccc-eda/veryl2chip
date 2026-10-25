@@ -2,7 +2,9 @@
 # veryl-eda regression:
 #   1. cargo test: synthesize the examples, run their testbenches on the gate netlist
 #   2. synthesize every example design and load the JSON back into yosys (check -assert)
-#   3. formal equivalence against the SystemVerilog emitted by `veryl build`
+#   3. FPGA flow (fpga/flow.sh): iCE40 mapping, nextpnr, icepack, and the
+#      RISC-V SoC simulated from the mapped netlist and from the routed bitstream
+#   4. formal equivalence against the SystemVerilog emitted by `veryl build`
 #      (needs a yosys with the slang frontend, e.g. oss-cad-suite; set YOSYS_SLANG)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -20,15 +22,25 @@ BIN=$ROOT/target/release/veryl-eda
 # file:Module:mode   mode = comb (full proof) | ind (k-induction) | bmcN (N-cycle bounded check)
 DESIGNS="adder:Adder:comb max3:Max3:comb alu_pkg:AluUnit:comb gen_rev:BitRev:comb gen_rev:GrayConv:comb
 rv32i:Alu:comb seq101:Seq101:ind pkt_reg:PktReg:ind ram:Ram:bmc8 rv32i:RegFile:bmc2 rv32i:RiscvCore:bmc2
-features:Shifter:comb features:Funcs:comb features:Ranges:comb features:Counter:ind features:Top:bmc20"
+features:Shifter:comb features:Funcs:comb features:Ranges:comb features:Counter:ind features:Top:bmc20
+soc:ProgRom:comb soc:RiscvSoc:bmc80"
 src() { if [ -f "$EX/src/$1.veryl" ]; then echo "$EX/src/$1.veryl"; else echo "$ROOT/examples/$1.veryl"; fi; }
 
 echo "== synthesis (outputs in $OUT)"
 for d in $DESIGNS; do
     IFS=: read -r f m mode <<< "$d"
-    "$BIN" --top "$m" -o "$OUT/$m.json" --verilog "$OUT/$m.v" "$(src "$f")" | grep -E "^===|cells:" | tr '\n' ' '
+    files="$(src "$f")"
+    [ "$f" = soc ] && files="$EX/src/rv32i.veryl $files"
+    "$BIN" --top "$m" -o "$OUT/$m.json" --verilog "$OUT/$m.v" $files | grep -E "^===|cells:" | tr '\n' ' '
     "$YOSYS" -q -p "read_json $OUT/$m.json; check -assert" && echo "| yosys read_json ok"
 done
+
+if command -v nextpnr-ice40 > /dev/null && command -v icebox_vlog > /dev/null; then
+    echo "== FPGA flow (iCE40)"
+    ./fpga/flow.sh | grep -E "LC:|Max frequency|PASS|FAIL|bitstream"
+else
+    echo "== skipping FPGA flow: nextpnr-ice40 / icestorm not installed"
+fi
 
 if ! "$YOSYS_SLANG" -m slang -p "help read_slang" > /dev/null 2>&1; then
     echo "== skipping equivalence check: no yosys with slang at $YOSYS_SLANG"
@@ -48,8 +60,10 @@ for d in $DESIGNS; do
         ind)  prove="sat -verify -prove-asserts -set-init-zero -tempinduct -seq 1 miter" ;;
         bmc*) prove="sat -verify -prove-asserts -set-init-zero -seq ${mode#bmc} miter" ;;
     esac
+    gold="$OUT/gold/target/$f.sv"
+    [ "$f" = soc ] && gold="$OUT/gold/target/rv32i.sv $gold"
     cat > "$OUT/eq_$m.ys" <<EOF
-read_slang $OUT/gold/target/$f.sv --top examples_$m
+read_slang $gold --top examples_$m
 proc; flatten; memory; opt_clean; async2sync
 rename examples_$m gold
 design -stash gold

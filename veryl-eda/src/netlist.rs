@@ -23,13 +23,17 @@ impl Bit {
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub typ: String,
-    /// (port name, bit); the output port is "Y" (gates) or "Q" (flip-flops)
+    /// (port name, bit); the output port is "Y" (gates), "O" (LUTs) or "Q" (flip-flops)
     pub conns: Vec<(&'static str, Bit)>,
+    /// cell parameters as yosys JSON writes them (e.g. LUT_INIT, msb first)
+    pub params: Vec<(&'static str, String)>,
 }
+
+pub fn is_out(p: &str) -> bool { p == "Y" || p == "Q" || p == "O" || p == "CO" }
 
 impl Cell {
     pub fn out(&self) -> Bit {
-        self.conns.iter().find(|(p, _)| *p == "Y" || *p == "Q").map(|(_, b)| *b).unwrap()
+        self.conns.iter().find(|(p, _)| is_out(p)).map(|(_, b)| *b).unwrap()
     }
     pub fn is_ff(&self) -> bool { self.conns.iter().any(|(p, _)| *p == "Q") }
     pub fn port(&self, name: &str) -> Option<Bit> {
@@ -68,13 +72,13 @@ impl Builder {
         let y = self.wire();
         let mut conns = ins.to_vec();
         conns.push(("Y", y));
-        self.cells.push(Cell { typ: typ.to_string(), conns });
+        self.cells.push(Cell { typ: typ.to_string(), conns, params: vec![] });
         self.cache.insert((typ, key), y);
         y
     }
 
     pub fn ff(&mut self, typ: String, conns: Vec<(&'static str, Bit)>) {
-        self.cells.push(Cell { typ, conns });
+        self.cells.push(Cell { typ, conns, params: vec![] });
     }
 
     // ---------- single-bit gates (with constant folding) ----------
@@ -145,9 +149,17 @@ impl Builder {
     }
     pub fn notv(&mut self, a: &[Bit]) -> Vec<Bit> { a.iter().map(|x| self.not(*x)).collect() }
 
-    pub fn reduce_or(&mut self, a: &[Bit]) -> Bit { a.iter().fold(Bit::C0, |acc, x| self.or(acc, *x)) }
-    pub fn reduce_and(&mut self, a: &[Bit]) -> Bit { a.iter().fold(Bit::C1, |acc, x| self.and(acc, *x)) }
-    pub fn reduce_xor(&mut self, a: &[Bit]) -> Bit { a.iter().fold(Bit::C0, |acc, x| self.xor(acc, *x)) }
+    /// balanced reduction tree (log depth)
+    fn reduce(&mut self, a: &[Bit], unit: Bit, f: fn(&mut Self, Bit, Bit) -> Bit) -> Bit {
+        match a.len() {
+            0 => unit,
+            1 => a[0],
+            n => { let (l, r) = a.split_at(n / 2); let (x, y) = (self.reduce(l, unit, f), self.reduce(r, unit, f)); f(self, x, y) }
+        }
+    }
+    pub fn reduce_or(&mut self, a: &[Bit]) -> Bit { self.reduce(a, Bit::C0, Self::or) }
+    pub fn reduce_and(&mut self, a: &[Bit]) -> Bit { self.reduce(a, Bit::C1, Self::and) }
+    pub fn reduce_xor(&mut self, a: &[Bit]) -> Bit { self.reduce(a, Bit::C0, Self::xor) }
 
     /// ripple-carry adder over equal-width vectors; returns (sum, carry out)
     pub fn add_c(&mut self, a: &[Bit], b: &[Bit], cin: Bit) -> (Vec<Bit>, Bit) {
@@ -318,11 +330,36 @@ pub struct Netlist {
     pub cells: Vec<Cell>,
 }
 
-/// Rebuild the netlist after elaboration: resolve placeholder aliases,
-/// re-run constant folding / structural hashing over the whole design in
-/// topological order (detecting combinational loops), and drop logic that
-/// does not reach an output port.
+/// Optimize the netlist after elaboration: `rebuild` it, then replace
+/// flip-flops that can never leave their initial 0 (next state is their own
+/// output or 0, reset value 0) by the constant, and repeat until nothing changes.
 pub fn optimize(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: Vec<(String, Vec<Bit>)>, name: &str) -> R<Netlist> {
+    let mut nl = rebuild(b, alias, ports, nets, name)?;
+    loop {
+        let mut stuck: HashMap<u32, Bit> = HashMap::new();
+        nl.cells.retain(|c| {
+            let (q, d) = (c.out(), c.port("D"));
+            let zero_reset = c.port("R").is_none() || c.typ.ends_with("0_");
+            if c.is_ff() && zero_reset && (d == Some(q) || d == Some(Bit::C0)) {
+                if let Bit::W(w) = q { stuck.insert(w, Bit::C0); }
+                return false;
+            }
+            true
+        });
+        if stuck.is_empty() { stuck = const_nodes(&nl); }
+        if stuck.is_empty() { return Ok(nl); }
+        let mut b = Builder::new();
+        let all = nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()));
+        b.next_wire = all.filter_map(|x| if let Bit::W(w) = x { Some(w) } else { None }).max().unwrap_or(1) + 1;
+        b.cells = nl.cells;
+        nl = rebuild(b, &stuck, nl.ports, nl.nets, name)?;
+    }
+}
+
+/// Rebuild the netlist: resolve placeholder aliases, re-run constant folding /
+/// structural hashing over the whole design in topological order (detecting
+/// combinational loops), and drop logic that does not reach an output port.
+fn rebuild(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: Vec<(String, Vec<Bit>)>, name: &str) -> R<Netlist> {
     let resolve = |mut x: Bit| -> R<Bit> {
         let mut n = 0;
         while let Bit::W(w) = x {
@@ -400,7 +437,7 @@ pub fn optimize(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: V
         for (p, x) in &c.conns {
             conns.push((*p, if *p == "Q" { *x } else { map(*x, &mut nb, &mut memo)? }));
         }
-        ffs.push(Cell { typ: c.typ.clone(), conns });
+        ffs.push(Cell { typ: c.typ.clone(), conns, params: vec![] });
     }
     let mut nets2 = vec![];
     for (n, bits) in nets {
@@ -418,6 +455,93 @@ pub fn optimize(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: V
     Ok(Netlist { name: name.to_string(), ports: ports2, nets: nets2, cells })
 }
 
+/// Find combinational nodes that are constant although no local folding rule
+/// sees it (e.g. a register-file write enable decoded from a constant ROM):
+/// random simulation proposes candidates, which are then proven by
+/// exhaustive simulation over their input support (at most `MAXSUP` inputs;
+/// flip-flop outputs count as free inputs, which keeps this sound).
+fn const_nodes(nl: &Netlist) -> HashMap<u32, Bit> {
+    const MAXSUP: usize = 16;
+    let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
+    let idx: HashMap<u32, usize> = gates.iter().enumerate().filter_map(|(i, c)| if let Bit::W(w) = c.out() { Some((w, i)) } else { None }).collect();
+    let ins = |c: &Cell| -> Vec<Bit> { c.conns.iter().filter(|(p, _)| !is_out(p)).map(|x| x.1).collect() };
+    let eval = |c: &Cell, v: &dyn Fn(Bit) -> u64| -> u64 {
+        let g = |p: &str| v(c.port(p).unwrap());
+        match c.typ.as_str() {
+            "$_NOT_" => !g("A"),
+            "$_AND_" => g("A") & g("B"),
+            "$_OR_" => g("A") | g("B"),
+            "$_XOR_" => g("A") ^ g("B"),
+            _ => { let s = g("S"); (s & g("B")) | (!s & g("A")) }
+        }
+    };
+    // supports (None = too large)
+    let mut sup: Vec<Option<Vec<u32>>> = Vec::with_capacity(gates.len());
+    for c in &gates {
+        let mut s: Option<Vec<u32>> = Some(vec![]);
+        for b in ins(c) {
+            let Bit::W(w) = b else { continue };
+            let add: Option<Vec<u32>> = match idx.get(&w) { Some(&i) => sup[i].clone(), None => Some(vec![w]) };
+            s = match (s, add) {
+                (Some(mut a), Some(b)) => { for x in b { if !a.contains(&x) { a.push(x); } } if a.len() > MAXSUP { None } else { Some(a) } }
+                _ => None,
+            };
+        }
+        sup.push(s.map(|mut v| { v.sort(); v }));
+    }
+    // random simulation: 4 x 64 patterns
+    let mut seed = 0x9e3779b97f4a7c15u64;
+    let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+    let mut leaf: HashMap<u32, [u64; 4]> = HashMap::new();
+    let mut val: Vec<[u64; 4]> = vec![[0; 4]; gates.len()];
+    for (i, c) in gates.iter().enumerate() {
+        for b in ins(c) { if let Bit::W(w) = b { if !idx.contains_key(&w) { leaf.entry(w).or_insert_with(|| [rnd(), rnd(), rnd(), rnd()]); } } }
+        let mut r = [0u64; 4];
+        for k in 0..4 {
+            r[k] = eval(c, &|b| match b { Bit::C0 => 0, Bit::C1 => !0, Bit::W(w) => match idx.get(&w) { Some(&j) => val[j][k], None => leaf[&w][k] } });
+        }
+        val[i] = r;
+    }
+    // group the candidates by support and prove them exhaustively
+    let mut groups: HashMap<Vec<u32>, Vec<usize>> = HashMap::new();
+    for (i, v) in val.iter().enumerate() {
+        let c = v.iter().all(|x| *x == 0) || v.iter().all(|x| *x == !0);
+        if c { if let Some(s) = &sup[i] { groups.entry(s.clone()).or_default().push(i); } }
+    }
+    let mut out = HashMap::new();
+    for (s, cands) in groups {
+        let words = ((1usize << s.len()) / 64).max(1);
+        let npat = 1usize << s.len();
+        let var = |w: u32, k: usize| -> u64 {
+            let i = s.iter().position(|x| *x == w).unwrap();
+            (0..64).fold(0u64, |a, b| a | ((((k * 64 + b) >> i) & 1) as u64) << b)
+        };
+        // cone of the candidates, in topological order
+        let mut cone = std::collections::BTreeSet::new();
+        let mut work = cands.clone();
+        while let Some(i) = work.pop() {
+            if !cone.insert(i) { continue; }
+            for b in ins(gates[i]) { if let Bit::W(w) = b { if let Some(&j) = idx.get(&w) { work.push(j); } } }
+        }
+        let mut cv: HashMap<usize, Vec<u64>> = HashMap::new();
+        for &i in &cone {
+            let mut r = vec![0u64; words];
+            for k in 0..words {
+                r[k] = eval(gates[i], &|b| match b { Bit::C0 => 0, Bit::C1 => !0, Bit::W(w) => match idx.get(&w) { Some(j) => cv[j][k], None => var(w, k) } });
+            }
+            cv.insert(i, r);
+        }
+        let valid = if npat >= 64 { !0u64 } else { (1u64 << npat) - 1 };
+        for i in cands {
+            let r = &cv[&i];
+            let Bit::W(w) = gates[i].out() else { continue };
+            if r.iter().all(|x| x & valid == 0) { out.insert(w, Bit::C0); }
+            else if r.iter().all(|x| x & valid == valid) { out.insert(w, Bit::C1); }
+        }
+    }
+    out
+}
+
 /// Remove cells whose output reaches no output port (also dead registers).
 pub fn sweep(cells: &mut Vec<Cell>, roots: &[Bit]) {
     let mut live: HashSet<Bit> = roots.iter().copied().collect();
@@ -429,7 +553,7 @@ pub fn sweep(cells: &mut Vec<Cell>, roots: &[Bit]) {
             if keep[i] { continue; }
             keep[i] = true;
             for (p, y) in &cells[i].conns {
-                if *p != "Y" && *p != "Q" && y.is_const() == false && live.insert(*y) { work.push(*y); }
+                if !is_out(p) && !y.is_const() && live.insert(*y) { work.push(*y); }
             }
         }
     }
