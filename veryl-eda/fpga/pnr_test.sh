@@ -9,9 +9,15 @@ mkdir -p $B
 EX=../../examples/src
 (cd .. && cargo build --release -q)
 BIN=../target/release/veryl-eda
+CHIPDB=${VERYL_EDA_CHIPDB:-}
+for c in /usr/local/share/icebox/chipdb-5k.txt /usr/share/icebox/chipdb-5k.txt /Users/Shared/ccc/oss-cad-suite/share/icebox/chipdb-5k.txt "$HOME/oss-cad-suite/share/icebox/chipdb-5k.txt"; do
+    [ -z "$CHIPDB" ] && [ -f "$c" ] && CHIPDB=$c
+done
 # file:Module[:clock:reset:active]
 DESIGNS=${DESIGNS:-"adder:Adder max3:Max3 alu_pkg:AluUnit gen_rev:BitRev gen_rev:GrayConv
-seq101:Seq101:i_clk:i_rst:0 pkt_reg:PktReg:i_clk:i_rst:0 ram:Ram:i_clk:i_rst:0"}
+seq101:Seq101:i_clk:i_rst:0 pkt_reg:PktReg:i_clk:i_rst:0 ram:Ram:i_clk:i_rst:0
+features:Shifter features:Ranges features:Counter:i_clk:i_rst:1 features:Top:i_clk:i_rst:1
+pnr_tests:AccTest:i_clk:i_rst:0"}
 fail=0
 for d in $DESIGNS; do
     IFS=: read -r f m clk rst act <<< "$d"
@@ -21,7 +27,11 @@ for d in $DESIGNS; do
     args=()
     [ -n "${clk:-}" ] && args+=(--clock "$clk")
     [ -n "${rst:-}" ] && args+=(--reset "$rst:$act")
-    printf "%-10s %-40s " "$m" "$info"
+    fmax=""
+    if [ -n "$CHIPDB" ] && command -v icetime > /dev/null; then
+        fmax=$(icetime -C "$CHIPDB" -d up5k -P sg48 -p $B/$m.pcf -t $B/$m.asc 2>/dev/null | sed -n 's/^Total path delay: .*(\(.*\) MHz)/\1 MHz/p')
+    fi
+    printf "%-10s %-38s %-11s " "$m" "$info" "$fmax"
     if res=$(python3 cosim.py $B/$m.json $B/$m.v $B/$m.asc $B/$m.pcf ${args[@]+"${args[@]}"} --cycles 1000 2>&1 | tail -1) && [[ $res == PASS* ]]; then
         echo "$res"
     else

@@ -1,0 +1,80 @@
+// Place-and-route stress designs with few pins (they must fit the 39 IOs
+// of the SG48 package): long carry chains crossing tiles, carry-in from a
+// signal (feed-in), carry-out used as logic (feed-out, comparators).
+
+module AccTest (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    i_d  : input  logic<8>,
+    i_ci : input  logic,
+    i_sel: input  logic<2>,
+    o_q  : output logic<8>,
+    o_lt : output logic,
+    o_ltu: output logic,
+    o_eq : output logic,
+) {
+    var acc: logic<32>;
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            acc = 32'd0;
+        } else {
+            case i_sel {
+                2'd0   : acc = acc + {i_d repeat 4} + {31'd0, i_ci};
+                2'd1   : acc = acc - {24'd0, i_d};
+                2'd2   : acc = acc ^ (acc << 3) ^ {24'd0, i_d};
+                default: acc = acc + 32'd1;
+            }
+        }
+    }
+
+    assign o_q   = acc[31:24] ^ acc[23:16] ^ acc[15:8] ^ acc[7:0];
+    assign o_lt  = $signed(acc) <: $signed({i_d repeat 4});
+    assign o_ltu = acc <: {i_d repeat 4};
+    assign o_eq  = acc[15:0] == {i_d, i_d};
+}
+
+#[test(test_acc)]
+module TestAccTest {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var d  : logic<8>;
+    var ci : logic;
+    var sel: logic<2>;
+    var q  : logic<8>;
+    var lt : logic;
+    var ltu: logic;
+    var eq : logic;
+
+    inst u: AccTest (
+        i_clk: clk,
+        i_rst: rst,
+        i_d  : d  ,
+        i_ci : ci ,
+        i_sel: sel,
+        o_q  : q  ,
+        o_lt : lt ,
+        o_ltu: ltu,
+        o_eq : eq ,
+    );
+
+    initial {
+        d   = 8'h01;
+        ci  = 1'b1;
+        sel = 2'd0;
+        rst.assert();
+        clk.next(1);
+        // acc = 0x01010101 + 1 = 0x01010102
+        $assert(q == 8'h03, "xor of bytes 01^01^01^02");
+        sel = 2'd1;
+        d   = 8'h03;
+        clk.next(1);
+        // acc = 0x010100ff
+        $assert(q == 8'hff, "after subtract");
+        $assert(ltu == 1'b1, "0x010100ff < 0x03030303 unsigned");
+        $assert(lt == 1'b1, "0x010100ff < 0x03030303 signed");
+        $assert(eq == 1'b0, "low half differs");
+        $finish();
+    }
+}
