@@ -84,7 +84,7 @@ fn asic(v: &Value) -> R<Value> {
                 "segs": r.segs.iter().flat_map(|s| [s.0, s.1, s.2, s.3]).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         },
-        "timing": { "period": tm.period, "fmax": tm.fmax, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>() },
+        "timing": { "period": tm.period, "fmax": tm.fmax, "fmax_wl": o.fmax_wl, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>() },
         "verilog": verilog,
         "def": asic::def(&o),
     }))
@@ -98,7 +98,8 @@ fn pnr(v: &Value) -> R<Value> {
     CHIP.with(|c| -> R<Value> {
         let cb = c.borrow();
         let chip = cb.as_ref().ok_or("chip database not loaded")?;
-        let opts = veryl_eda::pnr::Opts { chipdb: None, package: "sg48".into(), pcf, seed, verbose: false };
+        let timing_driven = v.get("timing_driven").and_then(|t| t.as_bool()).unwrap_or(true);
+        let opts = veryl_eda::pnr::Opts { chipdb: None, package: "sg48".into(), pcf, seed, verbose: false, timing_driven };
         let out = veryl_eda::pnr::place_and_route_on(chip, &mapped, &opts)?;
         let names = |b: Option<Bit>| -> String {
             match b {
@@ -191,6 +192,7 @@ fn pnr(v: &Value) -> R<Value> {
                 "period": out.timing.period, "fmax": out.timing.fmax, "endpoints": out.timing.endpoints,
                 "path": out.timing.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>(),
                 "crit_lcs": out.timing.crit_lcs,
+                "fmax_wl": out.fmax_wl,
             },
             "pips": out.wires,
             "bin": base64(&veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?),

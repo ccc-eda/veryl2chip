@@ -6,7 +6,7 @@ use veryl_parser::Parser;
 fn usage() -> ! {
     eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
-    eprintln!("                  [--pnr nextpnr|veryl] [--seed N]]");
+    eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven]]");
     eprintln!("                 [--asic [--seed N] [-v]]");
     eprintln!("                 FILE.veryl...");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
@@ -23,6 +23,7 @@ fn main() {
     let (mut device, mut package) = ("up5k".to_string(), "sg48".to_string());
     let (mut pnr_tool, mut seed, mut verbose) = ("nextpnr".to_string(), 1u64, false);
     let mut asic_flow = false;
+    let mut timing_driven = true;
     let mut files = vec![];
     let mut a = std::env::args().skip(1);
     while let Some(x) = a.next() {
@@ -33,6 +34,7 @@ fn main() {
             "--list" => list = true,
             "--ice40" => ice40 = true,
             "--asic" => asic_flow = true,
+            "--no-timing-driven" => timing_driven = false,
             "--pcf" => pcf = a.next(),
             "--asc" => asc = a.next(),
             "--bin" => bin = a.next(),
@@ -92,7 +94,7 @@ fn main() {
         let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
         println!("asic: area {:.1} µm² (cells), die {:.1} × {:.1} µm, {} rows, utilization {:.0}%", o.area, pl.w, pl.h, pl.rows, pl.util * 100.0);
         println!("asic: wirelength {:.0} µm, {} vias, overflow {} after {} routing iterations", rt.wirelength, rt.vias, rt.overflow, rt.iters.len());
-        println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints)", tm.period, tm.fmax, tm.endpoints);
+        println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints; wirelength-only placement {:.1} MHz)", tm.period, tm.fmax, tm.endpoints, o.fmax_wl);
         if verbose { for s in &tm.path { println!("  {:8.3} {:+7.3}  {}", s.at, s.delay, s.what); } }
     }
 
@@ -113,10 +115,11 @@ fn main() {
                 None => Default::default(),
             };
             let t0 = std::time::Instant::now();
-            let opts = pnr::Opts { chipdb: None, package: package.clone(), pcf: pcf_map, seed, verbose };
+            let opts = pnr::Opts { chipdb: None, package: package.clone(), pcf: pcf_map, seed, verbose, timing_driven };
             let out = pnr::place_and_route(&nl, &opts).unwrap_or_else(|e| { eprintln!("place & route error: {}", e); std::process::exit(1) });
             println!("  veryl pnr: {} LCs, {} routing pips, {:.1}s", out.lcs, out.wires, t0.elapsed().as_secs_f64());
-            println!("  timing: critical path {:.2} ns, Fmax {:.2} MHz", out.timing.period, out.timing.fmax);
+            println!("  timing: critical path {:.2} ns, Fmax {:.2} MHz{}", out.timing.period, out.timing.fmax,
+                out.fmax_wl.map(|f| format!(" (wirelength-only pass {:.2} MHz)", f)).unwrap_or_default());
             if verbose { for st in &out.timing.path { println!("    {:7.3} {:6.3}  {}", st.at, st.delay, st.what); } }
             std::fs::write(&asc_path, &out.asc).unwrap();
             std::fs::write(asc_path.with_extension("pcf"), &out.pcf).unwrap();

@@ -79,6 +79,8 @@ pub struct Timing {
     /// worst arrival at each LC output (ns)
     pub lc_arrival: Vec<f64>,
     pub endpoints: usize,
+    /// per routed net: longest path through it / critical path (0..1)
+    pub net_crit: Vec<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -288,5 +290,86 @@ pub fn analyze(chip: &Chip, p: &Packed, pl: &Placement, nets: &[RNet], routes: &
     let mut at = 0.0;
     for s in rev.iter_mut() { at += s.delay; s.at = at; }
     let period = worst.0.max(0.001);
-    Timing { period, fmax: 1000.0 / period, path: rev, crit_lcs, crit_pips, lc_arrival: out_arr.iter().map(|x| if x.is_nan() { 0.0 } else { *x }).collect(), endpoints }
+    // ---- criticality: the longest path through each net, from the arrival
+    // at its source and the longest delay after each sink (backward pass) ----
+    let mut net_of_lc: Vec<Option<usize>> = vec![None; n];
+    for (ni, e) in net_src.iter().enumerate() { if let Ep::LcOut(j) = e { net_of_lc[*j] = Some(ni); } }
+    let mut chain_next: Vec<Option<usize>> = vec![None; n];
+    for ch in &p.chains { for w in ch.lcs.windows(2) { chain_next[w[0]] = Some(w[1]); } }
+    let mut tail_out: Vec<f64> = vec![f64::NAN; n];
+    let mut tail_cout: Vec<f64> = vec![f64::NAN; n];
+    // iterative post-order over the LC graph (sink LCs before their drivers)
+    let sink_ep = |s: u32| eps.get(&s).copied();
+    // 0 = new, 1 = on the stack, 2 = done (a loop through flip-flops is cut where it closes)
+    let mut state = vec![0u8; n];
+    for start in 0..n {
+        if state[start] != 0 { continue; }
+        let mut stack = vec![(start, false)];
+        while let Some((l, done)) = stack.pop() {
+            if state[l] == 2 || (state[l] == 1 && !done) { continue; }
+            // LCs whose tails this one needs: combinational loads and the next chain LC
+            let mut deps = vec![];
+            if let Some(ni) = net_of_lc[l] {
+                for &s in &nets[ni].sinks { if let Some(Ep::LcIn(j, _)) = sink_ep(s) { if p.lcs[j].ff.is_none() || p.lcs[j].carry { deps.push(j); } } }
+            }
+            if let Some(nx) = chain_next[l] { deps.push(nx); }
+            if !done {
+                state[l] = 1;
+                stack.push((l, true));
+                for d in deps { if state[d] == 0 { stack.push((d, false)); } }
+                continue;
+            }
+            state[l] = 2;
+            let t = |x: f64| if x.is_nan() { 0.0 } else { x };
+            // carry-out: on to the next LC's carry-out, or its LUT through in_3
+            let mut tc = 0.0f64;
+            if let Some(nx) = chain_next[l] {
+                tc = tc.max(CARRY_CIN + t(tail_cout[nx]));
+                if p.lcs[nx].in3_chain && p.lcs[nx].ff.is_none() { tc = tc.max(LUT[3] + t(tail_out[nx])); }
+                if p.lcs[nx].in3_chain && p.lcs[nx].ff.is_some() { tc = tc.max(SETUP[3]); }
+            }
+            tail_cout[l] = tc;
+            let mut to = 0.0f64;
+            if let Some(ni) = net_of_lc[l] {
+                for &s in &nets[ni].sinks {
+                    let d = sink_route.get(&s).map(|x| x.1).unwrap_or(0.0);
+                    let after = match sink_ep(s) {
+                        Some(Ep::LcIn(j, k)) => {
+                            let lc = &p.lcs[j];
+                            let mut a = if lc.ff.is_some() { SETUP[k as usize] } else { LUT[k as usize] + t(tail_out[j]) };
+                            if lc.carry && (k == 1 || k == 2) { a = a.max(if k == 1 { CARRY_IN1 } else { CARRY_IN2 } + t(tail_cout[j])); }
+                            a
+                        }
+                        Some(Ep::IoOut(_)) => IO_OUT,
+                        Some(Ep::RamIn(_, su)) => su,
+                        _ => 0.0,
+                    };
+                    to = to.max(d + after);
+                }
+            }
+            tail_out[l] = to;
+        }
+    }
+    let net_crit: Vec<f32> = nets.iter().enumerate().map(|(ni, net)| {
+        if net.global.is_some() { return 0.0; }
+        let src = src_arr(ni, &out_arr);
+        let mut worst = 0.0f64;
+        for &s in &net.sinks {
+            let d = sink_route.get(&s).map(|x| x.1).unwrap_or(0.0);
+            let after = match sink_ep(s) {
+                Some(Ep::LcIn(j, k)) => {
+                    let lc = &p.lcs[j];
+                    let mut a = if lc.ff.is_some() { SETUP[k as usize] } else { LUT[k as usize] + if tail_out[j].is_nan() { 0.0 } else { tail_out[j] } };
+                    if lc.carry && (k == 1 || k == 2) { a = a.max(if k == 1 { CARRY_IN1 } else { CARRY_IN2 } + if tail_cout[j].is_nan() { 0.0 } else { tail_cout[j] }); }
+                    a
+                }
+                Some(Ep::IoOut(_)) => IO_OUT,
+                Some(Ep::RamIn(_, su)) => su,
+                _ => 0.0,
+            };
+            worst = worst.max(src + d + after);
+        }
+        (worst / period).min(1.0) as f32
+    }).collect();
+    Timing { period, fmax: 1000.0 / period, path: rev, crit_lcs, crit_pips, lc_arrival: out_arr.iter().map(|x| if x.is_nan() { 0.0 } else { *x }).collect(), endpoints, net_crit }
 }

@@ -383,6 +383,7 @@ export class SynthOverlay {
       '延遲取自 IceStorm timings_up5k（慢速角）：LC in→out、carry、clk→Q、setup，每段繞線依所驅動的線種類計 mux 延遲；clock 視為理想（全域網路）。',
       '',
       `關鍵路徑 ${t.period.toFixed(2)} ns → Fmax ${t.fmax.toFixed(2)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，LC 顏色＝到達時間（綠早紅晚）`,
+      ...(t.fmax_wl ? [`時序導向：第一輪只看線長 ${t.fmax_wl.toFixed(2)} MHz；再以每條 net 的關鍵度（經過它的最長路徑 / 關鍵路徑）加權重新佈局，繞線時關鍵 net 優先走快的線 → ${t.fmax.toFixed(2)} MHz（取較快的一輪）`] : []),
     ];
   }
 
@@ -502,6 +503,7 @@ export class SynthOverlay {
       '元件延遲 = 本徵延遲 + 每扇出負載 × 扇出；線延遲 = 驅動整條繞線的電容 + 到該負載的分佈 RC（依曼哈頓距離）。路徑起點為輸入腳與 DFF（clk→Q），終點為 DFF D（加 setup）與輸出腳；clock 視為理想。',
       '',
       `關鍵路徑 ${t.period.toFixed(3)} ns → Fmax ${t.fmax.toFixed(1)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，元件顏色＝到達時間（綠早紅晚）`,
+      `時序導向：只看線長的佈局 ${t.fmax_wl.toFixed(1)} MHz；以 net 關鍵度加權後再退火（微調 + 小設計重新退火，只取繞得通的）→ ${t.fmax.toFixed(1)} MHz`,
     ];
   }
 

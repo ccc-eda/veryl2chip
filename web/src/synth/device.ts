@@ -20,7 +20,7 @@ export interface PnrResult {
   nets: { name: string; global: boolean; sinks: number; pips: number; segs: [number, number, number, number, string, boolean][] }[];
   route_iters: number[];
   globals: { net: string; glb: number }[];
-  timing: { period: number; fmax: number; endpoints: number; path: { what: string; delay: number; at: number }[]; crit_lcs: number[] };
+  timing: { period: number; fmax: number; endpoints: number; path: { what: string; delay: number; at: number }[]; crit_lcs: number[]; fmax_wl: number | null };
   pips: number;
   /** bitstream (base64), byte-identical to icepack's */
   bin: string;

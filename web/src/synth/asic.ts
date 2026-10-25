@@ -19,7 +19,7 @@ export interface AsicResult {
     gx: number; gy: number; cap: number; iters: number[]; wirelength: number; vias: number; overflow: number;
     nets: { name: string; clock: boolean; len: number; vias: number; crit: boolean; segs: number[] }[];
   };
-  timing: { period: number; fmax: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
+  timing: { period: number; fmax: number; fmax_wl: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
   verilog: string;
   def: string;
 }

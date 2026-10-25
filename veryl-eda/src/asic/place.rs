@@ -59,7 +59,10 @@ pub fn special_nets(nl: &Netlist) -> std::collections::HashSet<Bit> {
     nl.cells.iter().filter(|c| c.is_ff()).flat_map(|c| c.conns.iter().filter(|(p, _)| matches!(*p, "CK" | "RN" | "SN")).map(|x| x.1)).collect()
 }
 
-pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
+/// `weights`: per net, a factor on its wirelength (timing-driven placement;
+/// empty = all 1). `start`: refine this placement (of the same netlist) at a
+/// low temperature with short moves instead of annealing from scratch.
+pub fn place(nl: &Netlist, seed: u64, weights: &HashMap<Bit, f64>, start: Option<&[(u32, u32)]>) -> RowPlacement {
     let n = nl.cells.len();
     let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
     let widths: Vec<u32> = dims.iter().map(|d| d.0).collect();
@@ -171,13 +174,22 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
         }
     }
 
+    if let Some(st) = start {
+        for row in occ.iter_mut() { for o in row.iter_mut() { if *o >= 0 && !fixed[*o as usize] { *o = -1; } } }
+        for &c in &order {
+            let (r, x) = st[c];
+            pos[c] = (r, x);
+            for t in x..x + widths[c] { occ[r as usize][t as usize] = c as i32; }
+        }
+    }
+
     // ---- annealing ----
     let cx = |c: usize, pos: &Vec<(u32, u32)>| ((pos[c].1 as f64 + widths[c] as f64 / 2.0) * SITE_W, (pos[c].0 as f64 + heights[c] as f64 / 2.0) * ROW_H);
     let hpwl = |k: usize, pos: &Vec<(u32, u32)>| -> f64 {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for &c in &pnets[k].cells { let (x, y) = cx(c, pos); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
         for &p in &pnets[k].pins { let (x, y) = (pins[p].x, pins[p].y); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
-        (x1 - x0) + (y1 - y0)
+        ((x1 - x0) + (y1 - y0)) * weights.get(&pnets[k].bit).copied().unwrap_or(1.0)
     };
     let mut ncost: Vec<f64> = (0..pnets.len()).map(|k| hpwl(k, &pos)).collect();
     let mut cost: f64 = ncost.iter().sum();
@@ -194,6 +206,7 @@ pub fn place(nl: &Netlist, seed: u64) -> RowPlacement {
         (d.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / d.len() as f64).sqrt().max(1.0)
     };
     let mut rlim = (rows.max(sites / 8)) as f64;
+    if start.is_some() { temp *= 0.02; rlim = 2.0; }
     let moves = (n * 12).max(2000);
     let free_run = |occ: &Vec<Vec<i32>>, r: u32, x: u32, w: u32, ignore: &[i32]| -> bool {
         x + w <= sites && (x..x + w).all(|s| { let o = occ[r as usize][s as usize]; o < 0 || ignore.contains(&o) })

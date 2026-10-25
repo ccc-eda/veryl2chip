@@ -18,6 +18,8 @@ pub struct Output {
     pub area: f64,
     /// (cell type, count), largest count first
     pub counts: Vec<(String, usize)>,
+    /// Fmax of the wirelength-only placement (before the timing-driven pass)
+    pub fmax_wl: f64,
 }
 
 pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> {
@@ -26,18 +28,36 @@ pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> {
     let mapped = map::map(opt)?;
     t("map", t0);
     let t0 = now();
-    let placement = place::place(&mapped, seed);
+    let mut placement = place::place(&mapped, seed, &Default::default(), None);
     t("place", t0);
     let t0 = now();
-    let routing = route::route(&mapped, &placement);
+    let mut routing = route::route(&mapped, &placement);
     t("route", t0);
-    let timing = sta::analyze(&mapped, &placement, &routing);
+    let mut timing = sta::analyze(&mapped, &placement, &routing);
+    // timing-driven pass: nets weighted by their criticality; keep the faster result
+    let fmax_wl = timing.fmax;
+    let weights = timing_weights(&mapped, &timing.net_crit);
+    // a refinement of the first placement always; a fresh weighted anneal for
+    // smaller designs as well (on large ones it tends to congest the routing)
+    let mut tries = vec![Some(placement.pos.clone())];
+    if mapped.cells.len() < 4000 { tries.push(None); }
+    for start in tries {
+        let t0 = now();
+        let p2 = place::place(&mapped, seed, &weights, start.as_deref());
+        t("place (timing-driven)", t0);
+        let t0 = now();
+        let r2 = route::route(&mapped, &p2);
+        t("route (timing-driven)", t0);
+        let t2 = sta::analyze(&mapped, &p2, &r2);
+        // only a routable result counts
+        if r2.overflow == 0 && t2.fmax > timing.fmax { placement = p2; routing = r2; timing = t2; }
+    }
     let area = mapped.cells.iter().map(lib::cell_area).sum();
     let mut m: std::collections::BTreeMap<String, usize> = Default::default();
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,4 +87,13 @@ pub fn def(o: &Output) -> String {
     }
     writeln!(s, "END PINS\nEND DESIGN").unwrap();
     s
+}
+
+/// net weights for timing-driven placement: only near-critical nets get
+/// heavier, and less so the more loads they have (a heavy high-fanout net
+/// would pull a whole region together and congest it)
+pub fn timing_weights(nl: &Netlist, crit: &std::collections::HashMap<crate::netlist::Bit, f32>) -> std::collections::HashMap<crate::netlist::Bit, f64> {
+    let mut fanout: std::collections::HashMap<crate::netlist::Bit, usize> = Default::default();
+    for c in &nl.cells { for (p, b) in &c.conns { if !crate::netlist::is_out(p) { *fanout.entry(*b).or_default() += 1; } } }
+    crit.iter().map(|(b, c)| (*b, 1.0 + 6.0 * (*c as f64).powi(8) / (fanout.get(b).copied().unwrap_or(1).max(1) as f64).sqrt())).collect()
 }

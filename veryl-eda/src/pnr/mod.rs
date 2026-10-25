@@ -22,6 +22,8 @@ pub struct Opts {
     pub pcf: HashMap<String, String>,
     pub seed: u64,
     pub verbose: bool,
+    /// second, timing-driven placement and routing pass
+    pub timing_driven: bool,
 }
 
 pub struct Output {
@@ -41,6 +43,8 @@ pub struct Output {
     pub timing: sta::Timing,
     /// global networks used: (net name, network number)
     pub globals: Vec<(String, u8)>,
+    /// Fmax of the wirelength-only pass (when the timing-driven pass ran)
+    pub fmax_wl: Option<f64>,
 }
 
 /// LUT_INIT bit k sits at LC config bit LUT_PERM[k]; 8 = carry enable,
@@ -150,85 +154,118 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
     }
     let globals: Vec<Bit> = global_of.keys().copied().collect();
 
-    let pl = place::place(&chip, &p, &o.pcf, &globals, o.seed)?;
-
-    // ---- routing problem ----
     let w = |x: i32, y: i32, s: &str| chip.net(x, y, s).ok_or_else(|| format!("no wire {} at {},{}", s, x, y));
-    let mut src: HashMap<Bit, u32> = HashMap::new();
-    let mut sinks: HashMap<Bit, Vec<u32>> = HashMap::new();
-    let mut gsinks: HashMap<Bit, Vec<u32>> = HashMap::new();
-    let mut names: HashMap<Bit, String> = HashMap::new();
-    for (n, bits) in &nl.nets {
-        for (i, b) in bits.iter().enumerate() {
-            names.entry(*b).or_insert_with(|| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() });
-        }
-    }
-    let mut eps: HashMap<u32, sta::Ep> = HashMap::new();
-    for (i, lc) in p.lcs.iter().enumerate() {
-        let (x, y, z) = pl.lc[i];
-        if let Some(b) = lc.out {
-            let ww = w(x, y, &format!("lutff_{}/out", z))?;
-            src.insert(b, ww);
-            eps.insert(ww, sta::Ep::LcOut(i));
-        }
-        for k in 0..4 {
-            if let Some(b) = lc.ins[k] {
-                let ww = w(x, y, &format!("lutff_{}/in_{}", z, k))?;
-                sinks.entry(b).or_default().push(ww);
-                eps.insert(ww, sta::Ep::LcIn(i, k as u8));
+    // ---- routing problem for a placement: nets (with their signal bits), endpoints, names ----
+    let build = |pl: &place::Placement| -> R<(Vec<route::RNet>, Vec<Bit>, HashMap<u32, sta::Ep>, HashMap<Bit, String>)> {
+
+        // ---- routing problem ----
+        let w = |x: i32, y: i32, s: &str| chip.net(x, y, s).ok_or_else(|| format!("no wire {} at {},{}", s, x, y));
+        let mut src: HashMap<Bit, u32> = HashMap::new();
+        let mut sinks: HashMap<Bit, Vec<u32>> = HashMap::new();
+        let mut gsinks: HashMap<Bit, Vec<u32>> = HashMap::new();
+        let mut names: HashMap<Bit, String> = HashMap::new();
+        for (n, bits) in &nl.nets {
+            for (i, b) in bits.iter().enumerate() {
+                names.entry(*b).or_insert_with(|| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() });
             }
         }
-        if let Some(f) = &lc.ff {
-            for (b, pin) in std::iter::once((f.clk, "lutff_global/clk")).chain(f.sr.map(|s| (s, "lutff_global/s_r"))) {
-                let s = w(x, y, pin)?;
-                let list = if global_of.contains_key(&b) { gsinks.entry(b).or_default() } else { sinks.entry(b).or_default() };
-                if !list.contains(&s) { list.push(s); }
+        let mut eps: HashMap<u32, sta::Ep> = HashMap::new();
+        for (i, lc) in p.lcs.iter().enumerate() {
+            let (x, y, z) = pl.lc[i];
+            if let Some(b) = lc.out {
+                let ww = w(x, y, &format!("lutff_{}/out", z))?;
+                src.insert(b, ww);
+                eps.insert(ww, sta::Ep::LcOut(i));
+            }
+            for k in 0..4 {
+                if let Some(b) = lc.ins[k] {
+                    let ww = w(x, y, &format!("lutff_{}/in_{}", z, k))?;
+                    sinks.entry(b).or_default().push(ww);
+                    eps.insert(ww, sta::Ep::LcIn(i, k as u8));
+                }
+            }
+            if let Some(f) = &lc.ff {
+                for (b, pin) in std::iter::once((f.clk, "lutff_global/clk")).chain(f.sr.map(|s| (s, "lutff_global/s_r"))) {
+                    let s = w(x, y, pin)?;
+                    let list = if global_of.contains_key(&b) { gsinks.entry(b).or_default() } else { sinks.entry(b).or_default() };
+                    if !list.contains(&s) { list.push(s); }
+                }
             }
         }
-    }
-    // block RAM pins live in the ramb tile or the ramt tile above it
-    let ram_wire = |x: i32, y: i32, pin: &str| -> R<u32> {
-        let n = format!("ram/{}", pin);
-        chip.net(x, y, &n).or_else(|| chip.net(x, y + 1, &n)).ok_or_else(|| format!("no RAM pin {} at {},{}", pin, x, y))
-    };
-    for (r, ram) in p.rams.iter().enumerate() {
-        let (x, y) = pl.ram[r];
-        for (pin, b) in &ram.outs { let ww = ram_wire(x, y, pin)?; src.insert(*b, ww); eps.insert(ww, sta::Ep::RamOut(r)); }
-        for (pin, b) in &ram.ins {
-            let ww = ram_wire(x, y, pin)?;
-            let list = if global_of.contains_key(b) { gsinks.entry(*b).or_default() } else { sinks.entry(*b).or_default() };
-            if !list.contains(&ww) { list.push(ww); }
-            if pin != "RCLK" && pin != "WCLK" { eps.insert(ww, sta::Ep::RamIn(r, sta::ram_setup(pin))); }
-        }
-    }
-    for (i, io) in p.ios.iter().enumerate() {
-        let (x, y, z, _) = &pl.io[i];
-        names.insert(io.net, io.name.clone());
-        match io.dir {
-            Dir::In => { let ww = w(*x, *y, &format!("io_{}/D_IN_0", z))?; src.insert(io.net, ww); eps.insert(ww, sta::Ep::IoIn(i)); }
-            Dir::Out => { let ww = w(*x, *y, &format!("io_{}/D_OUT_0", z))?; sinks.entry(io.net).or_default().push(ww); eps.insert(ww, sta::Ep::IoOut(i)); }
-        }
-    }
-    let mut nets = vec![];
-    let mut keys: Vec<Bit> = src.keys().copied().collect();
-    keys.sort();
-    for b in keys {
-        let s = sinks.remove(&b).unwrap_or_default();
-        let g = gsinks.remove(&b).unwrap_or_default();
-        if s.is_empty() && g.is_empty() { continue; }
-        let global = match global_of.get(&b) {
-            Some(&(gx, gy, gi)) => Some((w(gx, gy, "fabout")?, w(gx, gy, &format!("glb_netwk_{}", gi))?, g.clone())),
-            None => None,
+        // block RAM pins live in the ramb tile or the ramt tile above it
+        let ram_wire = |x: i32, y: i32, pin: &str| -> R<u32> {
+            let n = format!("ram/{}", pin);
+            chip.net(x, y, &n).or_else(|| chip.net(x, y + 1, &n)).ok_or_else(|| format!("no RAM pin {} at {},{}", pin, x, y))
         };
-        let mut all = s;
-        all.extend(g);
-        let name = names.get(&b).cloned().unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), _ => format!("{:?}", b) });
-        nets.push(route::RNet { name, src: src[&b], sinks: all, global });
-    }
-    if let Some((b, _)) = sinks.iter().find(|(_, v)| !v.is_empty()) { return Err(format!("net {:?} has loads but no driver", b)); }
+        for (r, ram) in p.rams.iter().enumerate() {
+            let (x, y) = pl.ram[r];
+            for (pin, b) in &ram.outs { let ww = ram_wire(x, y, pin)?; src.insert(*b, ww); eps.insert(ww, sta::Ep::RamOut(r)); }
+            for (pin, b) in &ram.ins {
+                let ww = ram_wire(x, y, pin)?;
+                let list = if global_of.contains_key(b) { gsinks.entry(*b).or_default() } else { sinks.entry(*b).or_default() };
+                if !list.contains(&ww) { list.push(ww); }
+                if pin != "RCLK" && pin != "WCLK" { eps.insert(ww, sta::Ep::RamIn(r, sta::ram_setup(pin))); }
+            }
+        }
+        for (i, io) in p.ios.iter().enumerate() {
+            let (x, y, z, _) = &pl.io[i];
+            names.insert(io.net, io.name.clone());
+            match io.dir {
+                Dir::In => { let ww = w(*x, *y, &format!("io_{}/D_IN_0", z))?; src.insert(io.net, ww); eps.insert(ww, sta::Ep::IoIn(i)); }
+                Dir::Out => { let ww = w(*x, *y, &format!("io_{}/D_OUT_0", z))?; sinks.entry(io.net).or_default().push(ww); eps.insert(ww, sta::Ep::IoOut(i)); }
+            }
+        }
+        let mut nets = vec![];
+        let mut bits: Vec<Bit> = vec![];
+        let mut keys: Vec<Bit> = src.keys().copied().collect();
+        keys.sort();
+        for b in keys {
+            let s = sinks.remove(&b).unwrap_or_default();
+            let g = gsinks.remove(&b).unwrap_or_default();
+            if s.is_empty() && g.is_empty() { continue; }
+            let global = match global_of.get(&b) {
+                Some(&(gx, gy, gi)) => Some((w(gx, gy, "fabout")?, w(gx, gy, &format!("glb_netwk_{}", gi))?, g.clone())),
+                None => None,
+            };
+            let mut all = s;
+            all.extend(g);
+            let name = names.get(&b).cloned().unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), _ => format!("{:?}", b) });
+            nets.push(route::RNet { name, src: src[&b], sinks: all, global, crit: 0.0 });
+            bits.push(b);
+        }
+        if let Some((b, _)) = sinks.iter().find(|(_, v)| !v.is_empty()) { return Err(format!("net {:?} has loads but no driver", b)); }
+        Ok((nets, bits, eps, names))
+    };
     let extra: Vec<(u32, u32)> = chip.gbufin.iter().map(|&(x, y, g)| Ok((w(x, y, "fabout")?, w(x, y, &format!("glb_netwk_{}", g))?))).collect::<R<_>>()?;
-    let (routes, route_iters) = route::route(&chip, &nets, &extra, o.verbose)?;
-    let timing = sta::analyze(chip, &p, &pl, &nets, &routes, &eps, extra.len());
+
+    // pass 1: wirelength-driven placement and routing
+    let mut pl = place::place(chip, &p, &o.pcf, &globals, o.seed, &HashMap::new())?;
+    let (mut nets, mut bits, mut eps, mut names) = build(&pl)?;
+    let (mut routes, mut route_iters) = route::route(chip, &nets, &extra, o.verbose)?;
+    let mut timing = sta::analyze(chip, &p, &pl, &nets, &routes, &eps, extra.len());
+    // pass 2 (timing-driven): nets weighted by their criticality in pass 1, both
+    // in the placement cost and in the router; the faster result is kept
+    let mut fmax_wl = None;
+    if o.timing_driven && !nets.is_empty() {
+        let crit: HashMap<Bit, f32> = bits.iter().zip(&timing.net_crit).map(|(b, c)| (*b, *c)).collect();
+        let sinks: HashMap<Bit, usize> = bits.iter().zip(&nets).map(|(b, n)| (*b, n.sinks.len())).collect();
+        // only near-critical nets get heavier, high-fanout ones less so
+        let weights: HashMap<Bit, f64> = crit.iter().map(|(b, c)| (*b, 1.0 + 6.0 * (*c as f64).powi(8) / (sinks.get(b).copied().unwrap_or(1).max(1) as f64).sqrt())).collect();
+        let pl2 = place::place(chip, &p, &o.pcf, &globals, o.seed, &weights)?;
+        let (mut nets2, bits2, eps2, names2) = build(&pl2)?;
+        for (n, b) in nets2.iter_mut().zip(&bits2) { n.crit = crit.get(b).copied().unwrap_or(0.0); }
+        fmax_wl = Some(timing.fmax);
+        // a pass that does not route keeps the first result
+        if let Ok((routes2, iters2)) = route::route(chip, &nets2, &extra, o.verbose) {
+            let timing2 = sta::analyze(chip, &p, &pl2, &nets2, &routes2, &eps2, extra.len());
+            if o.verbose { eprintln!("  timing-driven pass: {:.2} -> {:.2} MHz", timing.fmax, timing2.fmax); }
+            // the analysis is an estimate: a gain within its error is not worth it
+            if timing2.fmax > timing.fmax * 1.03 {
+                pl = pl2; nets = nets2; bits = bits2; eps = eps2; names = names2; routes = routes2; route_iters = iters2; timing = timing2;
+            }
+        }
+    }
+    let _ = (&bits, &eps);
 
     // ---- configuration ----
     let mut a = Asc::new(&chip);
@@ -307,5 +344,5 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
     }
     let mut gl: Vec<(String, u8)> = global_of.iter().map(|(b, g)| (names.get(b).cloned().unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), _ => format!("{:?}", b) }), g.2)).collect();
     gl.sort();
-    Ok(Output { asc: a.text(), pcf, lcs: p.lcs.len(), wires, extra: extra.len(), packed: p, placement: pl, nets, routes, route_iters, timing, globals: gl })
+    Ok(Output { asc: a.text(), pcf, lcs: p.lcs.len(), wires, extra: extra.len(), packed: p, placement: pl, nets, routes, route_iters, timing, globals: gl, fmax_wl })
 }

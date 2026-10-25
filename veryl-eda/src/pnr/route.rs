@@ -2,7 +2,9 @@
 //! A* searches. Every chip net (wire) can carry one signal; a pip into a wire
 //! sets that wire's input mux. Global signals are routed from their source to
 //! a `fabout` that feeds a global network, which then reaches the tiles'
-//! clock / set-reset muxes directly.
+//! clock / set-reset muxes directly. Timing-driven: a net with criticality c
+//! pays c × (delay of the wire) + (1 - c) × (congestion cost) per wire, so
+//! critical nets take fast wires and the rest make way.
 
 use super::chipdb::Chip;
 use std::cmp::Ordering;
@@ -16,6 +18,8 @@ pub struct RNet {
     pub sinks: Vec<u32>,
     /// global network to use: (fabout wire, global wire, sinks reached straight from the global)
     pub global: Option<(u32, u32, Vec<u32>)>,
+    /// timing criticality 0..1 (from a previous analysis; 0 = route for congestion only)
+    pub crit: f32,
 }
 
 #[derive(PartialEq)]
@@ -67,6 +71,7 @@ pub fn route(chip: &Chip, nets: &[RNet], extra_pips: &[(u32, u32)], verbose: boo
     for iter in 0..200 {
         for &ni in &order {
             let net = &nets[ni];
+            let crit = net.crit.clamp(0.0, 0.95);
             // reroute only nets touching an overused wire (all nets in the first pass)
             if iter > 0 && !nodes_of[ni].iter().any(|w| occ[*w as usize] > 1) { continue; }
             for &w in &nodes_of[ni] { occ[w as usize] -= 1; }
@@ -110,7 +115,12 @@ pub fn route(chip: &Chip, nets: &[RNet], extra_pips: &[(u32, u32)], verbose: boo
                         let o = owner[v as usize];
                         if o >= 0 && o != ni as i32 { continue; }
                         let over = occ[v as usize] as f32;
-                        let c = (1.0 + hist[v as usize]) * (1.0 + pres * over);
+                        let cong = (1.0 + hist[v as usize]) * (1.0 + pres * over);
+                        // wire delay in units of a typical hop (~0.6 ns)
+                        let c = if crit > 0.0 {
+                            let d = super::sta::hop_delay(chip.kind[u as usize], chip.kind[v as usize]) as f32 / 0.6;
+                            crit * d + (1.0 - crit) * cong
+                        } else { cong };
                         let nd = du + c;
                         if seen[v as usize] != gen || nd < dist[v as usize] {
                             seen[v as usize] = gen;

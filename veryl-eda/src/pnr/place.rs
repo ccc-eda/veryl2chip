@@ -48,7 +48,8 @@ enum Pin { Lc(usize), Io(usize), Ram(usize) }
 const H: i32 = 30; // logic rows y = 1..=30
 const PER_COL: usize = (H as usize) * 8;
 
-pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[Bit], seed: u64) -> R<Placement> {
+/// `weights`: per net, a factor on its wirelength (timing-driven placement; empty = all 1)
+pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[Bit], seed: u64, weights: &HashMap<Bit, f64>) -> R<Placement> {
     // logic columns: every row 1..=30 is a logic tile
     let cols: Vec<i32> = (0..chip.w).filter(|x| (1..=H).all(|y| chip.tile_type.get(&(*x, y)).map(|t| t == "logic").unwrap_or(false))).collect();
     let mut over = vec![];
@@ -99,6 +100,8 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
     // RAM -> site index, site -> RAM
     let mut ram_site: Vec<usize> = (0..p.rams.len()).collect();
     let mut site_ram: Vec<Option<usize>> = (0..sites.len()).map(|s| (s < p.rams.len()).then_some(s)).collect();
+    let mut net_w: Vec<f64> = vec![1.0; net_pins.len()];
+    for (b, &n) in &net_ix { if let Some(w) = weights.get(b) { net_w[n] = *w; } }
     let mut lc_nets: Vec<Vec<usize>> = vec![vec![]; p.lcs.len()];
     for (n, pins) in net_pins.iter().enumerate() {
         for pn in pins { if let Pin::Lc(l) = pn { if !lc_nets[*l].contains(&n) { lc_nets[*l].push(n); } } }
@@ -174,7 +177,7 @@ pub fn place(chip: &Chip, p: &Packed, pcf: &HashMap<String, String>, globals: &[
     let hpwl = |n: usize, slot: &Vec<usize>, ram_site: &Vec<usize>| -> f64 {
         let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         for pn in &net_pins[n] { let (x, y) = pos(pn, slot, ram_site); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
-        if x0 == i32::MAX { 0.0 } else { ((x1 - x0) + (y1 - y0)) as f64 }
+        if x0 == i32::MAX { 0.0 } else { ((x1 - x0) + (y1 - y0)) as f64 * net_w[n] }
     };
     let mut ncost: Vec<f64> = (0..net_pins.len()).map(|n| hpwl(n, &slot, &ram_site)).collect();
     let mut cost: f64 = ncost.iter().sum();

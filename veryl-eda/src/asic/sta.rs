@@ -24,6 +24,8 @@ pub struct Timing {
     /// arrival time at each cell's output (ns)
     pub arrival: Vec<f64>,
     pub endpoints: usize,
+    /// per net: longest path through it / critical path (0..1)
+    pub net_crit: HashMap<Bit, f32>,
 }
 
 pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Timing {
@@ -133,5 +135,35 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing) -> Timing {
         steps.reverse();
     }
     let period = worst.0.max(0.001);
-    Timing { period, fmax: 1000.0 / period, path: steps, crit_cells, crit_nets, arrival, endpoints }
+    // criticality: arrival at each net + the longest delay after it (backward
+    // over the cells, which are in topological order with flip-flops last)
+    let mut users: HashMap<Bit, Vec<usize>> = HashMap::new();
+    for (i, c) in nl.cells.iter().enumerate() {
+        for (p, b) in &c.conns { if !is_out(p) && !b.is_const() && *p != "CK" && *p != "RN" && *p != "SN" { users.entry(*b).or_default().push(i); } }
+    }
+    let out_pins: HashMap<Bit, (f64, f64)> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.iter().map(|b| (*b, pin_at.get(b).copied().unwrap_or((0.0, 0.0))))).collect();
+    let mut tail: HashMap<Bit, f64> = HashMap::new();
+    let tail_of = |b: Bit, tail: &HashMap<Bit, f64>| -> f64 {
+        let mut t = 0.0f64;
+        for &j in users.get(&b).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let c = &nl.cells[j];
+            let after = if c.is_ff() { cell(&c.typ).setup } else if is_macro(j) { super::lib::SRAM_SETUP } else { out_delay(j) + tail.get(&c.out()).copied().unwrap_or(0.0) };
+            t = t.max(wire(b, at(j)) + after);
+        }
+        if let Some(pa) = out_pins.get(&b) { t = t.max(wire(b, *pa)); }
+        t
+    };
+    for i in (0..n).rev() {
+        let c = &nl.cells[i];
+        if c.is_ff() || is_macro(i) { continue; }
+        let t = tail_of(c.out(), &tail);
+        tail.insert(c.out(), t);
+    }
+    let mut net_crit = HashMap::new();
+    let sources: Vec<Bit> = nl.cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| is_out(p)).map(|x| x.1)).chain(input_name.keys().copied()).collect();
+    for b in sources {
+        let t = match tail.get(&b) { Some(t) => *t, None => tail_of(b, &tail) };
+        net_crit.insert(b, ((net_at.get(&b).copied().unwrap_or(0.0) + t) / period).min(1.0) as f32);
+    }
+    Timing { period, fmax: 1000.0 / period, path: steps, crit_cells, crit_nets, arrival, endpoints, net_crit }
 }

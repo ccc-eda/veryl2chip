@@ -52,8 +52,8 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 |---|---|
 | `chipdb.rs` | 讀晶片資料庫：tile 與設定位元表、繞線圖（10 萬條線、120 萬個 pip，每個 pip = 目的線輸入 mux 的位元樣式）、腳位、全域緩衝、IE/REN、column buffer |
 | `pack.rs` | LUT/進位/正反器 → 邏輯單元（LC）；進位鏈完整保留：訊號當 carry-in 時加 feed-in LC，carry-out 被一般邏輯使用時由下一個 LC 的 LUT 讀出 |
-| `place.rs` | 模擬退火（線長 HPWL）；同一 tile 的正反器必須同 clock / reset / 邊緣；進位鏈放在整欄邏輯 tile、從 LC 0 開始 |
-| `route.rs` | PathFinder 協商擁塞 + A*；clock 與 reset 走全域網路（來源 → `fabout` → `glb_netwk_N` → 各 tile 的 clk / s_r mux） |
+| `place.rs` | 模擬退火（線長 HPWL，可依 net 加權）；同一 tile 的正反器必須同 clock / reset / 邊緣；進位鏈放在整欄邏輯 tile、從 LC 0 開始 |
+| `route.rs` | PathFinder 協商擁塞 + A*；clock 與 reset 走全域網路（來源 → `fabout` → `glb_netwk_N` → 各 tile 的 clk / s_r mux）；時序導向時關鍵度 c 的 net 每條線的成本 = c × 線延遲 + (1 − c) × 擁塞 |
 | `mod.rs` | 產生 `.asc`：LC 位元（LUT 位元排列、carry、DFF、set/reset）、進位鏈連接、IO、column buffer、DSP 預設值 |
 
 驗證：
@@ -64,8 +64,23 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 
 | 設計 | LC | Fmax（icetime） |
 |---|---|---|
-| RiscvSoc（自己的 P&R） | 1252 / 5280 | 15.6 MHz（板上 12 MHz，通過） |
+| RiscvSoc（自己的 P&R） | 1252 / 5280 | 17.0 MHz（只看線長 15.6 MHz；板上 12 MHz，通過） |
 | RiscvSoc（nextpnr） | 1279 / 5280 | 17.3 MHz |
+
+### 時序導向（預設開，`--no-timing-driven` 關閉）
+第一輪只看線長；STA 除了前向的到達時間，再做一次反向傳遞求「每個點之後最長還要多久」，
+得到每條 net 的**關鍵度** = 經過它的最長路徑 / 關鍵路徑（0..1）。第二輪：
+- 佈局成本裡 net 的權重 = 1 + 6 × 關鍵度⁸ / √負載數（只有接近關鍵的 net 變重；高扇出的 net 不能把整片拉在一起）；
+- 繞線時關鍵 net 優先走快的線（見 `route.rs`）。
+繞不通或沒有快 3% 以上（STA 的誤差範圍）就保留第一輪。ASIC 流程同樣做：以第一輪佈局為起點低溫微調，
+小設計（< 4000 元件）另外重新退火一次，只取繞得通的最快結果。
+
+| 設計 | FPGA，icetime（只看線長 → 時序導向） | ASIC，自己的 STA |
+|---|---|---|
+| Ram | 39.0 → 45.0 MHz | 974 → 1006 MHz |
+| BramMix | 42.5 → 48.0 MHz | 394 → 410 MHz |
+| RiscvSoc | 15.6 → 17.0 MHz | 107 → 115 MHz |
+| RiscvCore | （放不下 UP5K） | 71.1 → 75.6 MHz |
 
 ## ASIC 後端（`--asic`，`src/asic/`）
 教學用的標準元件庫 **vlib**（列高 4.0 µm、site 0.5 µm，延遲約 130 nm 慢速角）：
@@ -76,7 +91,7 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 | `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹）；同步讀取的記憶體（與 FPGA 的 block RAM 推論相同條件）變成 **SRAM 巨集**，每個讀取埠一個 |
 | `place.rs` | 依利用率 65% 決定晶粒（加上巨集面積），SRAM 巨集先由左下角起成排固定擺放，IO 腳放在四周；標準元件依各列空位比例蛇形初始擺放，再以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL |
 | `route.rs` | gcell（4 µm）**全域繞線**：水平 M2/M4、垂直 M3/M5，每邊 16 軌；端點依 Prim 順序以 A* 連到已建好的樹，PathFinder（現況 + 歷史成本）消除溢出；統計線長與 via |
-| `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；起點輸入腳 / DFF clk→Q，終點 DFF D（+setup）/ 輸出腳 |
+| `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；起點輸入腳 / DFF clk→Q，終點 DFF D（+setup）/ 輸出腳；另算每條 net 的關鍵度（給時序導向佈局） |
 | `mod.rs` | `flow()` 串起來；`def()` 輸出 DEF 佈局 |
 
 | 設計 | 標準元件 | 面積 | 晶粒 | 線長 | Fmax |
@@ -136,7 +151,7 @@ module / 參數（`#(param ..)`、`const`、inst 參數覆寫）/ port / `var` /
 ## 尚未支援
 interface/modport、`inout`、遞迴、非常數的除法、latch（不完整賦值的 always_comb 會報組合迴路）、
 寬度 > 128 bit 的常數、非同步讀取的記憶體放進 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL、多時脈域的 netsim；
-自己的佈局繞線：只支援 UP5K，沒有時序導向的擺放/繞線（目前以線長為準）、沒有 LUT 輸入腳交換。
+自己的佈局繞線：只支援 UP5K、沒有 LUT 輸入腳交換。
 
 ## 驗證結果（`./test.sh`）
 | 設計 | 對 `veryl build` 的等價驗證 |
