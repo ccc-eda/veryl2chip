@@ -65,7 +65,8 @@ pub fn special_nets(nl: &Netlist) -> std::collections::HashSet<Bit> {
 /// `weights`: per net, a factor on its wirelength (timing-driven placement;
 /// empty = all 1). `start`: refine this placement (of the same netlist) at a
 /// low temperature with short moves instead of annealing from scratch.
-pub fn place(nl: &Netlist, seed: u64, weights: &HashMap<Bit, f64>, start: Option<&[(u32, u32)]>) -> RowPlacement {
+/// `util`: target row utilization (the die is sized from it).
+pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, start: Option<&[(u32, u32)]>) -> RowPlacement {
     let n = nl.cells.len();
     let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
     let widths: Vec<u32> = dims.iter().map(|d| d.0).collect();
@@ -74,7 +75,6 @@ pub fn place(nl: &Netlist, seed: u64, weights: &HashMap<Bit, f64>, start: Option
     let total: u32 = (0..n).filter(|c| !fixed[*c]).map(|c| widths[c]).sum::<u32>().max(1);
     // macro area in site-rows, with some room around them
     let macro_area: f64 = (0..n).filter(|c| fixed[*c]).map(|c| (widths[c] * heights[c]) as f64 * 1.1).sum();
-    let util = 0.65;
     let need = total as f64 / util + macro_area;
     let side = (need * SITE_W * ROW_H).sqrt();
     let max_h = *heights.iter().max().unwrap_or(&1);

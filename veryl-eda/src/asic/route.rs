@@ -14,7 +14,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 /// tracks per gcell edge and direction: two layers × 10 tracks (4 µm gcell,
 /// 0.4 µm pitch), 20 % kept for local wiring
-pub const CAP: u16 = 16;
+pub const CAP: u16 = 12;
 
 pub struct NetRoute {
     pub bit: Bit,
@@ -33,6 +33,8 @@ pub struct Routing {
     pub wirelength: f64,
     pub vias: u32,
     pub overflow: u32,
+    /// average use of the gcell edges relative to their capacity
+    pub demand: f64,
 }
 
 #[derive(PartialEq)]
@@ -41,7 +43,10 @@ impl Eq for Item {}
 impl Ord for Item { fn cmp(&self, o: &Self) -> Ordering { o.0.partial_cmp(&self.0).unwrap_or(Ordering::Equal) } }
 impl PartialOrd for Item { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
 
-pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing {
+pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing { route_with(nl, pl, 30) }
+
+/// global routing with at most `max_iters` negotiation rounds
+pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing {
     let g = ROW_H;
     let gx = ((pl.w / g).ceil() as u32).max(1);
     let gy = pl.rows.max(1);
@@ -62,7 +67,16 @@ pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing {
     let mut terms: Vec<(Bit, Vec<u32>, u32)> = vec![];
     for p in &pn {
         let mut t: Vec<u32> = vec![];
-        for &c in &p.cells { let (x, y) = gcell_of_cell(c); let i = id(x, y); if !t.contains(&i) { t.push(i); } }
+        for &c in &p.cells {
+            // a macro is reached at its pins (on its edge), not at its centre
+            let pts: Vec<(u32, u32)> = if dims[c].1 > 1 {
+                nl.cells[c].conns.iter().enumerate().filter(|(_, x)| x.1 == p.bit).map(|(k, _)| {
+                    let (x, y) = super::detail::pin_point(nl, pl, c, k);
+                    ((x / super::detail::TRACKS).min(gx - 1), (y / super::detail::TRACKS).min(gy - 1))
+                }).collect()
+            } else { vec![gcell_of_cell(c)] };
+            for (x, y) in pts { let i = id(x, y); if !t.contains(&i) { t.push(i); } }
+        }
         for &k in &p.pins { let (x, y) = gcell_of_pin(k); let i = id(x, y); if !t.contains(&i) { t.push(i); } }
         terms.push((p.bit, t, (p.cells.len() + p.pins.len()) as u32));
     }
@@ -103,7 +117,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing {
     let mut in_tree = vec![u32::MAX; ne];
     let mut order: Vec<usize> = (0..terms.len()).collect();
     order.sort_by_key(|i| terms[*i].1.len());
-    for it in 0..30 {
+    for it in 0..max_iters {
         for &ni in &order {
             let t = &terms[ni].1;
             if t.len() < 2 { continue; }
@@ -188,5 +202,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing {
         out.push(NetRoute { bit: *bit, segs, length: len, vias: v, clock: special.contains(bit) });
     }
     let overflow = *iters.last().unwrap_or(&0);
-    Routing { gx, gy, nets: out, iters, wirelength: wl, vias, overflow }
+    let used: u64 = use_h.iter().chain(&use_v).map(|u| *u as u64).sum();
+    let demand = used as f64 / (2 * ne) as f64 / CAP as f64;
+    Routing { gx, gy, nets: out, iters, wirelength: wl, vias, overflow, demand }
 }

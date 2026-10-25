@@ -94,6 +94,9 @@ fn main() {
         let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
         println!("asic: area {:.1} µm² (cells), die {:.1} × {:.1} µm, {} rows, utilization {:.0}%", o.area, pl.w, pl.h, pl.rows, pl.util * 100.0);
         println!("asic: wirelength {:.0} µm, {} vias, overflow {} after {} routing iterations", rt.wirelength, rt.vias, rt.overflow, rt.iters.len());
+        let d = &o.detail;
+        println!("asic: detailed routing {:.0} µm (M2 {:.0} / M3 {:.0} / M4 {:.0} / M5 {:.0}), {} vias, {} conflicts, {} opens after {} iterations",
+            d.wirelength, d.per_layer[0], d.per_layer[1], d.per_layer[2], d.per_layer[3], d.vias, d.conflicts, d.opens, d.iters.len());
         println!("asic: clock tree {} buffers ({}), insertion {:.3} ns, skew {:.3} ns; hold: worst slack {:.3} ns, {} delay buffers",
             o.cts.buffers, o.cts.trees.iter().map(|t| format!("{} sinks / {} levels", t.1, t.3)).collect::<Vec<_>>().join(", "), tm.insertion, tm.skew, tm.hold_slack, o.hold_bufs);
         println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints; ideal clock {:.1} MHz, wirelength-only placement {:.1} MHz)", tm.period, tm.fmax, tm.endpoints, o.fmax_ideal, o.fmax_wl);

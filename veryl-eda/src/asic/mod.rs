@@ -3,6 +3,7 @@
 //! global routing, static timing with a propagated clock, hold fixing.
 
 pub mod cts;
+pub mod detail;
 pub mod lib;
 pub mod map;
 pub mod place;
@@ -27,6 +28,7 @@ pub struct Output {
     pub cts: cts::Cts,
     /// delay buffers inserted to fix hold
     pub hold_bufs: usize,
+    pub detail: detail::Detail,
 }
 
 pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> { flow_with(opt, seed, 0.0) }
@@ -38,11 +40,22 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     let mut mapped = map::map(opt)?;
     t("map", t0);
     let t0 = now();
-    let mut placement = place::place(&mapped, seed, &Default::default(), None);
-    t("place", t0);
-    let t0 = now();
-    let mut routing = route::route(&mapped, &placement);
-    t("route", t0);
+    // utilization: start at 65 %; a design whose global routing overflows or
+    // fills its gcell edges more than half on average gets a bigger die (the
+    // track-level router needs the room for pins and vias)
+    let mut util = 0.65;
+    let (mut placement, mut routing);
+    loop {
+        placement = place::place(&mapped, seed, util, &Default::default(), None);
+        t("place", t0);
+        let t0 = now();
+        // a short probe decides: a routable die needs few rounds
+        let probe = route::route_with(&mapped, &placement, 8);
+        if (probe.overflow > probe.iters[0] / 50 || probe.demand > 0.5) && util > 0.35 { util *= 0.8; continue; }
+        routing = if probe.overflow == 0 { probe } else { route::route(&mapped, &placement) };
+        t("route", t0);
+        break;
+    }
     let mut timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
     // timing-driven pass: nets weighted by their criticality; keep the faster result
     let fmax_wl = timing.fmax;
@@ -53,7 +66,7 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     if mapped.cells.len() < 4000 { tries.push(None); }
     for start in tries {
         let t0 = now();
-        let p2 = place::place(&mapped, seed, &weights, start.as_deref());
+        let p2 = place::place(&mapped, seed, util, &weights, start.as_deref());
         t("place (timing-driven)", t0);
         let t0 = now();
         let r2 = route::route(&mapped, &p2);
@@ -79,12 +92,19 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
         routing = route::route(&mapped, &placement);
         timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
     }
+    // detailed routing on the track grid; its wire lengths make the final timing
+    let t0 = now();
+    let detail = detail::route(&mapped, &placement, &routing);
+    t("detail route", t0);
+    let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
+    for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
+    let timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
     let area = mapped.cells.iter().map(lib::cell_area).sum();
     let mut m: std::collections::BTreeMap<String, usize> = Default::default();
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -112,7 +132,28 @@ pub fn def(o: &Output) -> String {
     for p in &pl.pins {
         writeln!(s, "  - {} + NET {} + DIRECTION {} + PLACED ( {} {} ) N ;", p.name, p.name, if p.dir == crate::netlist::Dir::In { "INPUT" } else { "OUTPUT" }, u(p.x), u(p.y)).unwrap();
     }
-    writeln!(s, "END PINS\nEND DESIGN").unwrap();
+    writeln!(s, "END PINS").unwrap();
+    // detailed routes: wires per layer and vias (VIA12 = M1 pin to M2, VIA23 ...)
+    let t = lib::ROW_H / detail::TRACKS as f64;
+    let (ux, uy) = (|x: u32| u(x as f64 * lib::SITE_W), |y: u32| u(y as f64 * t));
+    let nets: Vec<&detail::DNet> = o.detail.nets.iter().filter(|n| !n.segs.is_empty() || !n.vias.is_empty()).collect();
+    writeln!(s, "NETS {} ;", nets.len()).unwrap();
+    for n in nets {
+        let name = match n.bit { crate::netlist::Bit::W(w) => format!("n{}", w), _ => "const".into() };
+        let mut conns = vec![];
+        for (i, c) in o.mapped.cells.iter().enumerate() { for (p, b) in &c.conns { if *b == n.bit { conns.push(format!("( c{} {} )", i, p)); } } }
+        for p in &pl.pins { if p.bit == n.bit { conns.push(format!("( PIN {} )", p.name)); } }
+        let mut parts = vec![];
+        for &(l, x0, y0, x1, y1) in &n.segs { parts.push(format!("{} ( {} {} ) ( {} {} )", detail::layer_name(l), ux(x0), uy(y0), ux(x1), uy(y1))); }
+        for &(l, x, y) in &n.vias {
+            let (layer, via) = if l == 255 { ("M1", "VIA12".to_string()) } else { (detail::layer_name(l), format!("VIA{}{}", l + 2, l + 3)) };
+            parts.push(format!("{} ( {} {} ) {}", layer, ux(x), uy(y), via));
+        }
+        write!(s, "  - {} {}", name, conns.join(" ")).unwrap();
+        if !parts.is_empty() { write!(s, "\n    + ROUTED {}", parts.join("\n      NEW ")).unwrap(); }
+        writeln!(s, " ;").unwrap();
+    }
+    writeln!(s, "END NETS\nEND DESIGN").unwrap();
     s
 }
 

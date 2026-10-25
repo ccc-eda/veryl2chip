@@ -164,7 +164,7 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
         let mut sinks: HashMap<Bit, Vec<u32>> = HashMap::new();
         let mut gsinks: HashMap<Bit, Vec<u32>> = HashMap::new();
         let mut names: HashMap<Bit, String> = HashMap::new();
-        for (n, bits) in &nl.nets {
+        for (n, bits) in nl.nets.iter().filter(|(n, _)| !n.starts_with("$mem:")) {
             for (i, b) in bits.iter().enumerate() {
                 names.entry(*b).or_insert_with(|| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() });
             }

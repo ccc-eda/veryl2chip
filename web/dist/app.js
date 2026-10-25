@@ -437,6 +437,24 @@
     });
     return out.concat(top);
   }
+  var LAYER_COLOR = ["rgba(94,159,214,0.75)", "rgba(224,108,117,0.7)", "rgba(87,194,122,0.7)", "rgba(229,192,123,0.75)"];
+  function detailLines(r, sel, layers) {
+    const d = r.detail;
+    const t = r.die.row_h / d.tracks;
+    const H = r.die.h * S;
+    const out = [], top = [];
+    d.nets.forEach((n, ni) => {
+      const s = n.segs;
+      for (let i = 0; i < s.length; i += 5) {
+        const l = s[i];
+        if (!layers[l]) continue;
+        const pts = [s[i + 1] * t * S, H - s[i + 2] * t * S, s[i + 3] * t * S, H - s[i + 4] * t * S];
+        if (ni === sel) top.push({ pts, color: "#ffd479", width: 1.6 });
+        else out.push({ pts, color: LAYER_COLOR[l], width: 0.5 });
+      }
+    });
+    return out.concat(top);
+  }
 
   // src/synth/device.ts
   var T = 12;
@@ -781,11 +799,12 @@
     { key: "amap", tag: "asic", label: "A \u2463 Standard Cell Map" },
     { key: "aplace", tag: "asic", label: "A \u2464 Row Placement \u9000\u706B" },
     { key: "aroute", tag: "asic", label: "A \u2465 CTS + Global Routing" },
-    { key: "asta", tag: "asic", label: "A \u2466 Timing (STA)" }
+    { key: "adetail", tag: "asic", label: "A \u2466 Detail Routing" },
+    { key: "asta", tag: "asic", label: "A \u2467 Timing (STA)" }
   ];
   var PNR = /* @__PURE__ */ new Set(["place", "route", "sta"]);
-  var ASIC = /* @__PURE__ */ new Set(["amap", "aplace", "aroute", "asta"]);
-  var APHYS = /* @__PURE__ */ new Set(["aplace", "aroute", "asta"]);
+  var ASIC = /* @__PURE__ */ new Set(["amap", "aplace", "aroute", "adetail", "asta"]);
+  var APHYS = /* @__PURE__ */ new Set(["aplace", "aroute", "adetail", "asta"]);
   var OTHER = { map: "amap", place: "aplace", route: "aroute", sta: "asta", amap: "map", aplace: "place", aroute: "route", asta: "sta" };
   var isNet = (k) => k === "raw" || k === "opt" || k === "map" || k === "amap";
   var SynthOverlay = class {
@@ -813,6 +832,8 @@
       __publicField(this, "synMs", 0);
       __publicField(this, "selNet", null);
       __publicField(this, "selNetA", null);
+      __publicField(this, "selNetD", null);
+      __publicField(this, "layers", [true, true, true, true]);
       this.view = new CanvasView($("synCanvas"));
       this.view.onPick = (b) => this.pick(b);
       $("synClose").onclick = () => this.close();
@@ -1245,6 +1266,7 @@
         scene.bg = [...scene.bg ?? [], ...congestion(a)];
         scene.lines = this.edges ? asicRouteLines(a, { net: this.selNetA }) : [];
       }
+      if (k === "adetail") scene.lines = this.edges ? detailLines(a, this.selNetD, this.layers) : [];
       if (k === "asta") scene.lines = asicRouteLines(a, { dim: true });
       this.view.set(scene, fit);
     }
@@ -1273,9 +1295,20 @@
           "\u984F\u8272\uFF1A\u85CD\uFF1D\u6C34\u5E73\u3001\u7D2B\uFF1D\u5782\u76F4\u3001\u7DA0\uFF1Dclock / reset\uFF1B\u5E95\u8272\uFF1D\u64C1\u585E\uFF08\u7DA0\u9B06 \u2192 \u7D05\u6EFF\uFF09\u3002\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\u3001\u9EDE\u53F3\u5074 net \u9AD8\u4EAE\u3002"
         ];
       }
+      if (key === "adetail") {
+        const d = a.detail;
+        const um = (x) => (x / 1e3).toFixed(2) + " mm";
+        return [
+          `A \u2466 Detail Routing\uFF08\u8ECC\u9053\u683C\u9EDE\uFF1A\u6BCF ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m \u4E00\u689D\uFF0C${d.nx} \xD7 ${d.ny} \xD7 4 \u5C64\uFF1BM2/M4 \u6C34\u5E73\u3001M3/M5 \u5782\u76F4\uFF09`,
+          "\u6BCF\u689D net \u53EA\u5728\u5168\u57DF\u7E5E\u7DDA\u9078\u7684 gcell \u8D70\u5ECA\u5167\uFF08\u5916\u52A0\u4E00\u5708\uFF09\u4EE5 A* \u627E\u8DEF\uFF1A\u7AEF\u9EDE\u4F9D Prim \u9806\u5E8F\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF0C\u63DB\u5C64\u4E00\u500B via \u6210\u672C\u8F03\u9AD8\uFF1B\u6BCF\u500B\u683C\u9EDE\u53EA\u80FD\u5C6C\u65BC\u4E00\u689D net\uFF08\u6240\u4EE5\u6C92\u6709\u77ED\u8DEF\uFF09\uFF0C\u91CD\u758A\u4EE5 PathFinder \u5354\u5546\u91CD\u7E5E\uFF0C\u5361\u4F4F\u7684 net \u8D70\u5ECA\u6703\u52A0\u5BEC\u3002\u5143\u4EF6\u8173\u4F4D\u5F9E M1 \u7D93 via \u4E0A\u4F86\uFF0CSRAM \u5DE8\u96C6\u4E0A\u65B9\u64CB\u4F4F M2/M3\uFF0CIO \u8173\u5728 M5\u3002",
+          "",
+          `\u7DDA\u9577 ${um(d.wirelength)}\uFF08M2 ${um(d.per_layer[0])}\u3001M3 ${um(d.per_layer[1])}\u3001M4 ${um(d.per_layer[2])}\u3001M5 ${um(d.per_layer[3])}\uFF09\uFF0Cvia ${d.vias} \u500B\uFF1B\u885D\u7A81 ${d.conflicts}\u3001\u672A\u63A5\u901A ${d.opens}\uFF1B\u6BCF\u8F2A\u885D\u7A81\uFF1A${d.iters.join(" \u2192 ")}`,
+          d.nets.length ? "\u984F\u8272\uFF1A\u85CD M2\u3001\u7D05 M3\u3001\u7DA0 M4\u3001\u9EC3 M5\uFF1B\u5074\u6B04\u53EF\u5207\u63DB\u5C64\u3001\u9EDE net \u9AD8\u4EAE\u3002\u9019\u4E00\u6B65\u7684\u7DDA\u9577\u4E5F\u56DE\u994B\u7D66 STA\u3002" : `\uFF08\u5171 ${d.segments} \u6BB5\u7DDA\uFF0C\u592A\u591A\u4E0D\u756B\uFF0C\u53EA\u5217\u7D71\u8A08\uFF09`
+        ];
+      }
       const t = a.timing;
       return [
-        "A \u2466 Timing (STA)",
+        "A \u2467 Timing (STA)",
         "\u5143\u4EF6\u5EF6\u9072 = \u672C\u5FB5\u5EF6\u9072 + \u6BCF\u6247\u51FA\u8CA0\u8F09 \xD7 \u6247\u51FA\uFF1B\u7DDA\u5EF6\u9072 = \u9A45\u52D5\u6574\u689D\u7E5E\u7DDA\u7684\u96FB\u5BB9 + \u5230\u8A72\u8CA0\u8F09\u7684\u5206\u4F48 RC\uFF08\u4F9D\u66FC\u54C8\u9813\u8DDD\u96E2\uFF09\u3002\u8DEF\u5F91\u8D77\u9EDE\u70BA\u8F38\u5165\u8173\u8207 DFF\uFF08clk\u2192Q\uFF09\uFF0C\u7D42\u9EDE\u70BA DFF D\uFF08\u52A0 setup\uFF09\u8207\u8F38\u51FA\u8173\uFF1Bclock \u8996\u70BA\u7406\u60F3\u3002",
         "",
         `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(3)} ns \u2192 Fmax ${t.fmax.toFixed(1)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0C\u5143\u4EF6\u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
@@ -1292,7 +1325,42 @@
       det.innerHTML = '<p class="hint">\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
       d.appendChild(det);
       const div = document.createElement("div");
-      if (key === "asta") {
+      if (key === "adetail") {
+        const d2 = a.detail;
+        div.innerHTML = `<h3>\u5C64</h3>`;
+        ["M2 \u6C34\u5E73", "M3 \u5782\u76F4", "M4 \u6C34\u5E73", "M5 \u5782\u76F4"].forEach((name, l) => {
+          const lab = document.createElement("label");
+          lab.style.display = "block";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = this.layers[l];
+          cb.onchange = () => {
+            this.layers[l] = cb.checked;
+            this.drawAsic(false);
+          };
+          lab.append(cb, ` `, Object.assign(document.createElement("span"), { className: "sw", style: `background:${LAYER_COLOR[l]}` }), `${name}\u3000${(d2.per_layer[l] / 1e3).toFixed(2)} mm`);
+          div.appendChild(lab);
+        });
+        if (d2.nets.length) {
+          const h = document.createElement("h3");
+          h.textContent = `Net\uFF08${d2.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09`;
+          div.appendChild(h);
+          const list = document.createElement("div");
+          list.className = "clist";
+          const order = d2.nets.map((_, i) => i).sort((x, y) => d2.nets[y].len - d2.nets[x].len);
+          for (const i of order.slice(0, 400)) {
+            const n = d2.nets[i];
+            const row = document.createElement("div");
+            row.textContent = `${n.name}  ${n.len.toFixed(1)} \xB5m  ${n.vias.length / 3} via`;
+            row.onclick = () => {
+              this.selNetD = i;
+              this.drawAsic(false);
+            };
+            list.appendChild(row);
+          }
+          div.appendChild(list);
+        }
+      } else if (key === "asta") {
         div.innerHTML = `<h3>\u95DC\u9375\u8DEF\u5F91\uFF08${a.timing.period.toFixed(3)} ns\uFF09</h3>` + table(["\u7D2F\u8A08 ns", "\u5EF6\u9072", "\u7D93\u904E"], a.timing.path.map((s) => [s.at.toFixed(3), s.delay.toFixed(3), esc(s.what)]));
       } else if (key === "aroute") {
         div.innerHTML = `<h3>Net\uFF08${a.route.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09</h3>`;
@@ -1318,7 +1386,7 @@
         });
         div.innerHTML = `<h3>\u5143\u4EF6\u6578\u91CF</h3>` + table(["\u5143\u4EF6", "\u6578\u91CF", "\u9762\u7A4D \xB5m\xB2"], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (areaOf.get(t) ?? 0).toFixed(0)]));
       }
-      div.innerHTML += `<h3>IO \u8173</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "x \xB5m", "y \xB5m"], a.pins.map((p) => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)]));
+      div.insertAdjacentHTML("beforeend", `<h3>IO \u8173</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "x \xB5m", "y \xB5m"], a.pins.map((p) => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)])));
       d.appendChild(div);
       return d;
     }

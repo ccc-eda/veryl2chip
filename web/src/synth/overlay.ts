@@ -3,7 +3,7 @@
 import { fromBase64, VFile } from '../api';
 import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
-import { AsicResult, asicRouteLines, congestion, dieScene, stdColor } from './asic';
+import { AsicResult, asicRouteLines, congestion, detailLines, dieScene, LAYER_COLOR, stdColor } from './asic';
 import { deviceScene, heat, lcColor, PnrResult, RAM_COLOR, routeLines } from './device';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
 import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
@@ -26,11 +26,12 @@ const ASIC_STAGES: StageDef[] = [
   { key: 'amap', tag: 'asic', label: 'A ④ Standard Cell Map' },
   { key: 'aplace', tag: 'asic', label: 'A ⑤ Row Placement 退火' },
   { key: 'aroute', tag: 'asic', label: 'A ⑥ CTS + Global Routing' },
-  { key: 'asta', tag: 'asic', label: 'A ⑦ Timing (STA)' },
+  { key: 'adetail', tag: 'asic', label: 'A ⑦ Detail Routing' },
+  { key: 'asta', tag: 'asic', label: 'A ⑧ Timing (STA)' },
 ];
 const PNR = new Set(['place', 'route', 'sta']);
-const ASIC = new Set(['amap', 'aplace', 'aroute', 'asta']);
-const APHYS = new Set(['aplace', 'aroute', 'asta']);
+const ASIC = new Set(['amap', 'aplace', 'aroute', 'adetail', 'asta']);
+const APHYS = new Set(['aplace', 'aroute', 'adetail', 'asta']);
 /** the matching stage of the other back end */
 const OTHER: Record<string, string> = { map: 'amap', place: 'aplace', route: 'aroute', sta: 'asta', amap: 'map', aplace: 'place', aroute: 'route', asta: 'sta' };
 
@@ -456,6 +457,8 @@ export class SynthOverlay {
   }
 
   private selNetA: number | null = null;
+  private selNetD: number | null = null;
+  private layers = [true, true, true, true];
 
   private drawAsic(fit: boolean): void {
     const a = this.asic!;
@@ -471,6 +474,7 @@ export class SynthOverlay {
       scene.bg = [...(scene.bg ?? []), ...congestion(a)];
       scene.lines = this.edges ? asicRouteLines(a, { net: this.selNetA }) : [];
     }
+    if (k === 'adetail') scene.lines = this.edges ? detailLines(a, this.selNetD, this.layers) : [];
     if (k === 'asta') scene.lines = asicRouteLines(a, { dim: true });
     this.view.set(scene, fit);
   }
@@ -500,9 +504,20 @@ export class SynthOverlay {
         '顏色：藍＝水平、紫＝垂直、綠＝clock / reset；底色＝擁塞（綠鬆 → 紅滿）。點元件看細節、點右側 net 高亮。',
       ];
     }
+    if (key === 'adetail') {
+      const d = a.detail;
+      const um = (x: number) => (x / 1000).toFixed(2) + ' mm';
+      return [
+        `A ⑦ Detail Routing（軌道格點：每 ${(a.die.row_h / d.tracks).toFixed(1)} µm 一條，${d.nx} × ${d.ny} × 4 層；M2/M4 水平、M3/M5 垂直）`,
+        '每條 net 只在全域繞線選的 gcell 走廊內（外加一圈）以 A* 找路：端點依 Prim 順序連到已建好的樹，換層一個 via 成本較高；每個格點只能屬於一條 net（所以沒有短路），重疊以 PathFinder 協商重繞，卡住的 net 走廊會加寬。元件腳位從 M1 經 via 上來，SRAM 巨集上方擋住 M2/M3，IO 腳在 M5。',
+        '',
+        `線長 ${um(d.wirelength)}（M2 ${um(d.per_layer[0])}、M3 ${um(d.per_layer[1])}、M4 ${um(d.per_layer[2])}、M5 ${um(d.per_layer[3])}），via ${d.vias} 個；衝突 ${d.conflicts}、未接通 ${d.opens}；每輪衝突：${d.iters.join(' → ')}`,
+        d.nets.length ? '顏色：藍 M2、紅 M3、綠 M4、黃 M5；側欄可切換層、點 net 高亮。這一步的線長也回饋給 STA。' : `（共 ${d.segments} 段線，太多不畫，只列統計）`,
+      ];
+    }
     const t = a.timing;
     return [
-      'A ⑦ Timing (STA)',
+      'A ⑧ Timing (STA)',
       '元件延遲 = 本徵延遲 + 每扇出負載 × 扇出；線延遲 = 驅動整條繞線的電容 + 到該負載的分佈 RC（依曼哈頓距離）。路徑起點為輸入腳與 DFF（clk→Q），終點為 DFF D（加 setup）與輸出腳；clock 視為理想。',
       '',
       `關鍵路徑 ${t.period.toFixed(3)} ns → Fmax ${t.fmax.toFixed(1)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，元件顏色＝到達時間（綠早紅晚）`,
@@ -520,7 +535,36 @@ export class SynthOverlay {
     det.innerHTML = '<p class="hint">點元件看細節（種類、位置、接腳訊號、到達時間）。</p>';
     d.appendChild(det);
     const div = document.createElement('div');
-    if (key === 'asta') {
+    if (key === 'adetail') {
+      const d = a.detail;
+      div.innerHTML = `<h3>層</h3>`;
+      ['M2 水平', 'M3 垂直', 'M4 水平', 'M5 垂直'].forEach((name, l) => {
+        const lab = document.createElement('label');
+        lab.style.display = 'block';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = this.layers[l];
+        cb.onchange = () => { this.layers[l] = cb.checked; this.drawAsic(false); };
+        lab.append(cb, ` `, Object.assign(document.createElement('span'), { className: 'sw', style: `background:${LAYER_COLOR[l]}` }), `${name}　${(d.per_layer[l] / 1000).toFixed(2)} mm`);
+        div.appendChild(lab);
+      });
+      if (d.nets.length) {
+        const h = document.createElement('h3');
+        h.textContent = `Net（${d.nets.length}，依線長）`;
+        div.appendChild(h);
+        const list = document.createElement('div');
+        list.className = 'clist';
+        const order = d.nets.map((_, i) => i).sort((x, y) => d.nets[y].len - d.nets[x].len);
+        for (const i of order.slice(0, 400)) {
+          const n = d.nets[i];
+          const row = document.createElement('div');
+          row.textContent = `${n.name}  ${n.len.toFixed(1)} µm  ${n.vias.length / 3} via`;
+          row.onclick = () => { this.selNetD = i; this.drawAsic(false); };
+          list.appendChild(row);
+        }
+        div.appendChild(list);
+      }
+    } else if (key === 'asta') {
       div.innerHTML = `<h3>關鍵路徑（${a.timing.period.toFixed(3)} ns）</h3>` + table(['累計 ns', '延遲', '經過'], a.timing.path.map(s => [s.at.toFixed(3), s.delay.toFixed(3), esc(s.what)]));
     } else if (key === 'aroute') {
       div.innerHTML = `<h3>Net（${a.route.nets.length}，依線長）</h3>`;
@@ -540,7 +584,7 @@ export class SynthOverlay {
       a.cells.forEach(([, , w, , , h], i) => { const t = a.map.cells[i].t; areaOf.set(t, (areaOf.get(t) ?? 0) + w * a.die.site_w * h * a.die.row_h); });
       div.innerHTML = `<h3>元件數量</h3>` + table(['元件', '數量', '面積 µm²'], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (areaOf.get(t) ?? 0).toFixed(0)]));
     }
-    div.innerHTML += `<h3>IO 腳</h3>` + table(['訊號', '方向', 'x µm', 'y µm'], a.pins.map(p => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)]));
+    div.insertAdjacentHTML('beforeend', `<h3>IO 腳</h3>` + table(['訊號', '方向', 'x µm', 'y µm'], a.pins.map(p => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)])));
     d.appendChild(div);
     return d;
   }

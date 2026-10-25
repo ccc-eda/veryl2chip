@@ -244,7 +244,7 @@ fn riscv_soc_fib() {
 /// net one connected tree over its terminals, no overflow, a sane STA
 #[test]
 fn asic_flow_legal() {
-    for (files, top) in [(&["ram.veryl"][..], "Ram"), (&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"][..], "RiscvSoc")] {
+    for (files, top) in [(&["ram.veryl"][..], "Ram"), (&["sync_ram.veryl", "bram_tests.veryl"][..], "BramMix"), (&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"][..], "RiscvSoc")] {
         let mut parsers = vec![];
         for f in files {
             let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), f);
@@ -264,6 +264,33 @@ fn asic_flow_legal() {
             for rr in r..r + h {
                 for s in x..x + w { assert!(!occ[rr as usize][s as usize], "{}: overlap at row {} site {}", top, rr, s); occ[rr as usize][s as usize] = true; }
             }
+        }
+        // detailed routing, checked from its wires alone: no grid node in two
+        // nets, and every net one connected piece that reaches all its pins
+        let d = &o.detail;
+        assert_eq!((d.conflicts, d.opens), (0, 0), "{}: detailed routing", top);
+        let mut owner: std::collections::HashMap<(u8, u32, u32), usize> = Default::default();
+        for (ni, n) in d.nets.iter().enumerate() {
+            let mut nodes: Vec<(u8, u32, u32)> = vec![];
+            for &(l, x0, y0, x1, y1) in &n.segs { for x in x0..=x1 { for y in y0..=y1 { nodes.push((l, x, y)); } } }
+            for &(l, x, y) in &n.vias { if l != 255 { nodes.push((l, x, y)); nodes.push((l + 1, x, y)); } }
+            nodes.sort(); nodes.dedup();
+            for &q in &nodes { if let Some(o) = owner.insert(q, ni) { assert!(o == ni, "{}: short between nets {} and {} at {:?}", top, o, ni, q); } }
+            if nodes.is_empty() { continue; }
+            // connectivity: flood fill along tracks and vias
+            let set: std::collections::HashSet<(u8, u32, u32)> = nodes.iter().copied().collect();
+            let mut seen = std::collections::HashSet::new();
+            let mut work = vec![nodes[0]];
+            while let Some(q) = work.pop() {
+                if !seen.insert(q) { continue; }
+                let (l, x, y) = q;
+                let mut nb = vec![(l + 1, x, y)];
+                if l > 0 { nb.push((l - 1, x, y)); }
+                if l % 2 == 0 { nb.push((l, x + 1, y)); if x > 0 { nb.push((l, x - 1, y)); } } else { nb.push((l, x, y + 1)); if y > 0 { nb.push((l, x, y - 1)); } }
+                for v in nb { if set.contains(&v) { work.push(v); } }
+            }
+            assert_eq!(seen.len(), set.len(), "{}: net {} routed in pieces", top, ni);
+            for &(l, x, y) in &n.vias { if l == 255 { assert!(set.contains(&(0, x, y)), "{}: net {} misses a pin", top, ni); } }
         }
         // the clock tree: every flip-flop clock comes through CLKBUFs, with little skew
         assert!(o.cts.buffers > 0, "{}: no clock tree", top);

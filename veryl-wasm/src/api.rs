@@ -44,7 +44,7 @@ fn kind_name(k: Kind) -> &'static str {
 fn net_names(nls: &[&Netlist]) -> std::collections::HashMap<Bit, String> {
     let mut m = std::collections::HashMap::new();
     let idx = |n: &str, i: usize, len: usize| if len > 1 { format!("{}[{}]", n, i) } else { n.to_string() };
-    for nl in nls { for (n, bits) in &nl.nets { for (i, b) in bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(n, i, bits.len())); } } }
+    for nl in nls { for (n, bits) in nl.nets.iter().filter(|(n, _)| !n.starts_with("$mem:")) { for (i, b) in bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(n, i, bits.len())); } } }
     for nl in nls { for p in &nl.ports { for (i, b) in p.bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(&p.name, i, p.bits.len())); } } }
     m
 }
@@ -66,6 +66,21 @@ fn asic(v: &Value) -> R<Value> {
     let frames: Vec<usize> = if hl <= maxf { (0..hl).collect() } else { (0..maxf).map(|i| i * (hl - 1) / (maxf - 1)).collect() };
     let mut verilog = veryl_eda::output::to_verilog(&o.mapped);
     verilog += &asic::lib::verilog_models();
+    let detail_json = {
+            let d = &o.detail;
+            // the wires themselves only for designs small enough to draw
+            let segs: usize = d.nets.iter().map(|n| n.segs.len()).sum();
+            json!({
+                "nx": d.nx, "ny": d.ny, "tracks": asic::detail::TRACKS, "wirelength": d.wirelength, "vias": d.vias, "conflicts": d.conflicts, "opens": d.opens,
+                "iters": d.iters, "per_layer": d.per_layer, "segments": segs,
+                "nets": if segs <= 150_000 { d.nets.iter().map(|n| json!({
+                    "name": names.get(&n.bit).cloned().unwrap_or_else(|| match n.bit { Bit::W(w) => format!("n{}", w), _ => "const".into() }),
+                    "len": n.length,
+                    "segs": n.segs.iter().flat_map(|s| [s.0 as u32, s.1, s.2, s.3, s.4]).collect::<Vec<_>>(),
+                    "vias": n.vias.iter().filter(|v| v.0 != 255).flat_map(|v| [v.0 as u32, v.1, v.2]).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>() } else { vec![] },
+            })
+        };
     Ok(json!({
         "ok": true,
         "top": top,
@@ -84,6 +99,7 @@ fn asic(v: &Value) -> R<Value> {
                 "segs": r.segs.iter().flat_map(|s| [s.0, s.1, s.2, s.3]).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         },
+        "detail": detail_json,
         "cts": {
             "buffers": o.cts.buffers, "hold_bufs": o.hold_bufs,
             "trees": o.cts.trees.iter().map(|(b, sinks, bufs, levels)| json!({ "net": names.get(b).cloned().unwrap_or_else(|| "?".into()), "sinks": sinks, "buffers": bufs, "levels": levels })).collect::<Vec<_>>(),
@@ -108,7 +124,7 @@ fn pnr(v: &Value) -> R<Value> {
         let names = |b: Option<Bit>| -> String {
             match b {
                 None => String::new(),
-                Some(b) => mapped.nets.iter().chain(st.opt.nets.iter()).find_map(|(n, bits)| bits.iter().position(|x| *x == b).map(|i| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() }))
+                Some(b) => mapped.nets.iter().chain(st.opt.nets.iter()).filter(|(n, _)| !n.starts_with("$mem:")).find_map(|(n, bits)| bits.iter().position(|x| *x == b).map(|i| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() }))
                     .or_else(|| mapped.ports.iter().find_map(|p| p.bits.iter().position(|x| *x == b).map(|i| if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() })))
                     .unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), Bit::C0 => "0".into(), Bit::C1 => "1".into() }),
             }

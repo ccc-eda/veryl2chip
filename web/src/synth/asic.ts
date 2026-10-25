@@ -19,6 +19,12 @@ export interface AsicResult {
     gx: number; gy: number; cap: number; iters: number[]; wirelength: number; vias: number; overflow: number;
     nets: { name: string; clock: boolean; len: number; vias: number; crit: boolean; segs: number[] }[];
   };
+  detail: {
+    nx: number; ny: number; tracks: number; wirelength: number; vias: number; conflicts: number; opens: number;
+    iters: number[]; per_layer: number[]; segments: number;
+    /** per net: segs flat (layer, x0, y0, x1, y1) and vias flat (lower layer, x, y), in track units; empty when too large */
+    nets: { name: string; len: number; segs: number[]; vias: number[] }[];
+  };
   cts: { buffers: number; hold_bufs: number; trees: { net: string; sinks: number; buffers: number; levels: number }[] };
   timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
   verilog: string;
@@ -121,6 +127,27 @@ export function asicRouteLines(r: AsicResult, opts: { dim?: boolean; net?: numbe
       else if (sel) top.push({ pts, color: '#ffd479', width: 2.4 });
       else if (opts.dim) out.push({ pts, color: 'rgba(126,150,180,0.15)', width: 0.8 });
       else out.push({ pts, color: n.clock ? 'rgba(87,194,122,0.8)' : s[i + 1] === s[i + 3] ? 'rgba(94,159,214,0.55)' : 'rgba(180,142,173,0.6)', width: 0.9 });
+    }
+  });
+  return out.concat(top);
+}
+
+export const LAYER_COLOR = ['rgba(94,159,214,0.75)', 'rgba(224,108,117,0.7)', 'rgba(87,194,122,0.7)', 'rgba(229,192,123,0.75)'];
+
+/** detailed wires: one line per straight piece, coloured by layer (M2 M3 M4 M5) */
+export function detailLines(r: AsicResult, sel: number | null, layers: boolean[]): Line[] {
+  const d = r.detail;
+  const t = r.die.row_h / d.tracks; // µm per track
+  const H = r.die.h * S;
+  const out: Line[] = [], top: Line[] = [];
+  d.nets.forEach((n, ni) => {
+    const s = n.segs;
+    for (let i = 0; i < s.length; i += 5) {
+      const l = s[i];
+      if (!layers[l]) continue;
+      const pts = [s[i + 1] * t * S, H - s[i + 2] * t * S, s[i + 3] * t * S, H - s[i + 4] * t * S];
+      if (ni === sel) top.push({ pts, color: '#ffd479', width: 1.6 });
+      else out.push({ pts, color: LAYER_COLOR[l], width: 0.5 });
     }
   });
   return out.concat(top);
