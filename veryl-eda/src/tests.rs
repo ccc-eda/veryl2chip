@@ -517,3 +517,26 @@ fn clock_domains() {
         assert_eq!((s.get("o_a"), s.get("o_b"), s.get("o_n")), (3, 10, 6));
     });
 }
+
+/// the FIFO / UART / VGA examples' own testbenches on their three netlists
+/// (veryl-sim gate-level simulation); VgaTiming is instantiated with smaller
+/// parameters by its testbench, so that netlist is synthesized for them
+#[test]
+fn peripheral_testbenches() {
+    for (file, top) in [("fifo.veryl", "Fifo"), ("uart.veryl", "UartLoop"), ("vga.veryl", "VgaTiming")] {
+        let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), file);
+        let srcs = vec![(path.clone(), std::fs::read_to_string(&path).unwrap())];
+        let p = Parser::parse(&srcs[0].1, &path).unwrap();
+        let mut lib = Lib::new();
+        lib.add(&p.veryl);
+        for kind in ["opt", "ice40", "asic"] {
+            let prov = crate::gatesim::Provider::new(&lib, top, kind);
+            let f = |m: &str, ov: &std::collections::HashMap<String, veryl_sim::value::Val>| prov.get(m, ov);
+            let r = veryl_sim::run_gates(&srcs, None, 1_000_000, false, false, Some(&f)).unwrap();
+            assert!(!r.tops.is_empty() && r.tops.iter().all(|t| t.fails == 0 && t.finished), "{} {}: {}", top, kind, r.log);
+            let built = prov.built.borrow();
+            assert_eq!(built.len(), 1, "{} {}", top, kind);
+            if top == "VgaTiming" { assert!(built[0].0.contains("H_VIS=16"), "{:?}", built[0]); }
+        }
+    }
+}

@@ -28,9 +28,10 @@ rv32i:Alu:comb seq101:Seq101:ind pkt_reg:PktReg:ind ram:Ram:bmc8 rv32i:RegFile:b
 features:Shifter:comb features:Funcs:comb features:Ranges:comb features:Counter:ind features:Top:bmc20
 soc:ProgRom:comb soc:RiscvSoc:bmc80 rv32i_rom:RiscvTestRom:comb
 sync_ram:SyncRam:bmc4 bram_tests:Bram2048x2:bmc4 bram_tests:BramMix:bmc12
-lang:Div:comb lang:HsTop:bmc24 lang:Wide:comb"
+lang:Div:comb lang:HsTop:bmc24 lang:Wide:comb
+fifo:Fifo:bmc6 uart:UartLoop:bmc24 vga:VgaTiming:bmc8"
 # designs whose iCE40 netlist (with SB_RAM40_4K) is also proven equivalent, using yosys' cell models
-FPGA_EQ="SyncRam Bram2048x2 BramMix"
+FPGA_EQ="SyncRam Bram2048x2 BramMix Fifo"
 src() { if [ -f "$EX/src/$1.veryl" ]; then echo "$EX/src/$1.veryl"; else echo "$ROOT/examples/$1.veryl"; fi; }
 
 echo "== synthesis (outputs in $OUT)"
@@ -48,7 +49,7 @@ done
 echo "== gate-level simulation: the RTL testbenches on the synthesized netlists"
 # top:files (the module replaced by its netlist; its file's #[test] modules run)
 GATESIM="Adder:adder Max3:max3 AluUnit:alu_pkg GrayConv:gen_rev Seq101:seq101 PktReg:pkt_reg Ram:ram SyncRam:sync_ram
-Top:features BramMix:sync_ram+bram_tests HsTop:lang RiscvCore:rv32i+rv32i_rom"
+Top:features BramMix:sync_ram+bram_tests HsTop:lang RiscvCore:rv32i+rv32i_rom Fifo:fifo UartLoop:uart VgaTiming:vga"
 for d in $GATESIM; do
     IFS=: read -r m f <<< "$d"
     files=""

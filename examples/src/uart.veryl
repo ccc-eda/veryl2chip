@@ -1,0 +1,174 @@
+// ==========================================
+// UART：8N1 傳送器與接收器（每個位元 CLKS_PER_BIT 個時脈）
+// ==========================================
+module UartTx #(
+    param CLKS_PER_BIT: u32 = 16,
+) (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    i_valid: input  logic    ,
+    i_data : input  logic<8> ,
+    o_ready: output logic    ,
+    o_tx   : output logic    ,
+) {
+    var busy : logic    ;
+    var shift: logic<10>; // stop, data[7:0], start (LSB first)
+    var nbits: logic<4> ;
+    var cnt  : logic<16>;
+
+    always_ff {
+        if_reset {
+            busy  = 0;
+            shift = 10'h3ff;
+            nbits = 0;
+            cnt   = 0;
+        } else if !busy {
+            if i_valid {
+                busy  = 1;
+                shift = {1'b1, i_data, 1'b0};
+                nbits = 4'd10;
+                cnt   = 0;
+            }
+        } else if cnt == CLKS_PER_BIT - 1 {
+            cnt   = 0;
+            shift = {1'b1, shift[9:1]};
+            nbits = nbits - 4'd1;
+            if nbits == 4'd1 {
+                busy = 0;
+            }
+        } else {
+            cnt = cnt + 16'd1;
+        }
+    }
+
+    assign o_ready = !busy;
+    assign o_tx    = shift[0];
+}
+
+module UartRx #(
+    param CLKS_PER_BIT: u32 = 16,
+) (
+    i_clk  : input  clock   ,
+    i_rst  : input  reset   ,
+    i_rx   : input  logic   ,
+    o_valid: output logic   ,
+    o_data : output logic<8>,
+) {
+    var busy : logic    ;
+    var cnt  : logic<16>;
+    var nbits: logic<4> ;
+    var data : logic<8> ;
+    var valid: logic    ;
+
+    always_ff {
+        if_reset {
+            busy  = 0;
+            cnt   = 0;
+            nbits = 0;
+            data  = 0;
+            valid = 0;
+        } else {
+            valid = 0;
+            if !busy {
+                // start bit: wait half a bit, then sample in the middle
+                if !i_rx {
+                    busy  = 1;
+                    cnt   = CLKS_PER_BIT / 2;
+                    nbits = 0;
+                }
+            } else if cnt == CLKS_PER_BIT - 1 {
+                cnt = 0;
+                if nbits == 4'd9 {
+                    busy  = 0;
+                    valid = i_rx; // stop bit must be 1
+                } else {
+                    if nbits != 4'd0 {
+                        data = {i_rx, data[7:1]};
+                    }
+                    nbits = nbits + 4'd1;
+                }
+            } else {
+                cnt = cnt + 16'd1;
+            }
+        }
+    }
+
+    assign o_valid = valid;
+    assign o_data  = data;
+}
+
+// loopback: what the transmitter sends, the receiver gets back
+module UartLoop (
+    i_clk  : input  clock   ,
+    i_rst  : input  reset   ,
+    i_valid: input  logic   ,
+    i_data : input  logic<8>,
+    o_ready: output logic   ,
+    o_tx   : output logic   ,
+    o_valid: output logic   ,
+    o_data : output logic<8>,
+) {
+    var line: logic;
+
+    inst tx: UartTx #(CLKS_PER_BIT: 8) (
+        i_clk           ,
+        i_rst           ,
+        i_valid         ,
+        i_data          ,
+        o_ready         ,
+        o_tx   : line   ,
+    );
+    inst rx: UartRx #(CLKS_PER_BIT: 8) (
+        i_clk           ,
+        i_rst           ,
+        i_rx   : line   ,
+        o_valid         ,
+        o_data          ,
+    );
+    assign o_tx = line;
+}
+
+#[test(uart_test)]
+module TestUart {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var valid : logic   ;
+    var data  : logic<8>;
+    var ready : logic   ;
+    var tx    : logic   ;
+    var rvalid: logic   ;
+    var rdata : logic<8>;
+
+    inst u: UartLoop (
+        i_clk  : clk   ,
+        i_rst  : rst   ,
+        i_valid: valid ,
+        i_data : data  ,
+        o_ready: ready ,
+        o_tx   : tx    ,
+        o_valid: rvalid,
+        o_data : rdata ,
+    );
+
+    initial {
+        valid = 0;
+        data  = 0;
+        rst.assert();
+        clk.next(2);
+        // one frame = 10 bits × 8 clocks; the receiver reports in the stop bit
+        valid = 1;
+        data  = 8'hA5;
+        clk.next();
+        valid = 0;
+        clk.next(85);
+        $assert(rdata == 8'hA5, "first byte");
+        valid = 1;
+        data  = 8'h3C;
+        clk.next();
+        valid = 0;
+        clk.next(85);
+        $assert(rdata == 8'h3C, "second byte");
+        $finish();
+    }
+}

@@ -1,0 +1,124 @@
+// ==========================================
+// 同步 FIFO：256 × 8，記憶體同步讀取（FPGA 上是一塊 block RAM）
+// 讀出的資料在 i_pop 的下一拍出現在 o_data
+// ==========================================
+module Fifo #(
+    param ADDR_W: u32 = 8,
+    param DATA_W: u32 = 8,
+) (
+    i_clk  : input  clock        ,
+    i_rst  : input  reset        ,
+    i_push : input  logic        ,
+    i_data : input  logic<DATA_W>,
+    i_pop  : input  logic        ,
+    o_data : output logic<DATA_W>,
+    o_empty: output logic        ,
+    o_full : output logic        ,
+    o_count: output logic<ADDR_W + 1>,
+) {
+    var mem  : logic<DATA_W> [1 << ADDR_W];
+    var wp   : logic<ADDR_W>    ;
+    var rp   : logic<ADDR_W>    ;
+    var count: logic<ADDR_W + 1>;
+    var rdata: logic<DATA_W>    ;
+
+    let do_push: logic = i_push && (count != (1 << ADDR_W));
+    let do_pop : logic = i_pop && (count != 0);
+
+    always_ff (i_clk) {
+        if do_push {
+            mem[wp] = i_data;
+        }
+        if do_pop {
+            rdata = mem[rp];
+        }
+    }
+
+    always_ff {
+        if_reset {
+            wp    = 0;
+            rp    = 0;
+            count = 0;
+        } else {
+            if do_push {
+                wp = wp + 1;
+            }
+            if do_pop {
+                rp = rp + 1;
+            }
+            if do_push && !do_pop {
+                count = count + 1;
+            } else if do_pop && !do_push {
+                count = count - 1;
+            }
+        }
+    }
+
+    assign o_data  = rdata;
+    assign o_count = count;
+    assign o_empty = count == 0;
+    assign o_full  = count == (1 << ADDR_W);
+}
+
+#[test(fifo_test)]
+module TestFifo {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var push : logic   ;
+    var din  : logic<8>;
+    var pop  : logic   ;
+    var dout : logic<8>;
+    var empty: logic   ;
+    var full : logic   ;
+    var count: logic<9>;
+
+    inst u: Fifo (
+        i_clk  : clk  ,
+        i_rst  : rst  ,
+        i_push : push ,
+        i_data : din  ,
+        i_pop  : pop  ,
+        o_data : dout ,
+        o_empty: empty,
+        o_full : full ,
+        o_count: count,
+    );
+
+    initial {
+        push = 0;
+        pop  = 0;
+        din  = 0;
+        rst.assert();
+        $assert(empty == 1'b1, "empty after reset");
+        // push 3 bytes
+        push = 1;
+        din = 8'h11; clk.next();
+        din = 8'h22; clk.next();
+        din = 8'h33; clk.next();
+        push = 0;
+        $assert(count == 9'd3, "three in");
+        // pop them in order (data one cycle later)
+        pop = 1;
+        clk.next();
+        $assert(dout == 8'h11, "first out");
+        clk.next();
+        $assert(dout == 8'h22, "second out");
+        clk.next();
+        $assert(dout == 8'h33, "third out");
+        pop = 0;
+        $assert(empty == 1'b1, "empty again");
+        // fill it up
+        push = 1;
+        din  = 0;
+        for _i in 0..256 {
+            clk.next();
+            din = din + 8'd1;
+        }
+        $assert(full == 1'b1, "full after 256");
+        din = 8'hFF;
+        clk.next();
+        $assert(count == 9'd256, "no push when full");
+        $finish();
+    }
+}

@@ -5,6 +5,8 @@ import { Core, startCore } from './client';
 import { Example, examples } from './examples';
 import { SynthOverlay } from './synth/overlay';
 import { WaveView } from './wave';
+import { newModule, projectZip } from './templates';
+import { saveAs } from './zip';
 
 declare const VERYL_WASM_B64: string;
 
@@ -50,7 +52,7 @@ function savedFiles(ex: Example): VFile[] {
     const s = store()?.getItem('veryl2chip:' + ex.id);
     if (s) {
       const v = JSON.parse(s) as VFile[];
-      if (Array.isArray(v) && v.length === ex.files.length) return v;
+      if (Array.isArray(v) && v.length && v.every(f => typeof f.name === 'string' && typeof f.src === 'string')) return v;
     }
   } catch { /* ignore */ }
   return ex.files.map(f => ({ ...f }));
@@ -59,7 +61,7 @@ function savedFiles(ex: Example): VFile[] {
 function persist(): void {
   if (!st) return;
   try {
-    const same = st.files.every((f, i) => f.src === st!.ex.files[i].src);
+    const same = st.files.length === st.ex.files.length && st.files.every((f, i) => f.name === st!.ex.files[i].name && f.src === st!.ex.files[i].src);
     if (same) store()?.removeItem('veryl2chip:' + st.ex.id);
     else store()?.setItem('veryl2chip:' + st.ex.id, JSON.stringify(st.files));
   } catch { /* storage unavailable */ }
@@ -74,10 +76,57 @@ function renderTabs(): void {
     const b = document.createElement('button');
     b.textContent = f.name;
     if (i === st!.cur) b.classList.add('cur');
-    if (f.src !== st!.ex.files[i].src) b.classList.add('dirty');
+    if (st!.ex.files.find(e => e.name === f.name)?.src !== f.src) b.classList.add('dirty');
     b.onclick = () => { st!.cur = i; showFile(); };
     tabs.appendChild(b);
   });
+}
+
+/** a new module in a new file; the name is asked for */
+function newFile(): void {
+  if (!st) return;
+  let name = prompt('新檔名（.veryl）', `new${st.files.length}.veryl`)?.trim();
+  if (!name) return;
+  if (!name.endsWith('.veryl')) name += '.veryl';
+  if (!/^[\w.-]+$/.test(name)) { alert('檔名只能用英數字、底線、點和減號'); return; }
+  if (st.files.some(f => f.name === name)) { alert(`已經有 ${name}`); return; }
+  const mod = name.replace(/\.veryl$/, '').replace(/(^|[_-])(\w)/g, (_, _a, c: string) => c.toUpperCase()).replace(/\W/g, '');
+  st.files.push({ name, src: newModule(mod || 'NewModule') });
+  st.cur = st.files.length - 1;
+  persist();
+  showFile();
+  refreshTops();
+}
+
+function deleteFile(): void {
+  if (!st || st.files.length < 2) return;
+  const f = st.files[st.cur];
+  if (!confirm(`刪除 ${f.name}？（「還原範例」可以找回範例原本的檔案）`)) return;
+  st.files.splice(st.cur, 1);
+  st.cur = Math.max(0, st.cur - 1);
+  persist();
+  showFile();
+  refreshTops();
+}
+
+function exportZip(): void {
+  if (!st) return;
+  saveAs(`${st.ex.id}.zip`, projectZip(st.ex.id, st.files, st.ex.pcf ? { name: `${st.ex.synth ?? 'top'}.pcf`, src: st.ex.pcf } : undefined), 'application/zip');
+}
+
+/** add .veryl files picked by the user (same name: replaced) */
+async function importFiles(list: FileList | null): Promise<void> {
+  if (!st || !list) return;
+  for (const file of Array.from(list)) {
+    if (!file.name.endsWith('.veryl')) continue;
+    const src = await file.text();
+    const i = st.files.findIndex(f => f.name === file.name);
+    if (i >= 0) st.files[i].src = src; else st.files.push({ name: file.name, src });
+    st.cur = i >= 0 ? i : st.files.length - 1;
+  }
+  persist();
+  showFile();
+  refreshTops();
 }
 
 function gutter(): void {
@@ -246,9 +295,15 @@ function wire(): void {
   $('tabWave').onclick = () => showTab('wave');
   $<HTMLSelectElement>('waveTop').onchange = () => wave?.set(vcds.find(v => v.top === $<HTMLSelectElement>('waveTop').value)?.text ?? null);
   $('synth').onclick = () => { if (synth && st) synth.open(st.files, st.ex.synth, st.ex.pcf); };
+  $('newFile').onclick = newFile;
+  $('delFile').onclick = deleteFile;
+  $('zipOut').onclick = exportZip;
+  $('importBtn').onclick = () => $<HTMLInputElement>('importIn').click();
+  $<HTMLInputElement>('importIn').onchange = () => { importFiles($<HTMLInputElement>('importIn').files); $<HTMLInputElement>('importIn').value = ''; };
   $('revert').onclick = () => {
-    if (!st) return;
+    if (!st || !confirm('捨棄所有修改（含新增 / 刪除的檔案），回到範例原始碼？')) return;
     st.files = st.ex.files.map(f => ({ ...f }));
+    st.cur = 0;
     persist();
     showFile();
     refreshTops();

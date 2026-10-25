@@ -5,6 +5,8 @@ import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
 import { AsicResult, asicRouteLines, congestion, detailLines, dieScene, LAYER_COLOR, powerScene, stdColor } from './asic';
 import { deviceScene, heat, lcColor, PnrResult, RAM_COLOR, routeLines } from './device';
+import { saveAs } from '../zip';
+import { compareRows, compareScene } from './compare';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
 import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
 
@@ -61,10 +63,11 @@ export class SynthOverlay {
   private asicBusy = false;
   private asicMs = 0;
 
-  constructor(private core: Core) {
+  /** `embedded`: the views live in a page pane (the IDE), not an overlay to close */
+  constructor(private core: Core, private opts: { embedded?: boolean; onStage?: (key: string) => void } = {}) {
     this.view = new CanvasView($<HTMLCanvasElement>('synCanvas'));
     this.view.onPick = b => this.pick(b);
-    $('synClose').onclick = () => this.close();
+    if (!opts.embedded) $('synClose').onclick = () => this.close();
     $('synZin').onclick = () => this.view.zoom(1.4);
     $('synZout').onclick = () => this.view.zoom(1 / 1.4);
     $('synZfit').onclick = () => this.view.fit();
@@ -77,17 +80,29 @@ export class SynthOverlay {
     $('synDef').onclick = () => this.asic && download(`${this.asic.top}.def`, this.asic.def);
     $<HTMLSelectElement>('synTarget').onchange = () => this.setTarget($<HTMLSelectElement>('synTarget').value as 'fpga' | 'asic');
     $<HTMLSelectElement>('synTop').onchange = () => this.run($<HTMLSelectElement>('synTop').value);
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('synOverlay').classList.contains('hidden')) this.close(); });
+    if (!opts.embedded) document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('synOverlay').classList.contains('hidden')) this.close(); });
     this.chips();
   }
 
-  open(files: VFile[], top?: string, pcf?: string, target?: 'fpga' | 'asic'): void {
+  open(files: VFile[], top?: string, pcf?: string, target?: 'fpga' | 'asic', stage?: string): void {
     this.files = files;
     this.pcf = pcf;
     if (target) this.setTarget(target, false);
+    if (stage) this.stage = stage;
     $('synOverlay').classList.remove('hidden');
     this.run(top);
   }
+
+  /** the stage shown */
+  get current(): string { return this.stage; }
+  /** show a stage (the synthesis must have been started with `open`) */
+  showStage(key: string): void {
+    if (ASIC.has(key) && this.target !== 'asic') this.setTarget('asic', false);
+    else if ((PNR.has(key) || key === 'map') && this.target !== 'fpga') this.setTarget('fpga', false);
+    this.stage = key;
+    this.show(key);
+  }
+  get synthesized(): boolean { return this.res !== null; }
 
   close(): void { this.stopAnim(); $('synOverlay').classList.add('hidden'); }
 
@@ -152,7 +167,7 @@ export class SynthOverlay {
     }
     this.stats(this.synMs);
     this.buttons();
-    if (PNR.has(this.stage)) this.show(this.stage);
+    if (PNR.has(this.stage) || this.stage === 'cmp') this.show(this.stage);
   }
 
   private pnrMs = 0;
@@ -190,7 +205,7 @@ export class SynthOverlay {
     }
     this.stats(this.synMs);
     this.buttons();
-    if (ASIC.has(this.stage)) this.show(this.stage);
+    if (ASIC.has(this.stage) || this.stage === 'cmp') this.show(this.stage);
   }
 
   private chips(): void {
@@ -205,6 +220,15 @@ export class SynthOverlay {
       b.onclick = () => this.show(s.key);
       box.appendChild(b);
     });
+    const sep = document.createElement('span');
+    sep.className = 'arrow';
+    sep.textContent = '│';
+    const c = document.createElement('button');
+    c.textContent = '⇄ FPGA vs ASIC';
+    c.dataset.key = 'cmp';
+    c.title = '同一個設計的兩種實作並排比較';
+    c.onclick = () => this.show('cmp');
+    box.append(sep, c);
   }
 
   /** stage-dependent buttons */
@@ -214,7 +238,7 @@ export class SynthOverlay {
     $<HTMLButtonElement>('synAnim').disabled = a ? !this.asic : !this.pnr;
     for (const id of ['synAsc', 'synPcf', 'synBin']) { $(id).classList.toggle('hidden', !p); $<HTMLButtonElement>(id).disabled = !this.pnr; }
     for (const id of ['synV', 'synDef']) { $(id).classList.toggle('hidden', !a); $<HTMLButtonElement>(id).disabled = !this.asic; }
-    $('synEdges').classList.toggle('hidden', this.stage === 'place' || this.stage === 'aplace');
+    $('synEdges').classList.toggle('hidden', this.stage === 'place' || this.stage === 'aplace' || this.stage === 'cmp');
   }
 
   private netView(key: NetKey): NetView {
@@ -277,7 +301,9 @@ export class SynthOverlay {
     this.sel = null;
     for (const b of $('synChips').querySelectorAll('button')) b.classList.toggle('cur', (b as HTMLElement).dataset.key === key);
     this.buttons();
+    this.opts.onStage?.(key);
     const r = this.res;
+    if (key === 'cmp') { this.showCompare(); return; }
     if (key === 'rtl') {
       const counts = new Map<string, number>();
       for (const s of r.signals) {
@@ -335,6 +361,33 @@ export class SynthOverlay {
     this.drawPnr(true);
     this.info(this.pnrReport(key));
     this.side(this.pnrSide(key));
+  }
+
+  private showCompare(): void {
+    const p = this.pnr, a = this.asic;
+    if (!p || !a) {
+      this.view.set({ boxes: [], lines: [], texts: [] });
+      this.side(document.createElement('div'));
+      const lines = ['⇄ FPGA vs ASIC：兩個後端都要跑完才能比較'];
+      lines.push(p ? '✓ FPGA 佈局繞線完成' : this.pnrErr ? `✗ FPGA：${this.pnrErr}` : '… FPGA 佈局繞線中');
+      lines.push(a ? '✓ ASIC 流程完成' : this.asicErr ? `✗ ASIC：${this.asicErr}` : '… ASIC 流程中');
+      this.info(lines);
+      if (!p && !this.pnrErr) this.runPnr();
+      if (!a && !this.asicErr) this.runAsic();
+      return;
+    }
+    this.view.set(compareScene(p, a), true);
+    const rows = compareRows(p, a);
+    this.info([
+      '⇄ FPGA vs ASIC：同一個網表（共 ①–③）分別走 iCE40 與標準元件流程',
+      'FPGA 用現成的 LUT / 可程式繞線開關，彈性大但每個邏輯和每段繞線都慢、都耗電；ASIC 把邏輯直接做成電晶體與金屬線，面積小、快、省電，但要流片。',
+      '',
+      `F_max：FPGA ${p.timing.fmax.toFixed(1)} MHz vs ASIC ${a.timing.fmax.toFixed(1)} MHz　左：iCE40 佈局，右：標準元件晶粒（放大到同高）`,
+    ]);
+    const d = document.createElement('div');
+    d.innerHTML = '<h3>比較</h3><div class="cmpw">' + table(['項目', 'FPGA', 'ASIC'], rows.map(r => [r[0], r[1], r[2]])) + '</div>'
+      + '<p class="hint">功耗以兩者 F<sub>max</sub> 較低者為共同頻率，翻轉率來自同一組隨機輸入模擬。</p>';
+    this.side(d);
   }
 
   private drawPnr(fit: boolean): void {
@@ -770,6 +823,7 @@ export class SynthOverlay {
 
   private pick(b: Box | null): void {
     const k = this.stage;
+    if (k === 'cmp') return;
     if (PNR.has(k)) {
       if (!this.pnr || this.anim) return;
       const n = this.pnr.lcs.length + this.pnr.ios.length;
@@ -846,14 +900,8 @@ function table(head: string[], rows: string[][]): string {
   return `<table><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
 }
 
-/** save text as a file (a Blob URL works from file:// too) */
 function download(name: string, data: string | Uint8Array): void {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([data as BlobPart], { type: typeof data === 'string' ? 'text/plain' : 'application/octet-stream' }));
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  saveAs(name, data, typeof data === 'string' ? 'text/plain' : 'application/octet-stream');
 }
 
 function fmtArea(um2: number): string {

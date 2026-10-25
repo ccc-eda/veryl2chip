@@ -1,0 +1,102 @@
+// ==========================================
+// VGA 時序產生器，預設 640×480 @ 60 Hz（像素時脈 25.175 MHz）：
+// 水平 640 + 16 + 96 + 48 = 800，垂直 480 + 10 + 2 + 33 = 525；
+// hsync / vsync 低態有效，輸出 8 條色帶的 3-bit RGB 圖樣
+// ==========================================
+module VgaTiming #(
+    param H_VIS : u32 = 640,
+    param H_FP  : u32 = 16 ,
+    param H_SYNC: u32 = 96 ,
+    param H_BP  : u32 = 48 ,
+    param V_VIS : u32 = 480,
+    param V_FP  : u32 = 10 ,
+    param V_SYNC: u32 = 2  ,
+    param V_BP  : u32 = 33 ,
+) (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    o_hsync: output logic    ,
+    o_vsync: output logic    ,
+    o_video: output logic    ,
+    o_x    : output logic<10>,
+    o_y    : output logic<10>,
+    o_rgb  : output logic<3> ,
+) {
+    const H_TOTAL: u32 = H_VIS + H_FP + H_SYNC + H_BP;
+    const V_TOTAL: u32 = V_VIS + V_FP + V_SYNC + V_BP;
+
+    var x: logic<10>;
+    var y: logic<10>;
+
+    always_ff {
+        if_reset {
+            x = 0;
+            y = 0;
+        } else if x == H_TOTAL - 1 {
+            x = 0;
+            y = if y == V_TOTAL - 1 ? 0 : y + 1;
+        } else {
+            x = x + 1;
+        }
+    }
+
+    assign o_x     = x;
+    assign o_y     = y;
+    assign o_video = (x <: H_VIS) && (y <: V_VIS);
+    assign o_hsync = !((x >= H_VIS + H_FP) && (x <: H_VIS + H_FP + H_SYNC));
+    assign o_vsync = !((y >= V_VIS + V_FP) && (y <: V_VIS + V_FP + V_SYNC));
+    // eight vertical color bars, 80 pixels each at 640 wide
+    assign o_rgb = if o_video ? x[9:7] ^ {2'b0, x[6]} : 3'd0;
+}
+
+// 縮小版畫面（16×8，總共 24×12）以便快速模擬；合成時用預設的 640×480
+#[test(vga_test)]
+module TestVga {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var hs : logic    ;
+    var vs : logic    ;
+    var vid: logic    ;
+    var x  : logic<10>;
+    var y  : logic<10>;
+    var rgb: logic<3> ;
+
+    inst u: VgaTiming #(
+        H_VIS : 16,
+        H_FP  : 2 ,
+        H_SYNC: 4 ,
+        H_BP  : 2 ,
+        V_VIS : 8 ,
+        V_FP  : 1 ,
+        V_SYNC: 1 ,
+        V_BP  : 2 ,
+    ) (
+        i_clk  : clk,
+        i_rst  : rst,
+        o_hsync: hs ,
+        o_vsync: vs ,
+        o_video: vid,
+        o_x    : x  ,
+        o_y    : y  ,
+        o_rgb  : rgb,
+    );
+
+    initial {
+        rst.assert();
+        $assert(vid == 1'b1 && hs == 1'b1, "first pixel visible");
+        clk.next(16);
+        $assert(vid == 1'b0 && hs == 1'b1, "front porch");
+        clk.next(2);
+        $assert(x == 10'd18 && hs == 1'b0, "hsync starts after the front porch");
+        clk.next(4);
+        $assert(hs == 1'b1, "hsync is 4 pixels");
+        clk.next(2);
+        $assert(x == 10'd0 && y == 10'd1, "next line after 24");
+        clk.next(24 * 8);
+        $assert(y == 10'd9 && vs == 1'b0 && vid == 1'b0, "vsync on line 9");
+        clk.next(24 * 3);
+        $assert(x == 10'd0 && y == 10'd0 && vs == 1'b1, "frame of 12 lines");
+        $finish();
+    }
+}

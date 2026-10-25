@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -140,6 +140,43 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   } catch (e) {
     bad++;
     console.log(`FAIL ${ex.id.padEnd(9)} asic ${e.message}`);
+  }
+}
+
+// project export: the .zip (stored, CRC-32) must unpack, and with the
+// official veryl CLI the unpacked project must check and pass its tests
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/templates.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const tpl = path.join(tmp, 'templates.cjs');
+  fs.writeFileSync(tpl, js);
+  const { projectZip, newModule } = createRequire(import.meta.url)(tpl);
+  const ex = ctx.VERYL_EXAMPLES.find((e) => e.id === 'uart');
+  const files = [...ex.files, { name: 'blinky.veryl', src: newModule('Blinky') }];
+  const zipPath = path.join(tmp, 'uart project.zip');
+  fs.writeFileSync(zipPath, projectZip('uart project', files));
+  const t0 = Date.now();
+  try {
+    const out = path.join(tmp, 'unzipped');
+    execFileSync('unzip', ['-q', '-o', zipPath, '-d', out]);
+    const dir = path.join(out, 'uart_project');
+    const got = fs.readdirSync(path.join(dir, 'src')).sort().join(' ');
+    if (got !== 'blinky.veryl uart.veryl') throw new Error(`zip contents: ${got}`);
+    let note = 'unzip ok';
+    let veryl = null;
+    try { veryl = execFileSync('which', ['veryl'], { encoding: 'utf8' }).trim(); } catch { /* not installed */ }
+    if (veryl) {
+      execFileSync(veryl, ['check'], { cwd: dir, stdio: 'pipe' });
+      // veryl logs to stderr
+      const t = spawnSync(veryl, ['test'], { cwd: dir, encoding: 'utf8' });
+      const ok = ((t.stdout + t.stderr).match(/Succeeded test/g) ?? []).length;
+      if (ok !== 2) throw new Error(`veryl test: ${ok} of 2 tests succeeded`);
+      note += ', veryl check + veryl test (2 tests) ok';
+    }
+    console.log(`ok   export   .zip of uart + a new-file template: ${note}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL export   ${e.message}`);
   }
 }
 

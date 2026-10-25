@@ -67,6 +67,8 @@ label.inl { flex-direction: row; align-items: center; gap: 6px; font-size: 12px;
 #synSide th { background: #2c3547; }
 #synSide .sw { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
 #synSide .hint { color: #9fb2c8; margin: 0; }
+#synSide .cmpw td { white-space: normal; vertical-align: top; }
+#synSide .cmpw td:first-child { white-space: nowrap; color: #9fb2c8; }
 .clist { max-height: 320px; overflow: auto; border: 1px solid #3a4a5e; border-radius: 4px; }
 .clist div { padding: 1px 6px; cursor: pointer; white-space: nowrap; }
 .clist div:hover { background: #2c3e55; }

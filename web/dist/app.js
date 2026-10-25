@@ -573,6 +573,156 @@
     return `hsl(${h}, 70%, 52%)`;
   }
 
+  // src/zip.ts
+  var CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(b) {
+    let c = 4294967295;
+    for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ c >>> 8;
+    return (c ^ 4294967295) >>> 0;
+  }
+  function zip(files) {
+    const enc = new TextEncoder();
+    const parts = [];
+    const central = [];
+    let off = 0;
+    const d = /* @__PURE__ */ new Date();
+    const time = d.getHours() << 11 | d.getMinutes() << 5 | d.getSeconds() >> 1;
+    const date = d.getFullYear() - 1980 << 9 | d.getMonth() + 1 << 5 | d.getDate();
+    for (const f of files) {
+      const name = enc.encode(f.name);
+      const data = typeof f.data === "string" ? enc.encode(f.data) : f.data;
+      const crc = crc32(data);
+      const loc = new DataView(new ArrayBuffer(30));
+      loc.setUint32(0, 67324752, true);
+      loc.setUint16(4, 20, true);
+      loc.setUint16(6, 2048, true);
+      loc.setUint16(10, time, true);
+      loc.setUint16(12, date, true);
+      loc.setUint32(14, crc, true);
+      loc.setUint32(18, data.length, true);
+      loc.setUint32(22, data.length, true);
+      loc.setUint16(26, name.length, true);
+      const cen = new DataView(new ArrayBuffer(46));
+      cen.setUint32(0, 33639248, true);
+      cen.setUint16(4, 20, true);
+      cen.setUint16(6, 20, true);
+      cen.setUint16(8, 2048, true);
+      cen.setUint16(12, time, true);
+      cen.setUint16(14, date, true);
+      cen.setUint32(16, crc, true);
+      cen.setUint32(20, data.length, true);
+      cen.setUint32(24, data.length, true);
+      cen.setUint16(28, name.length, true);
+      cen.setUint32(42, off, true);
+      parts.push(new Uint8Array(loc.buffer), name, data);
+      central.push(new Uint8Array(cen.buffer), name);
+      off += 30 + name.length + data.length;
+    }
+    const csize = central.reduce((a, b) => a + b.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 101010256, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, csize, true);
+    end.setUint32(16, off, true);
+    const all = [...parts, ...central, new Uint8Array(end.buffer)];
+    const out = new Uint8Array(all.reduce((a, b) => a + b.length, 0));
+    let p = 0;
+    for (const a of all) {
+      out.set(a, p);
+      p += a.length;
+    }
+    return out;
+  }
+  function saveAs(name, data, type = "application/octet-stream") {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([data], { type }));
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1e3);
+  }
+
+  // src/synth/compare.ts
+  function bbox(s) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const add = (x, y, w, h) => {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x + w);
+      y1 = Math.max(y1, y + h);
+    };
+    for (const b of s.boxes) add(b.x, b.y, b.w, b.h);
+    for (const b of s.bg ?? []) add(b.x, b.y, b.w, b.h);
+    return Number.isFinite(x0) ? { x0, y0, x1, y1 } : { x0: 0, y0: 0, x1: 1, y1: 1 };
+  }
+  function moved(s, k, dx, dy, id) {
+    const pts = (p) => p.map((v, i) => i % 2 ? v * k + dy : v * k + dx);
+    return {
+      boxes: s.boxes.map((b) => ({ ...b, id: b.id + id, x: b.x * k + dx, y: b.y * k + dy, w: b.w * k, h: b.h * k })),
+      lines: s.lines.map((l) => ({ ...l, pts: pts(l.pts) })),
+      under: s.under?.map((l) => ({ ...l, pts: pts(l.pts) })),
+      texts: s.texts.map((t) => ({ ...t, x: t.x * k + dx, y: t.y * k + dy, size: t.size ? t.size * k : t.size })),
+      bg: s.bg?.map((b) => ({ ...b, x: b.x * k + dx, y: b.y * k + dy, w: b.w * k, h: b.h * k }))
+    };
+  }
+  function compareScene(p, a) {
+    const f = deviceScene(p), d = dieScene(a);
+    const bf = bbox(f), bd = bbox(d);
+    const h = bf.y1 - bf.y0;
+    const k = h / Math.max(1e-9, bd.y1 - bd.y0);
+    const gap = h * 0.12;
+    const right = moved(d, k, bf.x1 + gap - bd.x0 * k, bf.y0 - bd.y0 * k, 1e6);
+    const left = moved(f, 1, 0, 0, 0);
+    const ty = bf.y0 - h * 0.035;
+    const size = h * 0.025;
+    return {
+      boxes: [...left.boxes, ...right.boxes],
+      lines: [],
+      under: [...left.under ?? [], ...right.under ?? []],
+      texts: [
+        ...left.texts,
+        ...right.texts,
+        { x: bf.x0, y: ty, s: `FPGA\uFF1AiCE40UP5K\uFF08${p.lcs.length} LC / 5280\uFF09`, color: "#7ec3ff", size, align: "left" },
+        { x: bf.x1 + gap, y: ty, s: `ASIC\uFF1Avlib \u6A19\u6E96\u5143\u4EF6\uFF08\u6676\u7C92 ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m\uFF0C\u653E\u5927\u5230\u540C\u9AD8\uFF09`, color: "#e0b87e", size, align: "left" }
+      ],
+      bg: [...left.bg ?? [], ...right.bg ?? []]
+    };
+  }
+  var f1 = (v) => v.toFixed(1);
+  var f2 = (v) => v.toFixed(2);
+  function compareRows(p, a) {
+    const fc = (t) => p.lcs.filter((l) => t === "ff" ? l.ff : t === "carry" ? l.carry : true).length;
+    const ffA = a.map.cells.filter((c) => c.t.includes("DFF")).length;
+    const srams = a.map.cells.filter((c) => c.t === "SRAM").length;
+    const eF = p.timing.power.e_nets + p.timing.power.e_clock + p.timing.power.e_ram;
+    const eA = a.power.e_nets + a.power.e_clock + a.power.e_internal + a.power.e_sram;
+    const f = Math.min(p.timing.fmax, a.timing.fmax);
+    const pF = eF * f / 1e3 + p.timing.power.static, pA = eA * f / 1e3 + a.power.leakage;
+    return [
+      ["\u5BE6\u4F5C", "iCE40UP5K LUT4 FPGA\uFF08\u53EF\u91CD\u65B0\u71D2\u9304\uFF09", "vlib \u6A19\u6E96\u5143\u4EF6\uFF08\u7D04 130 nm\uFF0C\u9700\u6D41\u7247\uFF09"],
+      ["\u908F\u8F2F\u55AE\u5143", `${p.lcs.length} LC\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0CDFF ${fc("ff")}\uFF0CCARRY ${fc("carry")}`, `${a.map.cells.length} \u500B\u5143\u4EF6\uFF0CDFF ${ffA}`],
+      ...p.rams.length || srams ? [["\u8A18\u61B6\u9AD4", `${p.rams.length} \u500B SB_RAM40_4K`, `${srams} \u500B SRAM \u5DE8\u96C6`]] : [],
+      ["\u9762\u7A4D", "\u56FA\u5B9A\u6676\u7247\uFF085280 LC\u300130 BRAM\uFF09", `\u5143\u4EF6 ${f1(a.area)} \xB5m\xB2\uFF0C\u6676\u7C92 ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m\uFF08\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(0)}%\uFF09`],
+      ["\u7E5E\u7DDA", `${p.pips} \u500B pip\uFF08\u53EF\u7A0B\u5F0F\u958B\u95DC\uFF09`, `${f2(a.detail.wirelength / 1e3 || a.route.wirelength / 1e3)} mm \u91D1\u5C6C\u7DDA\uFF0C${a.detail.vias || a.route.vias} \u500B via`],
+      ["\u95DC\u9375\u8DEF\u5F91", `${f2(p.timing.period)} ns`, `${f2(a.timing.period)} ns`],
+      ["F<sub>max</sub>", `${f1(p.timing.fmax)} MHz`, `${f1(a.timing.fmax)} MHz\uFF08\xD7${(a.timing.fmax / p.timing.fmax).toFixed(1)}\uFF09`],
+      ["\u6BCF\u9031\u671F\u80FD\u91CF", `${f1(eF)} pJ`, `${f2(eA)} pJ\uFF08\xF7${(eF / Math.max(1e-9, eA)).toFixed(0)}\uFF09`],
+      [`\u529F\u8017 @ ${f1(f)} MHz`, `${pF.toFixed(3)} mW\uFF08\u975C\u614B ${p.timing.power.static.toFixed(3)}\uFF09`, `${pA.toFixed(4)} mW\uFF08\u6F0F\u96FB ${a.power.leakage.toFixed(4)}\uFF09`]
+    ];
+  }
+
   // src/synth/model.ts
   var OUTS = /* @__PURE__ */ new Set(["Y", "Q", "O", "CO"]);
   var isOut = (pin) => OUTS.has(pin) || pin.startsWith("RDATA");
@@ -827,8 +977,10 @@
   var OTHER = { map: "amap", place: "aplace", route: "aroute", sta: "asta", amap: "map", aplace: "place", aroute: "route", asta: "sta" };
   var isNet = (k) => k === "raw" || k === "opt" || k === "map" || k === "amap";
   var SynthOverlay = class {
-    constructor(core2) {
+    /** `embedded`: the views live in a page pane (the IDE), not an overlay to close */
+    constructor(core2, opts = {}) {
       __publicField(this, "core", core2);
+      __publicField(this, "opts", opts);
       __publicField(this, "view");
       __publicField(this, "res", null);
       __publicField(this, "pnr", null);
@@ -857,7 +1009,7 @@
       __publicField(this, "showIr", false);
       this.view = new CanvasView($("synCanvas"));
       this.view.onPick = (b) => this.pick(b);
-      $("synClose").onclick = () => this.close();
+      if (!opts.embedded) $("synClose").onclick = () => this.close();
       $("synZin").onclick = () => this.view.zoom(1.4);
       $("synZout").onclick = () => this.view.zoom(1 / 1.4);
       $("synZfit").onclick = () => this.view.fit();
@@ -873,17 +1025,32 @@
       $("synDef").onclick = () => this.asic && download(`${this.asic.top}.def`, this.asic.def);
       $("synTarget").onchange = () => this.setTarget($("synTarget").value);
       $("synTop").onchange = () => this.run($("synTop").value);
-      document.addEventListener("keydown", (e) => {
+      if (!opts.embedded) document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !$("synOverlay").classList.contains("hidden")) this.close();
       });
       this.chips();
     }
-    open(files, top, pcf, target) {
+    open(files, top, pcf, target, stage) {
       this.files = files;
       this.pcf = pcf;
       if (target) this.setTarget(target, false);
+      if (stage) this.stage = stage;
       $("synOverlay").classList.remove("hidden");
       this.run(top);
+    }
+    /** the stage shown */
+    get current() {
+      return this.stage;
+    }
+    /** show a stage (the synthesis must have been started with `open`) */
+    showStage(key) {
+      if (ASIC.has(key) && this.target !== "asic") this.setTarget("asic", false);
+      else if ((PNR.has(key) || key === "map") && this.target !== "fpga") this.setTarget("fpga", false);
+      this.stage = key;
+      this.show(key);
+    }
+    get synthesized() {
+      return this.res !== null;
     }
     close() {
       this.stopAnim();
@@ -949,7 +1116,7 @@
       }
       this.stats(this.synMs);
       this.buttons();
-      if (PNR.has(this.stage)) this.show(this.stage);
+      if (PNR.has(this.stage) || this.stage === "cmp") this.show(this.stage);
     }
     setTarget(t, show = true) {
       this.target = t;
@@ -983,7 +1150,7 @@
       }
       this.stats(this.synMs);
       this.buttons();
-      if (ASIC.has(this.stage)) this.show(this.stage);
+      if (ASIC.has(this.stage) || this.stage === "cmp") this.show(this.stage);
     }
     chips() {
       const box = $("synChips");
@@ -1002,6 +1169,15 @@
         b.onclick = () => this.show(s.key);
         box.appendChild(b);
       });
+      const sep = document.createElement("span");
+      sep.className = "arrow";
+      sep.textContent = "\u2502";
+      const c = document.createElement("button");
+      c.textContent = "\u21C4 FPGA vs ASIC";
+      c.dataset.key = "cmp";
+      c.title = "\u540C\u4E00\u500B\u8A2D\u8A08\u7684\u5169\u7A2E\u5BE6\u4F5C\u4E26\u6392\u6BD4\u8F03";
+      c.onclick = () => this.show("cmp");
+      box.append(sep, c);
     }
     /** stage-dependent buttons */
     buttons() {
@@ -1016,7 +1192,7 @@
         $(id).classList.toggle("hidden", !a);
         $(id).disabled = !this.asic;
       }
-      $("synEdges").classList.toggle("hidden", this.stage === "place" || this.stage === "aplace");
+      $("synEdges").classList.toggle("hidden", this.stage === "place" || this.stage === "aplace" || this.stage === "cmp");
     }
     netView(key) {
       let v = this.nets.get(key);
@@ -1087,7 +1263,12 @@
       this.sel = null;
       for (const b of $("synChips").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.key === key);
       this.buttons();
+      this.opts.onStage?.(key);
       const r = this.res;
+      if (key === "cmp") {
+        this.showCompare();
+        return;
+      }
       if (key === "rtl") {
         const counts = /* @__PURE__ */ new Map();
         for (const s of r.signals) {
@@ -1147,6 +1328,31 @@
       this.drawPnr(true);
       this.info(this.pnrReport(key));
       this.side(this.pnrSide(key));
+    }
+    showCompare() {
+      const p = this.pnr, a = this.asic;
+      if (!p || !a) {
+        this.view.set({ boxes: [], lines: [], texts: [] });
+        this.side(document.createElement("div"));
+        const lines = ["\u21C4 FPGA vs ASIC\uFF1A\u5169\u500B\u5F8C\u7AEF\u90FD\u8981\u8DD1\u5B8C\u624D\u80FD\u6BD4\u8F03"];
+        lines.push(p ? "\u2713 FPGA \u4F48\u5C40\u7E5E\u7DDA\u5B8C\u6210" : this.pnrErr ? `\u2717 FPGA\uFF1A${this.pnrErr}` : "\u2026 FPGA \u4F48\u5C40\u7E5E\u7DDA\u4E2D");
+        lines.push(a ? "\u2713 ASIC \u6D41\u7A0B\u5B8C\u6210" : this.asicErr ? `\u2717 ASIC\uFF1A${this.asicErr}` : "\u2026 ASIC \u6D41\u7A0B\u4E2D");
+        this.info(lines);
+        if (!p && !this.pnrErr) this.runPnr();
+        if (!a && !this.asicErr) this.runAsic();
+        return;
+      }
+      this.view.set(compareScene(p, a), true);
+      const rows = compareRows(p, a);
+      this.info([
+        "\u21C4 FPGA vs ASIC\uFF1A\u540C\u4E00\u500B\u7DB2\u8868\uFF08\u5171 \u2460\u2013\u2462\uFF09\u5206\u5225\u8D70 iCE40 \u8207\u6A19\u6E96\u5143\u4EF6\u6D41\u7A0B",
+        "FPGA \u7528\u73FE\u6210\u7684 LUT / \u53EF\u7A0B\u5F0F\u7E5E\u7DDA\u958B\u95DC\uFF0C\u5F48\u6027\u5927\u4F46\u6BCF\u500B\u908F\u8F2F\u548C\u6BCF\u6BB5\u7E5E\u7DDA\u90FD\u6162\u3001\u90FD\u8017\u96FB\uFF1BASIC \u628A\u908F\u8F2F\u76F4\u63A5\u505A\u6210\u96FB\u6676\u9AD4\u8207\u91D1\u5C6C\u7DDA\uFF0C\u9762\u7A4D\u5C0F\u3001\u5FEB\u3001\u7701\u96FB\uFF0C\u4F46\u8981\u6D41\u7247\u3002",
+        "",
+        `F_max\uFF1AFPGA ${p.timing.fmax.toFixed(1)} MHz vs ASIC ${a.timing.fmax.toFixed(1)} MHz\u3000\u5DE6\uFF1AiCE40 \u4F48\u5C40\uFF0C\u53F3\uFF1A\u6A19\u6E96\u5143\u4EF6\u6676\u7C92\uFF08\u653E\u5927\u5230\u540C\u9AD8\uFF09`
+      ]);
+      const d = document.createElement("div");
+      d.innerHTML = '<h3>\u6BD4\u8F03</h3><div class="cmpw">' + table(["\u9805\u76EE", "FPGA", "ASIC"], rows.map((r) => [r[0], r[1], r[2]])) + '</div><p class="hint">\u529F\u8017\u4EE5\u5169\u8005 F<sub>max</sub> \u8F03\u4F4E\u8005\u70BA\u5171\u540C\u983B\u7387\uFF0C\u7FFB\u8F49\u7387\u4F86\u81EA\u540C\u4E00\u7D44\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u3002</p>';
+      this.side(d);
     }
     drawPnr(fit) {
       const p = this.pnr;
@@ -1607,6 +1813,7 @@
     }
     pick(b) {
       const k = this.stage;
+      if (k === "cmp") return;
       if (PNR.has(k)) {
         if (!this.pnr || this.anim) return;
         const n = this.pnr.lcs.length + this.pnr.ios.length;
@@ -1690,15 +1897,7 @@
     return `<table><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table>`;
   }
   function download(name, data) {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([data], { type: typeof data === "string" ? "text/plain" : "application/octet-stream" }));
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(a.href);
-      a.remove();
-    }, 1e3);
+    saveAs(name, data, typeof data === "string" ? "text/plain" : "application/octet-stream");
   }
   function fmtArea(um2) {
     return um2 >= 1e5 ? `${(um2 / 1e6).toFixed(3)} mm\xB2` : `${um2.toFixed(0)} \xB5m\xB2`;
@@ -1944,6 +2143,68 @@
     return 10 * p;
   }
 
+  // src/templates.ts
+  function newModule(m) {
+    return `module ${m} (
+    i_clk: input  clock   ,
+    i_rst: input  reset   ,
+    i_en : input  logic   ,
+    o_cnt: output logic<8>,
+) {
+    var cnt: logic<8>;
+
+    always_ff {
+        if_reset {
+            cnt = 0;
+        } else if i_en {
+            cnt = cnt + 1;
+        }
+    }
+
+    assign o_cnt = cnt;
+}
+
+#[test(test_${m.toLowerCase()})]
+module Test${m} {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var en : logic   ;
+    var cnt: logic<8>;
+
+    inst dut: ${m} (
+        i_clk: clk,
+        i_rst: rst,
+        i_en : en ,
+        o_cnt: cnt,
+    );
+
+    initial {
+        en = 0;
+        rst.assert();
+        en = 1;
+        clk.next(5);
+        $assert(cnt == 8'd5, "counts to 5");
+        $finish();
+    }
+}
+`;
+  }
+  function projectZip(name, files, extra) {
+    const dir = name.replace(/[^\w.-]+/g, "_") || "project";
+    const out = files.map((f) => ({ name: f.name.endsWith(".veryl") ? `${dir}/src/${f.name}` : `${dir}/${f.name}`, data: f.src }));
+    out.push({ name: `${dir}/Veryl.toml`, data: `[project]
+name = "${dir.replace(/[^\w]/g, "_")}"
+version = "0.1.0"
+
+[build]
+sources = ["src"]
+target = { type = "directory", path = "target" }
+` });
+    if (extra) out.push({ name: `${dir}/${extra.name}`, data: extra.src });
+    return zip(out);
+  }
+
   // src/main.ts
   var $2 = (id) => document.getElementById(id);
   var core = null;
@@ -1984,7 +2245,7 @@
       const s = store()?.getItem("veryl2chip:" + ex.id);
       if (s) {
         const v = JSON.parse(s);
-        if (Array.isArray(v) && v.length === ex.files.length) return v;
+        if (Array.isArray(v) && v.length && v.every((f) => typeof f.name === "string" && typeof f.src === "string")) return v;
       }
     } catch {
     }
@@ -1993,7 +2254,7 @@
   function persist() {
     if (!st) return;
     try {
-      const same = st.files.every((f, i) => f.src === st.ex.files[i].src);
+      const same = st.files.length === st.ex.files.length && st.files.every((f, i) => f.name === st.ex.files[i].name && f.src === st.ex.files[i].src);
       if (same) store()?.removeItem("veryl2chip:" + st.ex.id);
       else store()?.setItem("veryl2chip:" + st.ex.id, JSON.stringify(st.files));
     } catch {
@@ -2009,13 +2270,61 @@
       const b = document.createElement("button");
       b.textContent = f.name;
       if (i === st.cur) b.classList.add("cur");
-      if (f.src !== st.ex.files[i].src) b.classList.add("dirty");
+      if (st.ex.files.find((e) => e.name === f.name)?.src !== f.src) b.classList.add("dirty");
       b.onclick = () => {
         st.cur = i;
         showFile();
       };
       tabs.appendChild(b);
     });
+  }
+  function newFile() {
+    if (!st) return;
+    let name = prompt("\u65B0\u6A94\u540D\uFF08.veryl\uFF09", `new${st.files.length}.veryl`)?.trim();
+    if (!name) return;
+    if (!name.endsWith(".veryl")) name += ".veryl";
+    if (!/^[\w.-]+$/.test(name)) {
+      alert("\u6A94\u540D\u53EA\u80FD\u7528\u82F1\u6578\u5B57\u3001\u5E95\u7DDA\u3001\u9EDE\u548C\u6E1B\u865F");
+      return;
+    }
+    if (st.files.some((f) => f.name === name)) {
+      alert(`\u5DF2\u7D93\u6709 ${name}`);
+      return;
+    }
+    const mod = name.replace(/\.veryl$/, "").replace(/(^|[_-])(\w)/g, (_, _a, c) => c.toUpperCase()).replace(/\W/g, "");
+    st.files.push({ name, src: newModule(mod || "NewModule") });
+    st.cur = st.files.length - 1;
+    persist();
+    showFile();
+    refreshTops();
+  }
+  function deleteFile() {
+    if (!st || st.files.length < 2) return;
+    const f = st.files[st.cur];
+    if (!confirm(`\u522A\u9664 ${f.name}\uFF1F\uFF08\u300C\u9084\u539F\u7BC4\u4F8B\u300D\u53EF\u4EE5\u627E\u56DE\u7BC4\u4F8B\u539F\u672C\u7684\u6A94\u6848\uFF09`)) return;
+    st.files.splice(st.cur, 1);
+    st.cur = Math.max(0, st.cur - 1);
+    persist();
+    showFile();
+    refreshTops();
+  }
+  function exportZip() {
+    if (!st) return;
+    saveAs(`${st.ex.id}.zip`, projectZip(st.ex.id, st.files, st.ex.pcf ? { name: `${st.ex.synth ?? "top"}.pcf`, src: st.ex.pcf } : void 0), "application/zip");
+  }
+  async function importFiles(list) {
+    if (!st || !list) return;
+    for (const file of Array.from(list)) {
+      if (!file.name.endsWith(".veryl")) continue;
+      const src = await file.text();
+      const i = st.files.findIndex((f) => f.name === file.name);
+      if (i >= 0) st.files[i].src = src;
+      else st.files.push({ name: file.name, src });
+      st.cur = i >= 0 ? i : st.files.length - 1;
+    }
+    persist();
+    showFile();
+    refreshTops();
   }
   function gutter() {
     const ed = $2("editor");
@@ -2189,9 +2498,18 @@
     $2("synth").onclick = () => {
       if (synth && st) synth.open(st.files, st.ex.synth, st.ex.pcf);
     };
+    $2("newFile").onclick = newFile;
+    $2("delFile").onclick = deleteFile;
+    $2("zipOut").onclick = exportZip;
+    $2("importBtn").onclick = () => $2("importIn").click();
+    $2("importIn").onchange = () => {
+      importFiles($2("importIn").files);
+      $2("importIn").value = "";
+    };
     $2("revert").onclick = () => {
-      if (!st) return;
+      if (!st || !confirm("\u6368\u68C4\u6240\u6709\u4FEE\u6539\uFF08\u542B\u65B0\u589E / \u522A\u9664\u7684\u6A94\u6848\uFF09\uFF0C\u56DE\u5230\u7BC4\u4F8B\u539F\u59CB\u78BC\uFF1F")) return;
       st.files = st.ex.files.map((f) => ({ ...f }));
+      st.cur = 0;
       persist();
       showFile();
       refreshTops();
