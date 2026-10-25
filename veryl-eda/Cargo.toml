@@ -1,0 +1,8 @@
+[package]
+name = "veryl-eda"
+version = "0.1.0"
+edition = "2021"
+description = "Veryl synthesis: Veryl -> gate-level netlist -> yosys JSON (yosys/nextpnr compatible)"
+
+[dependencies]
+veryl-parser = "0.22"

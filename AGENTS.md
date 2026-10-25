@@ -1,6 +1,7 @@
 # AGENTS.md
 
-EDA for Veryl HDL. Root has no build system; the real code lives in `veryl-sim/` (Rust crate, workspace root is `veryl-sim/`, not the repo root).
+EDA for Veryl HDL. Root has no build system; the real code lives in two independent Rust crates (each its own workspace root, not the repo root):
+`veryl-sim/` (simulator) and `veryl-eda/` (logic synthesis → yosys JSON).
 
 ## Commands
 
@@ -16,6 +17,17 @@ cargo run --release -- [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.
 - Exit code 1 on assertion failure; `--vcd` writes GTKWave-viewable waveforms.
 - Official `veryl` CLI 0.22.0 is installed (`~/.cargo/bin/veryl`, see `install.md`). Run `veryl check` (from `examples/`, which has Veryl.toml) as the syntax/semantic ground truth; `veryl-sim` is a deliberately smaller simulator and its "not supported" errors are not language errors.
 
+```sh
+cd veryl-eda
+cargo test --release               # synthesizes examples/, runs their testbenches on the gate netlist
+./test.sh                          # + yosys read_json check + formal equivalence vs `veryl build` output
+cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--list] a.veryl ...
+```
+
+- veryl-eda default top: the last non-`#[test]` module (testbench modules are not synthesizable).
+- Equivalence checking needs the oss-cad-suite yosys with the slang plugin (`YOSYS_SLANG`, default `/Users/Shared/ccc/oss-cad-suite/bin/yosys`); Homebrew `yosys` cannot parse veryl's enum casts/functions. Gold modules are named `examples_<Module>`.
+- New synthesis test designs go in `veryl-eda/examples/` and the `DESIGNS` list in `veryl-eda/test.sh` (copied into the gold Veryl project, so module names must not clash with `examples/src`).
+
 ## Veryl 0.22.0 quirks (verified against `veryl check`/`veryl test`)
 
 - Bare `<` / `>` in expressions inside `function` bodies break the parser (generic scanner); use `<=` / `>=` / `<:` / `>:` instead.
@@ -28,9 +40,15 @@ cargo run --release -- [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.
 
 Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracking in Veryl.lock/examples). Flow: `main.rs` (CLI, parse, top selection) → `elab.rs` (syntax tree → sim IR, hierarchy/inst expansion) → `sim.rs` (eval, delta cycles, NBA scheduling, clock gen, VCD). `expr.rs` is a Pratt parser over veryl-parser tokens; `value.rs` is 4-state (0/1/x) bit vectors, max 128 bits.
 
+## Architecture (veryl-eda)
+
+Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax tree to a name-based statement IR and *symbolically executes* it into gates (if/case → mux, loops unrolled, functions inlined, always_ff → yosys `$_DFF_*`/`$_SDFF_*` cells). Every declared signal gets placeholder wires; drivers are recorded as aliases and resolved in `netlist::optimize`, which also rebuilds with constant folding/hashing, detects comb loops, and sweeps dead logic. Hierarchy is flattened (`inst.sig` net names). `output.rs` writes yosys JSON + structural Verilog; `netsim.rs` is a 2-state gate simulator for tests. Packed structs put the first field at the MSB (matches veryl's SV).
+
 ## Limits / gotchas
 
-- Simulator deliberately does NOT support: interfaces, packages, structs/enums, arrays, user functions, generate, `inout`, widths > 128 bit. Don't add examples relying on these.
-- Testbench support is via `$tb::clock_gen`, `$tb::reset_gen`, `initial` blocks with `clk.next(n)` / `rst.assert(clk)` — see `veryl-sim/examples/`.
-- `examples/` is a separate Veryl project (own Veryl.toml/lock); `_doc/` is currently empty.
+- Supported by the simulator: module/param/const/port/var/let/assign/always_comb/always_ff (if_reset, sync/async reset)/if/case/switch/for/inst/initial/final, packages, enums (`Pkg::Enum::Member`), structs (field access + whole-value), arrays (1-D, element sigs are contiguous: `sigs[first + i]`), user functions (non-recursive; args bound to param signals, `return` via `ret_val`/`ret_now`), generate for (loop var is a const param in a cloned scope), `import Pkg::*`.
+- Still NOT supported: interfaces/modports, generate if, `rev`/`step` in generate-for, recursion, `inout`, widths > 128 bit.
+- Testbench support is via `$tb::clock_gen` (the inst IS the clock), `$tb::reset_gen` (`rst.assert()` with no args uses the clock recorded from `inst rst: $tb::reset_gen(clk)`), `initial` blocks with `clk.next(n)`.
+- The sim settles combinational logic after every `initial` statement (delta cycles), so clock-less comb testbenches work.
+- `examples/` is a separate Veryl project (own Veryl.toml/lock); `_doc/` holds a Veryl grammar reference (`grammar.md`).
 - README in veryl-sim is in Traditional Chinese; docs there are authoritative for supported syntax.

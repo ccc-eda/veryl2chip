@@ -1,0 +1,131 @@
+// veryl-eda feature coverage: every module here is checked for formal
+// equivalence against `veryl build` output by test.sh
+package FeatPkg {
+    const ONES: logic<4> = 4'hf;
+    struct Pair {
+        hi: logic<4>,
+        lo: logic<4>,
+    }
+}
+
+module Shifter #(
+    param W: u32 = 8,
+) (
+    i_a  : input  logic<W>,
+    i_n  : input  logic<3>,
+    i_op : input  logic<2>,
+    o_y  : output logic<W>,
+    o_sl : output logic<4>,
+) {
+    always_comb {
+        switch {
+            i_op == 2'd0: o_y = i_a << i_n;
+            i_op == 2'd1: o_y = i_a >> i_n;
+            i_op == 2'd2: o_y = $signed(i_a) >>> i_n;
+            default     : o_y = {i_a[3:0], i_a[W - 1:4]};
+        }
+    }
+    assign o_sl = i_a[i_n+:4];
+}
+
+module Funcs (
+    i_x : input  logic<8>,
+    i_k : input  logic<8>,
+    o_c : output logic<4>,
+    o_r : output logic<4>,
+    o_m : output logic<16>,
+    o_p : output FeatPkg::Pair,
+) {
+    function popcnt (
+        x: input logic<8>,
+    ) -> logic<4> {
+        var n: logic<4>;
+        n = 0;
+        for i in 0..8 {
+            n += x[i];
+        }
+        return n;
+    }
+
+    function clamp (
+        v: input logic<8>,
+    ) -> logic<4> {
+        if v >= 8'd15 {
+            return 4'd15;
+        }
+        if v == 8'd0 {
+            return 4'd1;
+        }
+        return v[3:0];
+    }
+
+    assign o_c = popcnt(i_x);
+    assign o_r = clamp(i_k);
+    assign o_m = i_x * i_k;
+    always_comb {
+        o_p.hi = i_x[7:4] ^ FeatPkg::ONES;
+        o_p.lo = if &i_k[1:0] ? i_x[3:0] : ~i_x[3:0];
+    }
+}
+
+module Ranges (
+    i_v : input  logic<6>,
+    o_cl: output logic<2>,
+    o_rv: output logic<6>,
+) {
+    always_comb {
+        case i_v {
+            0..10  : o_cl = 2'd0;
+            10..=20: o_cl = 2'd1;
+            21, 22 : o_cl = 2'd2;
+            default: o_cl = 2'd3;
+        }
+    }
+    for i in 0..6 : g {
+        if i % 2 == 0 : even {
+            assign o_rv[i] = i_v[5 - i];
+        } else {
+            assign o_rv[i] = ~i_v[5 - i];
+        }
+    }
+}
+
+module Counter #(
+    param INIT: u32 = 5,
+) (
+    i_clk: input  clock_negedge,
+    i_rst: input  reset_sync_high,
+    i_en : input  logic,
+    o_q  : output logic<4>,
+) {
+    var cnt: logic<4>;
+    always_ff {
+        if_reset {
+            cnt = INIT;
+        } else if i_en {
+            cnt += 1;
+        }
+    }
+    assign o_q = cnt;
+}
+
+module Top (
+    i_clk: input  clock_negedge,
+    i_rst: input  reset_sync_high,
+    i_en : input  logic,
+    o_a  : output logic<4>,
+    o_b  : output logic<4>,
+) {
+    inst c0: Counter #(INIT: 3) (
+        i_clk,
+        i_rst,
+        i_en ,
+        o_q  : o_a,
+    );
+    inst c1: Counter (
+        i_clk,
+        i_rst,
+        i_en : ~i_en,
+        o_q  : o_b,
+    );
+}
