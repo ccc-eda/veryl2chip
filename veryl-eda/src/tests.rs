@@ -416,3 +416,20 @@ fn asic_hold_fix() {
     while s.get("o_led") == 0 && cycles < 200 { s.step(); cycles += 1; }
     assert_eq!(s.get("o_led"), 55, "fib(10) after {} cycles", cycles);
 }
+
+/// activity simulation: a 4-bit counter with a random enable: bit 0 toggles
+/// on about half of the cycles, bit 1 half as often; the power numbers add up
+#[test]
+fn power_activity() {
+    let nl = netlist(&["features.veryl"], "Counter");
+    let act = crate::power::activity(&nl, 1000, 7);
+    let q = &nl.ports.iter().find(|p| p.name == "o_q").unwrap().bits;
+    let r0 = act.rate.get(&q[0]).copied().unwrap_or(0.0);
+    let r1 = act.rate.get(&q[1]).copied().unwrap_or(0.0);
+    assert!(r0 > 0.35 && r0 < 0.65, "bit 0 toggles {}", r0);
+    assert!(r1 > 0.15 && r1 < 0.35, "bit 1 toggles {}", r1);
+    let o = crate::asic::flow(&netlist(&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"], "RiscvSoc"), 1).unwrap();
+    let p = &o.power;
+    assert!(p.e_clock > 0.0 && p.e_nets > 0.0 && p.leakage > 0.0 && p.ir_worst >= 0.0);
+    assert!((p.total - p.dynamic - p.leakage).abs() < 1e-9);
+}

@@ -7,6 +7,7 @@ pub mod bitstream;
 pub mod chipdb;
 pub mod pack;
 pub mod place;
+pub mod power;
 pub mod route;
 pub mod sta;
 
@@ -45,6 +46,7 @@ pub struct Output {
     pub globals: Vec<(String, u8)>,
     /// Fmax of the wirelength-only pass (when the timing-driven pass ran)
     pub fmax_wl: Option<f64>,
+    pub power: power::FpgaPower,
 }
 
 /// LUT_INIT bit k sits at LC config bit LUT_PERM[k]; 8 = carry enable,
@@ -265,7 +267,10 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
             }
         }
     }
-    let _ = (&bits, &eps);
+    let _ = &eps;
+    // power at Fmax, from a random-input simulation of the mapped netlist
+    let act = crate::power::activity(nl, (2_000_000 / nl.cells.len().max(1)).clamp(100, 1000), 1);
+    let power = power::estimate(nl, &nets, &bits, &routes, extra.len(), &act, timing.fmax);
 
     // ---- configuration ----
     let mut a = Asc::new(&chip);
@@ -344,5 +349,5 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
     }
     let mut gl: Vec<(String, u8)> = global_of.iter().map(|(b, g)| (names.get(b).cloned().unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), _ => format!("{:?}", b) }), g.2)).collect();
     gl.sort();
-    Ok(Output { asc: a.text(), pcf, lcs: p.lcs.len(), wires, extra: extra.len(), packed: p, placement: pl, nets, routes, route_iters, timing, globals: gl, fmax_wl })
+    Ok(Output { asc: a.text(), pcf, lcs: p.lcs.len(), wires, extra: extra.len(), packed: p, placement: pl, nets, routes, route_iters, timing, globals: gl, fmax_wl, power })
 }

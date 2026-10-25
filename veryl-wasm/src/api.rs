@@ -66,6 +66,12 @@ fn asic(v: &Value) -> R<Value> {
     let frames: Vec<usize> = if hl <= maxf { (0..hl).collect() } else { (0..maxf).map(|i| i * (hl - 1) / (maxf - 1)).collect() };
     let mut verilog = veryl_eda::output::to_verilog(&o.mapped);
     verilog += &asic::lib::verilog_models();
+    let power_json = {
+            let p = &o.power;
+            json!({ "freq": p.freq_mhz, "e_nets": p.e_nets, "e_clock": p.e_clock, "e_internal": p.e_internal, "e_sram": p.e_sram,
+                "dynamic": p.dynamic, "leakage": p.leakage, "total": p.total, "ir_worst": p.ir_worst, "cycles": p.cycles,
+                "cell": p.cell.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>(), "ir": p.ir.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>() })
+        };
     let detail_json = {
             let d = &o.detail;
             // the wires themselves only for designs small enough to draw
@@ -100,6 +106,7 @@ fn asic(v: &Value) -> R<Value> {
             })).collect::<Vec<_>>(),
         },
         "detail": detail_json,
+        "power": power_json,
         "pdn": {
             "rails": o.pdn.rails, "strap_w": asic::pdn::STRAP_W, "vias": o.pdn.vias.len(),
             "straps": o.pdn.straps.iter().map(|(x, v)| json!([x, v])).collect::<Vec<_>>(),
@@ -218,6 +225,7 @@ fn pnr(v: &Value) -> R<Value> {
                 "path": out.timing.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>(),
                 "crit_lcs": out.timing.crit_lcs,
                 "fmax_wl": out.fmax_wl,
+                "power": { "freq": out.power.freq_mhz, "e_nets": out.power.e_nets, "e_clock": out.power.e_clock, "e_ram": out.power.e_ram, "dynamic": out.power.dynamic, "static": out.power.static_mw, "total": out.power.total },
             },
             "pips": out.wires,
             "bin": base64(&veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?),

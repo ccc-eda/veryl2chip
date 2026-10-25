@@ -7,6 +7,7 @@ pub mod detail;
 pub mod lib;
 pub mod map;
 pub mod pdn;
+pub mod power;
 pub mod place;
 pub mod route;
 pub mod sta;
@@ -31,6 +32,7 @@ pub struct Output {
     pub hold_bufs: usize,
     pub detail: detail::Detail,
     pub pdn: pdn::Pdn,
+    pub power: power::Power,
 }
 
 pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> { flow_with(opt, seed, 0.0) }
@@ -103,12 +105,18 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
     for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
     let timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
+    // power at Fmax, from a random-input simulation of the final netlist
+    let t0 = now();
+    let cycles = (2_000_000 / mapped.cells.len().max(1)).clamp(100, 1000);
+    let act = crate::power::activity(&mapped, cycles, 1);
+    let power = power::estimate(&mapped, &placement, &dlen, &pdn, &act, timing.fmax);
+    t("power", t0);
     let area = mapped.cells.iter().map(lib::cell_area).sum();
     let mut m: std::collections::BTreeMap<String, usize> = Default::default();
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail, pdn })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail, pdn, power })
 }
 
 #[cfg(not(target_arch = "wasm32"))]

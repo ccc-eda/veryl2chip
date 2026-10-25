@@ -27,6 +27,12 @@ export interface AsicResult {
   };
   /** power grid: rail count (row boundaries), straps (track x, VDD?), fillers flat (row, site, width) */
   pdn: { rails: number; strap_w: number; vias: number; straps: [number, boolean][]; fillers: number[] };
+  power: {
+    freq: number; e_nets: number; e_clock: number; e_internal: number; e_sram: number; dynamic: number; leakage: number; total: number;
+    ir_worst: number; cycles: number;
+    /** per cell: average power (µW) and IR drop (mV) */
+    cell: number[]; ir: number[];
+  };
   cts: { buffers: number; hold_bufs: number; trees: { net: string; sinks: number; buffers: number; levels: number }[] };
   timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
   verilog: string;

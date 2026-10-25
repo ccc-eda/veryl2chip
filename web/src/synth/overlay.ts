@@ -28,10 +28,11 @@ const ASIC_STAGES: StageDef[] = [
   { key: 'aroute', tag: 'asic', label: 'A ⑥ CTS + Global Routing' },
   { key: 'adetail', tag: 'asic', label: 'A ⑦ Detail Routing' },
   { key: 'asta', tag: 'asic', label: 'A ⑧ Timing (STA)' },
+  { key: 'apower', tag: 'asic', label: 'A ⑨ Power + IR Drop' },
 ];
 const PNR = new Set(['place', 'route', 'sta']);
-const ASIC = new Set(['amap', 'aplace', 'aroute', 'adetail', 'asta']);
-const APHYS = new Set(['aplace', 'aroute', 'adetail', 'asta']);
+const ASIC = new Set(['amap', 'aplace', 'aroute', 'adetail', 'asta', 'apower']);
+const APHYS = new Set(['aplace', 'aroute', 'adetail', 'asta', 'apower']);
 /** the matching stage of the other back end */
 const OTHER: Record<string, string> = { map: 'amap', place: 'aplace', route: 'aroute', sta: 'asta', amap: 'map', aplace: 'place', aroute: 'route', asta: 'sta' };
 
@@ -384,6 +385,7 @@ export class SynthOverlay {
       '延遲取自 IceStorm timings_up5k（慢速角）：LC in→out、carry、clk→Q、setup，每段繞線依所驅動的線種類計 mux 延遲；clock 視為理想（全域網路）。',
       '',
       `關鍵路徑 ${t.period.toFixed(2)} ns → Fmax ${t.fmax.toFixed(2)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，LC 顏色＝到達時間（綠早紅晚）`,
+      `功耗估計（隨機輸入模擬的翻轉率；net 電容 ≈ 5 fF × 負載 + 8 fF × 繞線段，全域時脈網路每拍，block RAM 每次存取 ≈ 24 pJ，靜態 ≈ 75 µA）：在 ${t.fmax.toFixed(1)} MHz 約 ${t.power.total.toFixed(3)} mW（動態 ${t.power.dynamic.toFixed(3)} + 靜態 ${t.power.static.toFixed(3)}；每週期 ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ）`,
       ...(t.fmax_wl ? [`時序導向：第一輪只看線長 ${t.fmax_wl.toFixed(2)} MHz；再以每條 net 的關鍵度（經過它的最長路徑 / 關鍵路徑）加權重新佈局，繞線時關鍵 net 優先走快的線 → ${t.fmax.toFixed(2)} MHz（取較快的一輪）`] : []),
     ];
   }
@@ -460,6 +462,7 @@ export class SynthOverlay {
   private selNetD: number | null = null;
   private layers = [true, true, true, true];
   private power = true;
+  private showIr = false;
 
   private drawAsic(fit: boolean): void {
     const a = this.asic!;
@@ -468,6 +471,11 @@ export class SynthOverlay {
     if (k === 'asta') {
       const max = Math.max(...a.cells.map(c => c[3]), 1e-9);
       color = i => heat(a.cells[i][3] / max);
+    }
+    if (k === 'apower') {
+      const v = this.showIr ? a.power.ir : a.power.cell;
+      const max = Math.max(...v, 1e-12);
+      color = i => heat(v[i] / max);
     }
     const scene = dieScene(a, undefined, color);
     for (const b of scene.boxes) b.hl = b.id === this.sel || (k === 'asta' && b.id < a.cells.length && a.cells[b.id][4] === 1);
@@ -509,6 +517,18 @@ export class SynthOverlay {
         '顏色：藍＝水平、紫＝垂直、綠＝clock / reset；底色＝擁塞（綠鬆 → 紅滿）。點元件看細節、點右側 net 高亮。',
       ];
     }
+    if (key === 'apower') {
+      const p = a.power;
+      const e = p.e_nets + p.e_clock + p.e_internal + p.e_sram;
+      return [
+        'A ⑨ Power + IR Drop',
+        `以隨機輸入模擬最後的網表 ${p.cycles} 個週期（有 reset 就先拉兩拍），統計每條 net 的翻轉率 α；切換功耗 = ½·α·C·V²·f（C = 負載腳位 + 0.2 fF/µm 的實際線長，V = 1.2 V），時脈樹每拍充放電；元件內部能量依大小計、正反器每拍有時脈能量、SRAM 每次存取；漏電依面積。`,
+        `IR drop：每個元件的平均電流流過所在列的 VDD 軌與 VSS 軌；兩條電源帶之間的軌是兩端供電的電阻線（M1 0.2 Ω/µm），算出每個元件看到的壓降。`,
+        '',
+        `每週期能量 ${e.toFixed(2)} pJ（訊號 ${p.e_nets.toFixed(2)}、時脈樹 ${p.e_clock.toFixed(2)}、元件內部 ${p.e_internal.toFixed(2)}、SRAM ${p.e_sram.toFixed(2)}）→ 在 Fmax ${p.freq.toFixed(1)} MHz：${p.total.toFixed(3)} mW（動態 ${p.dynamic.toFixed(3)}、漏電 ${p.leakage.toFixed(4)}）`,
+        `最大 IR drop ${p.ir_worst.toFixed(2)} mV（${(p.ir_worst / 12).toFixed(2)}% of VDD）；顏色＝${this.showIr ? 'IR drop' : '每個元件的功耗'}（綠低紅高），側欄可切換`,
+      ];
+    }
     if (key === 'adetail') {
       const d = a.detail;
       const um = (x: number) => (x / 1000).toFixed(2) + ' mm';
@@ -541,7 +561,20 @@ export class SynthOverlay {
     det.innerHTML = '<p class="hint">點元件看細節（種類、位置、接腳訊號、到達時間）。</p>';
     d.appendChild(det);
     const div = document.createElement('div');
-    if (key === 'adetail') {
+    if (key === 'apower') {
+      const p = a.power;
+      const lab = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = this.showIr;
+      cb.onchange = () => { this.showIr = cb.checked; this.drawAsic(false); this.info(this.asicReport('apower')); };
+      lab.append(cb, ' 顯示 IR drop（否則顯示功耗）');
+      div.appendChild(lab);
+      const byType = new Map<string, number>();
+      a.map.cells.forEach((c, i) => byType.set(c.t, (byType.get(c.t) ?? 0) + p.cell[i]));
+      div.insertAdjacentHTML('beforeend', `<h3>每週期能量（pJ）</h3>` + table(['來源', 'pJ'], [['訊號 net', p.e_nets.toFixed(3)], ['時脈樹', p.e_clock.toFixed(3)], ['元件內部', p.e_internal.toFixed(3)], ['SRAM', p.e_sram.toFixed(3)]])
+        + `<h3>功耗（依元件種類，µW）</h3>` + table(['元件', 'µW'], [...byType.entries()].sort((x, y) => y[1] - x[1]).map(([t, v]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, v.toFixed(2)])));
+    } else if (key === 'adetail') {
       const d = a.detail;
       div.innerHTML = `<h3>層</h3>`;
       const pw = document.createElement('label');

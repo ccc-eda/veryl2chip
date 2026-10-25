@@ -23,6 +23,16 @@ impl<'n> NetSim<'n> {
         self.nl.ports.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no port '{}'", name))
     }
 
+    /// value of any wire
+    pub fn bit(&self, b: Bit) -> bool { self.get_bit(b) }
+
+    /// drive an input port without settling (call `settle` after the last one)
+    pub fn poke(&mut self, name: &str, val: u128) {
+        for (i, b) in self.port(name).bits.iter().enumerate() {
+            if let Bit::W(w) = b { self.v.insert(*w, (val >> i) & 1 == 1); }
+        }
+    }
+
     pub fn set(&mut self, name: &str, val: u128) {
         for (i, b) in self.port(name).bits.iter().enumerate() {
             if let Bit::W(w) = b { self.v.insert(*w, (val >> i) & 1 == 1); }

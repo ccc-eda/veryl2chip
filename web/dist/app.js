@@ -818,11 +818,12 @@
     { key: "aplace", tag: "asic", label: "A \u2464 Row Placement \u9000\u706B" },
     { key: "aroute", tag: "asic", label: "A \u2465 CTS + Global Routing" },
     { key: "adetail", tag: "asic", label: "A \u2466 Detail Routing" },
-    { key: "asta", tag: "asic", label: "A \u2467 Timing (STA)" }
+    { key: "asta", tag: "asic", label: "A \u2467 Timing (STA)" },
+    { key: "apower", tag: "asic", label: "A \u2468 Power + IR Drop" }
   ];
   var PNR = /* @__PURE__ */ new Set(["place", "route", "sta"]);
-  var ASIC = /* @__PURE__ */ new Set(["amap", "aplace", "aroute", "adetail", "asta"]);
-  var APHYS = /* @__PURE__ */ new Set(["aplace", "aroute", "adetail", "asta"]);
+  var ASIC = /* @__PURE__ */ new Set(["amap", "aplace", "aroute", "adetail", "asta", "apower"]);
+  var APHYS = /* @__PURE__ */ new Set(["aplace", "aroute", "adetail", "asta", "apower"]);
   var OTHER = { map: "amap", place: "aplace", route: "aroute", sta: "asta", amap: "map", aplace: "place", aroute: "route", asta: "sta" };
   var isNet = (k) => k === "raw" || k === "opt" || k === "map" || k === "amap";
   var SynthOverlay = class {
@@ -853,6 +854,7 @@
       __publicField(this, "selNetD", null);
       __publicField(this, "layers", [true, true, true, true]);
       __publicField(this, "power", true);
+      __publicField(this, "showIr", false);
       this.view = new CanvasView($("synCanvas"));
       this.view.onPick = (b) => this.pick(b);
       $("synClose").onclick = () => this.close();
@@ -1191,6 +1193,7 @@
         "\u5EF6\u9072\u53D6\u81EA IceStorm timings_up5k\uFF08\u6162\u901F\u89D2\uFF09\uFF1ALC in\u2192out\u3001carry\u3001clk\u2192Q\u3001setup\uFF0C\u6BCF\u6BB5\u7E5E\u7DDA\u4F9D\u6240\u9A45\u52D5\u7684\u7DDA\u7A2E\u985E\u8A08 mux \u5EF6\u9072\uFF1Bclock \u8996\u70BA\u7406\u60F3\uFF08\u5168\u57DF\u7DB2\u8DEF\uFF09\u3002",
         "",
         `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0CLC \u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
+        `\u529F\u8017\u4F30\u8A08\uFF08\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u7684\u7FFB\u8F49\u7387\uFF1Bnet \u96FB\u5BB9 \u2248 5 fF \xD7 \u8CA0\u8F09 + 8 fF \xD7 \u7E5E\u7DDA\u6BB5\uFF0C\u5168\u57DF\u6642\u8108\u7DB2\u8DEF\u6BCF\u62CD\uFF0Cblock RAM \u6BCF\u6B21\u5B58\u53D6 \u2248 24 pJ\uFF0C\u975C\u614B \u2248 75 \xB5A\uFF09\uFF1A\u5728 ${t.fmax.toFixed(1)} MHz \u7D04 ${t.power.total.toFixed(3)} mW\uFF08\u52D5\u614B ${t.power.dynamic.toFixed(3)} + \u975C\u614B ${t.power.static.toFixed(3)}\uFF1B\u6BCF\u9031\u671F ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ\uFF09`,
         ...t.fmax_wl ? [`\u6642\u5E8F\u5C0E\u5411\uFF1A\u7B2C\u4E00\u8F2A\u53EA\u770B\u7DDA\u9577 ${t.fmax_wl.toFixed(2)} MHz\uFF1B\u518D\u4EE5\u6BCF\u689D net \u7684\u95DC\u9375\u5EA6\uFF08\u7D93\u904E\u5B83\u7684\u6700\u9577\u8DEF\u5F91 / \u95DC\u9375\u8DEF\u5F91\uFF09\u52A0\u6B0A\u91CD\u65B0\u4F48\u5C40\uFF0C\u7E5E\u7DDA\u6642\u95DC\u9375 net \u512A\u5148\u8D70\u5FEB\u7684\u7DDA \u2192 ${t.fmax.toFixed(2)} MHz\uFF08\u53D6\u8F03\u5FEB\u7684\u4E00\u8F2A\uFF09`] : []
       ];
     }
@@ -1279,6 +1282,11 @@
         const max = Math.max(...a.cells.map((c) => c[3]), 1e-9);
         color = (i) => heat(a.cells[i][3] / max);
       }
+      if (k === "apower") {
+        const v = this.showIr ? a.power.ir : a.power.cell;
+        const max = Math.max(...v, 1e-12);
+        color = (i) => heat(v[i] / max);
+      }
       const scene = dieScene(a, void 0, color);
       for (const b of scene.boxes) b.hl = b.id === this.sel || k === "asta" && b.id < a.cells.length && a.cells[b.id][4] === 1;
       if (k === "aroute") {
@@ -1318,6 +1326,18 @@
           "\u984F\u8272\uFF1A\u85CD\uFF1D\u6C34\u5E73\u3001\u7D2B\uFF1D\u5782\u76F4\u3001\u7DA0\uFF1Dclock / reset\uFF1B\u5E95\u8272\uFF1D\u64C1\u585E\uFF08\u7DA0\u9B06 \u2192 \u7D05\u6EFF\uFF09\u3002\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\u3001\u9EDE\u53F3\u5074 net \u9AD8\u4EAE\u3002"
         ];
       }
+      if (key === "apower") {
+        const p = a.power;
+        const e = p.e_nets + p.e_clock + p.e_internal + p.e_sram;
+        return [
+          "A \u2468 Power + IR Drop",
+          `\u4EE5\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u6700\u5F8C\u7684\u7DB2\u8868 ${p.cycles} \u500B\u9031\u671F\uFF08\u6709 reset \u5C31\u5148\u62C9\u5169\u62CD\uFF09\uFF0C\u7D71\u8A08\u6BCF\u689D net \u7684\u7FFB\u8F49\u7387 \u03B1\uFF1B\u5207\u63DB\u529F\u8017 = \xBD\xB7\u03B1\xB7C\xB7V\xB2\xB7f\uFF08C = \u8CA0\u8F09\u8173\u4F4D + 0.2 fF/\xB5m \u7684\u5BE6\u969B\u7DDA\u9577\uFF0CV = 1.2 V\uFF09\uFF0C\u6642\u8108\u6A39\u6BCF\u62CD\u5145\u653E\u96FB\uFF1B\u5143\u4EF6\u5167\u90E8\u80FD\u91CF\u4F9D\u5927\u5C0F\u8A08\u3001\u6B63\u53CD\u5668\u6BCF\u62CD\u6709\u6642\u8108\u80FD\u91CF\u3001SRAM \u6BCF\u6B21\u5B58\u53D6\uFF1B\u6F0F\u96FB\u4F9D\u9762\u7A4D\u3002`,
+          `IR drop\uFF1A\u6BCF\u500B\u5143\u4EF6\u7684\u5E73\u5747\u96FB\u6D41\u6D41\u904E\u6240\u5728\u5217\u7684 VDD \u8ECC\u8207 VSS \u8ECC\uFF1B\u5169\u689D\u96FB\u6E90\u5E36\u4E4B\u9593\u7684\u8ECC\u662F\u5169\u7AEF\u4F9B\u96FB\u7684\u96FB\u963B\u7DDA\uFF08M1 0.2 \u03A9/\xB5m\uFF09\uFF0C\u7B97\u51FA\u6BCF\u500B\u5143\u4EF6\u770B\u5230\u7684\u58D3\u964D\u3002`,
+          "",
+          `\u6BCF\u9031\u671F\u80FD\u91CF ${e.toFixed(2)} pJ\uFF08\u8A0A\u865F ${p.e_nets.toFixed(2)}\u3001\u6642\u8108\u6A39 ${p.e_clock.toFixed(2)}\u3001\u5143\u4EF6\u5167\u90E8 ${p.e_internal.toFixed(2)}\u3001SRAM ${p.e_sram.toFixed(2)}\uFF09\u2192 \u5728 Fmax ${p.freq.toFixed(1)} MHz\uFF1A${p.total.toFixed(3)} mW\uFF08\u52D5\u614B ${p.dynamic.toFixed(3)}\u3001\u6F0F\u96FB ${p.leakage.toFixed(4)}\uFF09`,
+          `\u6700\u5927 IR drop ${p.ir_worst.toFixed(2)} mV\uFF08${(p.ir_worst / 12).toFixed(2)}% of VDD\uFF09\uFF1B\u984F\u8272\uFF1D${this.showIr ? "IR drop" : "\u6BCF\u500B\u5143\u4EF6\u7684\u529F\u8017"}\uFF08\u7DA0\u4F4E\u7D05\u9AD8\uFF09\uFF0C\u5074\u6B04\u53EF\u5207\u63DB`
+        ];
+      }
       if (key === "adetail") {
         const d = a.detail;
         const um = (x) => (x / 1e3).toFixed(2) + " mm";
@@ -1349,7 +1369,23 @@
       det.innerHTML = '<p class="hint">\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
       d.appendChild(det);
       const div = document.createElement("div");
-      if (key === "adetail") {
+      if (key === "apower") {
+        const p = a.power;
+        const lab = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = this.showIr;
+        cb.onchange = () => {
+          this.showIr = cb.checked;
+          this.drawAsic(false);
+          this.info(this.asicReport("apower"));
+        };
+        lab.append(cb, " \u986F\u793A IR drop\uFF08\u5426\u5247\u986F\u793A\u529F\u8017\uFF09");
+        div.appendChild(lab);
+        const byType = /* @__PURE__ */ new Map();
+        a.map.cells.forEach((c, i) => byType.set(c.t, (byType.get(c.t) ?? 0) + p.cell[i]));
+        div.insertAdjacentHTML("beforeend", `<h3>\u6BCF\u9031\u671F\u80FD\u91CF\uFF08pJ\uFF09</h3>` + table(["\u4F86\u6E90", "pJ"], [["\u8A0A\u865F net", p.e_nets.toFixed(3)], ["\u6642\u8108\u6A39", p.e_clock.toFixed(3)], ["\u5143\u4EF6\u5167\u90E8", p.e_internal.toFixed(3)], ["SRAM", p.e_sram.toFixed(3)]]) + `<h3>\u529F\u8017\uFF08\u4F9D\u5143\u4EF6\u7A2E\u985E\uFF0C\xB5W\uFF09</h3>` + table(["\u5143\u4EF6", "\xB5W"], [...byType.entries()].sort((x, y) => y[1] - x[1]).map(([t, v]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, v.toFixed(2)])));
+      } else if (key === "adetail") {
         const d2 = a.detail;
         div.innerHTML = `<h3>\u5C64</h3>`;
         const pw = document.createElement("label");

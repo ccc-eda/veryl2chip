@@ -94,6 +94,9 @@ fn main() {
         let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
         println!("asic: area {:.1} µm² (cells), die {:.1} × {:.1} µm, {} rows, utilization {:.0}%", o.area, pl.w, pl.h, pl.rows, pl.util * 100.0);
         println!("asic: wirelength {:.0} µm, {} vias, overflow {} after {} routing iterations", rt.wirelength, rt.vias, rt.overflow, rt.iters.len());
+        let pw = &o.power;
+        println!("power: {:.3} mW at {:.1} MHz = dynamic {:.3} + leakage {:.4}; per cycle {:.2} pJ (nets {:.2}, clock {:.2}, internal {:.2}, SRAM {:.2}); IR drop worst {:.2} mV ({} random cycles)",
+            pw.total, pw.freq_mhz, pw.dynamic, pw.leakage, pw.e_nets + pw.e_clock + pw.e_internal + pw.e_sram, pw.e_nets, pw.e_clock, pw.e_internal, pw.e_sram, pw.ir_worst, pw.cycles);
         let pd = &o.pdn;
         println!("asic: power grid {} rails, {} straps, {} via stacks; {} filler cells", pd.rails, pd.straps.len(), pd.vias.len(), pd.fillers.len());
         let d = &o.detail;
@@ -125,6 +128,9 @@ fn main() {
             let opts = pnr::Opts { chipdb: None, package: package.clone(), pcf: pcf_map, seed, verbose, timing_driven };
             let out = pnr::place_and_route(&nl, &opts).unwrap_or_else(|e| { eprintln!("place & route error: {}", e); std::process::exit(1) });
             println!("  veryl pnr: {} LCs, {} routing pips, {:.1}s", out.lcs, out.wires, t0.elapsed().as_secs_f64());
+            let pw = &out.power;
+            println!("  power: {:.3} mW at {:.1} MHz = dynamic {:.3} + static {:.3}; per cycle {:.1} pJ (nets {:.1}, clock {:.1}, RAM {:.1})",
+                pw.total, pw.freq_mhz, pw.dynamic, pw.static_mw, pw.e_nets + pw.e_clock + pw.e_ram, pw.e_nets, pw.e_clock, pw.e_ram);
             println!("  timing: critical path {:.2} ns, Fmax {:.2} MHz{}", out.timing.period, out.timing.fmax,
                 out.fmax_wl.map(|f| format!(" (wirelength-only pass {:.2} MHz)", f)).unwrap_or_default());
             if verbose { for st in &out.timing.path { println!("    {:7.3} {:6.3}  {}", st.at, st.delay, st.what); } }
