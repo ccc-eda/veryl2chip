@@ -1,0 +1,47 @@
+// ==========================================
+// 使用者 function：組合邏輯
+// ==========================================
+module Max3 (
+    i_a: input  logic<8>,
+    i_b: input  logic<8>,
+    i_c: input  logic<8>,
+    o_m: output logic<8>,
+) {
+    function max2 (
+        x: input logic<8>,
+        y: input logic<8>,
+    ) -> logic<8> {
+        if (x >: y) {
+            return x;
+        } else {
+            return y;
+        }
+    }
+
+    assign o_m = max2(max2(i_a, i_b), i_c);
+}
+
+#[test(max3_test)]
+module TestMax3 {
+    var a: logic<8>;
+    var b: logic<8>;
+    var c: logic<8>;
+    var m: logic<8>;
+
+    inst u: Max3 (
+        i_a: a,
+        i_b: b,
+        i_c: c,
+        o_m: m,
+    );
+
+    initial {
+        a = 8'd5;  b = 8'd9; c = 8'd2;
+        $assert(m == 8'd9, "max in b");
+        a = 8'd42; b = 8'd9; c = 8'd17;
+        $assert(m == 8'd42, "max in a");
+        a = 8'd1;  b = 8'd2; c = 8'd3;
+        $assert(m == 8'd3, "max in c");
+        $finish();
+    }
+}

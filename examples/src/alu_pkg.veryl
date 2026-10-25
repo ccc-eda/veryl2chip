@@ -1,0 +1,59 @@
+// ==========================================
+// Package + enum：ALU（組合邏輯）
+// ==========================================
+package AluPkg {
+    enum Op: logic<2> {
+        ADD = 2'd0,
+        SUB = 2'd1,
+        AND = 2'd2,
+        OR  = 2'd3,
+    }
+}
+
+module AluUnit (
+    i_op: input  AluPkg::Op,
+    i_a  : input  logic<8>,
+    i_b  : input  logic<8>,
+    o_y  : output logic<8>,
+) {
+    always_comb {
+        case i_op {
+            AluPkg::Op::ADD: o_y = i_a + i_b;
+            AluPkg::Op::SUB: o_y = i_a - i_b;
+            AluPkg::Op::AND: o_y = i_a & i_b;
+            AluPkg::Op::OR : o_y = i_a | i_b;
+            default    : o_y = 8'd0;
+        }
+    }
+}
+
+#[test(alu_ops)]
+module TestAlu {
+    var op: AluPkg::Op;
+    var a : logic<8>;
+    var b : logic<8>;
+    var y : logic<8>;
+
+    inst u: AluUnit (
+        i_op: op,
+        i_a : a,
+        i_b : b,
+        o_y : y,
+    );
+
+    initial {
+        a = 8'd10;
+        b = 8'd20;
+
+        op = AluPkg::Op::ADD;
+        $assert(y == 8'd30, "add");
+        op = AluPkg::Op::SUB;
+        $assert(y == 8'hF6, "sub 10-20 (wraps)");
+        op = AluPkg::Op::AND;
+        $assert(y == 8'd0,  "and");
+        op = AluPkg::Op::OR;
+        $assert(y == 8'd30, "or");
+
+        $finish();
+    }
+}

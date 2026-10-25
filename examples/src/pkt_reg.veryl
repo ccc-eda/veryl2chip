@@ -1,0 +1,58 @@
+// ==========================================
+// struct + 暫存器群
+// ==========================================
+package PktPkg {
+    struct Pkt {
+        valid: logic,
+        data : logic<8>,
+    }
+}
+
+module PktReg (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    i_d  : input  PktPkg::Pkt,
+    o_q  : output PktPkg::Pkt,
+) {
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            o_q.valid = '0;
+            o_q.data  = 8'd0;
+        } else {
+            o_q.valid = i_d.valid;
+            o_q.data  = i_d.data;
+        }
+    }
+}
+
+#[test(pkt_reg_test)]
+module TestPktReg {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var d: PktPkg::Pkt;
+    var q: PktPkg::Pkt;
+
+    inst u: PktReg (
+        i_clk: clk,
+        i_rst: rst,
+        i_d  : d,
+        o_q  : q,
+    );
+
+    initial {
+        rst.assert();
+
+        d.valid = 1;
+        d.data  = 8'hAB;
+        clk.next();
+        $assert(q.valid == 1 && q.data == 8'hAB, "captured");
+
+        d.valid = 0;
+        d.data  = 8'hFF;
+        clk.next();
+        $assert(q.valid == 0 && q.data == 8'hFF, "second beat");
+
+        $finish();
+    }
+}

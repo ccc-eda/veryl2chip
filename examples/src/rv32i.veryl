@@ -67,6 +67,7 @@ module RegFile (
 ) {
     var rf: logic<32> [32];
 
+    #[allow(missing_reset_statement)]
     always_ff (i_clk, i_rst) {
         if_reset {
         } else if (i_rd_we && (i_rd_idx != 5'd0)) {
@@ -269,11 +270,10 @@ module RiscvCore (
 // ==========================================
 #[test(test_riscv_cpu)]
 module TestRiscvCore {
-    // 引入 Veryl 官方模擬步進推進引擎
-    inst u_clock: $tb::clock_gen;
+    // 官方 testbench 元件：clk 本身即 clock 訊號，rst 綁定 clk
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
 
-    var clk       : clock;
-    var rst       : reset;
     var imem_addr : logic<32>;
     var imem_inst : logic<32>;
     var dmem_addr : logic<32>;
@@ -284,6 +284,7 @@ module TestRiscvCore {
     // 模擬 Data RAM
     var dmem: logic<32> [16];
 
+    #[allow(missing_reset_statement)]
     always_ff (clk, rst) {
         if_reset {
         } else if dmem_we {
@@ -316,29 +317,15 @@ module TestRiscvCore {
     );
 
     initial {
-        // 1. 重設 CPU，每步都呼叫 u_clock.next(1) 讓電路反應
-        rst = 1'b0; // 進入 Reset
-        clk = 1'b0;
-        u_clock.next(1);
+        // 1. 重設後釋放，開始執行
+        rst.assert();
 
-        clk = 1'b1;
-        u_clock.next(1);
-
-        clk = 1'b0;
-        rst = 1'b1; // 釋放 Reset，開始執行
-        u_clock.next(1);
-
-        // 2. 執行 10 個時鐘週期（每次上下沿都要步進！）
-        for i in 0..10 {
-            clk = 1'b1;
-            u_clock.next(1); // 上升緣觸發，執行運算
-            clk = 1'b0;
-            u_clock.next(1); // 下降緣穩定
-        }
+        // 2. 執行 10 個時鐘週期
+        clk.next(10);
 
         // 3. 斷言驗證
-        $assert(imem_addr != 32'd0); // 確認 PC 已經成功跑動
-        $assert(dmem[0] == 32'd30);  // 確認 10 + 20 = 30 已經存入記憶體！
+        $assert(imem_addr != 32'd0, "PC should have advanced");
+        $assert(dmem[0] == 32'd30, "10 + 20 = 30 should be stored");
 
         $finish();
     }

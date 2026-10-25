@@ -1,0 +1,61 @@
+// ==========================================
+// 陣列：16 x 8bit 同步寫、非同步讀 RAM
+// ==========================================
+module Ram (
+    i_clk  : input  clock,
+    i_rst  : input  reset,
+    i_we   : input  logic,
+    i_addr : input  logic<4>,
+    i_wdata: input  logic<8>,
+    o_rdata: output logic<8>,
+) {
+    var mem: logic<8> [16];
+
+    #[allow(missing_reset_statement)]
+    always_ff (i_clk, i_rst) {
+        if_reset {
+        } else if (i_we) {
+            mem[i_addr] = i_wdata;
+        }
+    }
+
+    assign o_rdata = mem[i_addr];
+}
+
+#[test(ram_test)]
+module TestRam {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var we   : logic;
+    var addr : logic<4>;
+    var wdata: logic<8>;
+    var rdata: logic<8>;
+
+    inst u: Ram (
+        i_clk  : clk,
+        i_rst  : rst,
+        i_we   : we,
+        i_addr : addr,
+        i_wdata: wdata,
+        o_rdata: rdata,
+    );
+
+    initial {
+        rst.assert();
+
+        // 寫入兩個位置
+        we = 1;
+        addr = 4'd3;  wdata = 8'h5A; clk.next();
+        addr = 4'd12; wdata = 8'hC3; clk.next();
+        we = 0;
+
+        // 非同步讀回
+        addr = 4'd3;
+        $assert(rdata == 8'h5A, "read back 3");
+        addr = 4'd12;
+        $assert(rdata == 8'hC3, "read back 12");
+
+        $finish();
+    }
+}

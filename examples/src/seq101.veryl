@@ -1,0 +1,82 @@
+// ==========================================
+// enum 狀態機：Moore 式 "101" 序列偵測器
+// ==========================================
+package SeqPkg {
+    enum St: logic<2> {
+        S0 = 2'd0, // 尚未比對到任何位元
+        S1 = 2'd1, // 已比對到 '1'
+        S2 = 2'd2, // 已比對到 '10'
+    }
+}
+
+module Seq101 (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    i_sig: input  logic,
+    o_hit: output logic,
+) {
+    var st: SeqPkg::St;
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            st = SeqPkg::St::S0;
+        } else {
+            case st {
+                SeqPkg::St::S0: {
+                    if (i_sig) { st = SeqPkg::St::S1; } else { st = SeqPkg::St::S0; }
+                }
+                SeqPkg::St::S1: {
+                    if (i_sig) { st = SeqPkg::St::S1; } else { st = SeqPkg::St::S2; }
+                }
+                SeqPkg::St::S2: {
+                    if (i_sig) { st = SeqPkg::St::S1; } else { st = SeqPkg::St::S0; }
+                }
+                default: st = SeqPkg::St::S0;
+            }
+        }
+    }
+
+    assign o_hit = (st == SeqPkg::St::S2) && i_sig;
+}
+
+#[test(seq101_test)]
+module TestSeq101 {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var sig: logic;
+    var hit: logic;
+
+    inst u: Seq101 (
+        i_clk: clk,
+        i_rst: rst,
+        i_sig: sig,
+        o_hit: hit,
+    );
+
+    initial {
+        rst.assert();
+
+        // 餵入序列 1, 0, 1 → 應偵測到 "101"
+        // （st == S2 且當下輸入為 1 時，在下一個 rising edge 之前就該命中）
+        sig = 1; clk.next();
+        sig = 0; clk.next();
+        sig = 1;
+        $assert(hit, "101 detected");
+        clk.next();
+
+        // '0' 之後應回到未命中
+        sig = 0; clk.next();
+        $assert(!hit, "no hit after break");
+
+        // 序列 1, 1, 0, 1 → 命中
+        sig = 1; clk.next();
+        sig = 1; clk.next();
+        sig = 0; clk.next();
+        sig = 1;
+        $assert(hit, "101 detected across restart");
+        clk.next();
+
+        $finish();
+    }
+}

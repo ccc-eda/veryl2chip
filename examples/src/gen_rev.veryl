@@ -1,0 +1,53 @@
+// ==========================================
+// generate for / if：參數化的位元反轉器
+// ==========================================
+module BitRev #(
+    param W: u32 = 4,
+) (
+    i_x: input  logic<W>,
+    o_y: output logic<W>,
+) {
+    for i in 0..W : gen_rev {
+        assign o_y[i] = i_x[W - 1 - i];
+    }
+}
+
+module GrayConv #(
+    param W: u32 = 4,
+) (
+    i_bin: input  logic<W>,
+    o_gray: output logic<W>,
+) {
+    assign o_gray = i_bin ^ (i_bin >> 1);
+}
+
+#[test(gen_test)]
+module TestGen {
+    var x: logic<4>;
+    var y: logic<4>;
+    var b: logic<4>;
+    var g: logic<4>;
+
+    inst u_rev: BitRev #(W: 4) (
+        i_x: x,
+        o_y: y,
+    );
+    inst u_gray: GrayConv #(W: 4) (
+        i_bin: b,
+        o_gray: g,
+    );
+
+    initial {
+        x = 4'b1001;
+        $assert(y == 4'b1001, "palindrome");
+        x = 4'b0001;
+        $assert(y == 4'b1000, "reverse lsb->msb");
+
+        b = 4'b0101;
+        $assert(g == 4'b0111, "binary->gray");
+        b = 4'b0111;
+        $assert(g == 4'b0100, "binary->gray 2");
+
+        $finish();
+    }
+}
