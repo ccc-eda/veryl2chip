@@ -84,7 +84,11 @@ fn asic(v: &Value) -> R<Value> {
                 "segs": r.segs.iter().flat_map(|s| [s.0, s.1, s.2, s.3]).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         },
-        "timing": { "period": tm.period, "fmax": tm.fmax, "fmax_wl": o.fmax_wl, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>() },
+        "cts": {
+            "buffers": o.cts.buffers, "hold_bufs": o.hold_bufs,
+            "trees": o.cts.trees.iter().map(|(b, sinks, bufs, levels)| json!({ "net": names.get(b).cloned().unwrap_or_else(|| "?".into()), "sinks": sinks, "buffers": bufs, "levels": levels })).collect::<Vec<_>>(),
+        },
+        "timing": { "period": tm.period, "fmax": tm.fmax, "fmax_wl": o.fmax_wl, "fmax_ideal": o.fmax_ideal, "insertion": tm.insertion, "skew": tm.skew, "hold_slack": tm.hold_slack, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>() },
         "verilog": verilog,
         "def": asic::def(&o),
     }))

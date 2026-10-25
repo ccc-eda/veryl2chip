@@ -143,6 +143,7 @@ fn netlist(files: &[&str], top: &str) -> crate::netlist::Netlist {
     let mut parsers = vec![];
     for f in files {
         let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), f);
+        let path = if std::path::Path::new(&path).exists() { path } else { format!("{}/examples/{}", env!("CARGO_MANIFEST_DIR"), f) };
         let src = std::fs::read_to_string(&path).unwrap();
         parsers.push(Parser::parse(&src, &path).unwrap());
     }
@@ -258,10 +259,15 @@ fn asic_flow_legal() {
         let mut occ = vec![vec![false; pl.sites as usize]; pl.rows as usize];
         for (i, c) in o.mapped.cells.iter().enumerate() {
             let (r, x) = pl.pos[i];
-            let w = crate::asic::lib::cell(&c.typ).width;
-            assert!(r < pl.rows && x + w <= pl.sites, "{}: cell {} outside the die", top, i);
-            for s in x..x + w { assert!(!occ[r as usize][s as usize], "{}: overlap at row {} site {}", top, r, s); occ[r as usize][s as usize] = true; }
+            let (w, h) = crate::asic::lib::dims(c);
+            assert!(r + h <= pl.rows && x + w <= pl.sites, "{}: cell {} outside the die", top, i);
+            for rr in r..r + h {
+                for s in x..x + w { assert!(!occ[rr as usize][s as usize], "{}: overlap at row {} site {}", top, rr, s); occ[rr as usize][s as usize] = true; }
+            }
         }
+        // the clock tree: every flip-flop clock comes through CLKBUFs, with little skew
+        assert!(o.cts.buffers > 0, "{}: no clock tree", top);
+        assert!(o.timing.skew < 0.3 && o.timing.hold_viol.is_empty(), "{}: skew {} hold {:?}", top, o.timing.skew, o.timing.hold_viol.len());
         assert_eq!(o.routing.overflow, 0, "{}: routing overflow", top);
         for n in &o.routing.nets {
             // union-find over the gcells the segments touch
@@ -355,4 +361,19 @@ fn bram_mix() {
         }
     });
     assert_eq!(brams(&["sync_ram.veryl", "bram_tests.veryl"], "BramMix"), 4);
+}
+
+/// hold fixing: with 0.4 ns more hold requirement the flow must insert delay
+/// buffers until no endpoint violates, and the result still computes fib(10)
+#[test]
+fn asic_hold_fix() {
+    let nl = netlist(&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"], "RiscvSoc");
+    let o = crate::asic::flow_with(&nl, 1, 0.4).unwrap();
+    assert!(o.hold_bufs > 0, "no hold buffers inserted");
+    assert!(o.timing.hold_viol.is_empty(), "{} hold violations left", o.timing.hold_viol.len());
+    let mut s = NetSim::new(&o.mapped);
+    reset(&mut s, "i_rst");
+    let mut cycles = 0;
+    while s.get("o_led") == 0 && cycles < 200 { s.step(); cycles += 1; }
+    assert_eq!(s.get("o_led"), 55, "fib(10) after {} cycles", cycles);
 }

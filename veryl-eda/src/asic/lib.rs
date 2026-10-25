@@ -25,6 +25,8 @@ pub struct StdCell {
 pub const LIB: &[StdCell] = &[
     StdCell { name: "INV", ins: &["A"], width: 2, delay: 0.025, load: 0.010, setup: 0.0, verilog: "assign Y = ~A;" },
     StdCell { name: "BUF", ins: &["A"], width: 3, delay: 0.045, load: 0.007, setup: 0.0, verilog: "assign Y = A;" },
+    // clock-tree buffer: stronger, balanced rise/fall
+    StdCell { name: "CLKBUF", ins: &["A"], width: 4, delay: 0.055, load: 0.004, setup: 0.0, verilog: "assign Y = A;" },
     StdCell { name: "NAND2", ins: &["A", "B"], width: 3, delay: 0.035, load: 0.014, setup: 0.0, verilog: "assign Y = ~(A & B);" },
     StdCell { name: "NOR2", ins: &["A", "B"], width: 3, delay: 0.045, load: 0.018, setup: 0.0, verilog: "assign Y = ~(A | B);" },
     StdCell { name: "AND2", ins: &["A", "B"], width: 4, delay: 0.065, load: 0.009, setup: 0.0, verilog: "assign Y = A & B;" },
@@ -49,6 +51,10 @@ pub fn cell(name: &str) -> &'static StdCell {
 }
 
 pub fn is_ff(name: &str) -> bool { name.starts_with("DFF") }
+
+/// hold time of the flip-flops and of the SRAM macro inputs (ns)
+pub const HOLD: f64 = 0.03;
+pub const SRAM_HOLD: f64 = 0.05;
 
 /// area in µm²
 pub fn area(name: &str) -> f64 { cell(name).width as f64 * SITE_W * ROW_H }

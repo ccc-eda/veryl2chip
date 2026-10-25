@@ -25,7 +25,7 @@ const ASIC_STAGES: StageDef[] = [
   ...FPGA_STAGES.slice(0, 3),
   { key: 'amap', tag: 'asic', label: 'A ④ Standard Cell Map' },
   { key: 'aplace', tag: 'asic', label: 'A ⑤ Row Placement 退火' },
-  { key: 'aroute', tag: 'asic', label: 'A ⑥ Global Routing' },
+  { key: 'aroute', tag: 'asic', label: 'A ⑥ CTS + Global Routing' },
   { key: 'asta', tag: 'asic', label: 'A ⑦ Timing (STA)' },
 ];
 const PNR = new Set(['place', 'route', 'sta']);
@@ -489,8 +489,11 @@ export class SynthOverlay {
     }
     if (key === 'aroute') {
       const r = a.route;
+      const c = a.cts;
       return [
-        `A ⑥ Global Routing（${r.gx} × ${r.gy} 個 gcell，每格 4 µm；水平線走 M2/M4、垂直線走 M3/M5，每邊 ${r.cap} 軌）`,
+        `A ⑥ CTS + Global Routing（${r.gx} × ${r.gy} 個 gcell，每格 4 µm；水平線走 M2/M4、垂直線走 M3/M5，每邊 ${r.cap} 軌）`,
+        `時脈樹合成（CTS）：佈局完成後，把 clock（與非同步 reset）的負載依位置遞迴對半切（沿較長的方向取中位數，像 H-tree），每群 ≤ 16 個負載由一個 CLKBUF 驅動，緩衝器放在所驅動者的重心；平衡的切法讓每個正反器經過一樣多級、差不多長的線 → skew 小。`,
+        c.buffers ? `→ ${c.trees.map(t => `${t.net}：${t.sinks} 個負載，${t.buffers} 個 CLKBUF，${t.levels} 級`).join('；')}；插入延遲 ${a.timing.insertion.toFixed(3)} ns，skew ${(a.timing.skew * 1000).toFixed(0)} ps` : '→ 負載不多（≤ 16），不需要時脈樹',
         '每條 net 的端點依 Prim 最小生成樹順序，用 A* 從端點連到已建好的樹；超過容量的邊以 PathFinder（現況 + 歷史成本）協商重繞，直到沒有溢出。',
         '',
         `${r.nets.length} 條 net，總線長 ${(r.wirelength / 1000).toFixed(2)} mm，via ${r.vias} 個；每輪溢出：${r.iters.join(' → ')}`,
@@ -503,7 +506,9 @@ export class SynthOverlay {
       '元件延遲 = 本徵延遲 + 每扇出負載 × 扇出；線延遲 = 驅動整條繞線的電容 + 到該負載的分佈 RC（依曼哈頓距離）。路徑起點為輸入腳與 DFF（clk→Q），終點為 DFF D（加 setup）與輸出腳；clock 視為理想。',
       '',
       `關鍵路徑 ${t.period.toFixed(3)} ns → Fmax ${t.fmax.toFixed(1)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，元件顏色＝到達時間（綠早紅晚）`,
-      `時序導向：只看線長的佈局 ${t.fmax_wl.toFixed(1)} MHz；以 net 關鍵度加權後再退火（微調 + 小設計重新退火，只取繞得通的）→ ${t.fmax.toFixed(1)} MHz`,
+      `時序導向：只看線長的佈局 ${t.fmax_wl.toFixed(1)} MHz；以 net 關鍵度加權後再退火（微調 + 小設計重新退火，只取繞得通的）→ ${t.fmax_ideal.toFixed(1)} MHz（理想時脈）`,
+      `時脈樹之後（propagated clock）：路徑從發送端正反器的時脈到達時間出發、對接收端的時脈檢查 setup → ${t.fmax.toFixed(1)} MHz；skew ${(t.skew * 1000).toFixed(0)} ps。`,
+      `Hold 檢查（最短路徑：最早到達 ≥ 接收時脈 + hold）：最差餘裕 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `，插入 ${a.cts.hold_bufs} 個延遲 BUF 修正` : '，沒有違規'}。`,
     ];
   }
 

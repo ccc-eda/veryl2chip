@@ -69,7 +69,7 @@ impl<'n> NetSim<'n> {
                     "$_XOR_" => g("A", self) ^ g("B", self),
                     "$_MUX_" => if g("S", self) { g("B", self) } else { g("A", self) },
                     "INV" => !g("A", self),
-                    "BUF" => g("A", self),
+                    "BUF" | "CLKBUF" => g("A", self),
                     "NAND2" => !(g("A", self) & g("B", self)),
                     "NOR2" => !(g("A", self) | g("B", self)),
                     "AND2" => g("A", self) & g("B", self),

@@ -1,6 +1,8 @@
 //! ASIC back end on the "vlib" standard-cell library: technology mapping,
-//! row placement, global routing and static timing.
+//! row placement (wirelength, then timing-driven), clock tree synthesis,
+//! global routing, static timing with a propagated clock, hold fixing.
 
+pub mod cts;
 pub mod lib;
 pub mod map;
 pub mod place;
@@ -18,14 +20,22 @@ pub struct Output {
     pub area: f64,
     /// (cell type, count), largest count first
     pub counts: Vec<(String, usize)>,
-    /// Fmax of the wirelength-only placement (before the timing-driven pass)
+    /// Fmax of the wirelength-only placement (before the timing-driven pass), ideal clock
     pub fmax_wl: f64,
+    /// Fmax with the ideal clock, before CTS
+    pub fmax_ideal: f64,
+    pub cts: cts::Cts,
+    /// delay buffers inserted to fix hold
+    pub hold_bufs: usize,
 }
 
-pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> {
+pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> { flow_with(opt, seed, 0.0) }
+
+/// `extra_hold` (ns) is added to every hold requirement (tests use it to force hold fixing)
+pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, String> {
     let t = |what: &str, t0: f64| if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("{}: {:.2}s", what, now() - t0) };
     let t0 = now();
-    let mapped = map::map(opt)?;
+    let mut mapped = map::map(opt)?;
     t("map", t0);
     let t0 = now();
     let mut placement = place::place(&mapped, seed, &Default::default(), None);
@@ -33,7 +43,7 @@ pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> {
     let t0 = now();
     let mut routing = route::route(&mapped, &placement);
     t("route", t0);
-    let mut timing = sta::analyze(&mapped, &placement, &routing);
+    let mut timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
     // timing-driven pass: nets weighted by their criticality; keep the faster result
     let fmax_wl = timing.fmax;
     let weights = timing_weights(&mapped, &timing.net_crit);
@@ -48,16 +58,33 @@ pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> {
         let t0 = now();
         let r2 = route::route(&mapped, &p2);
         t("route (timing-driven)", t0);
-        let t2 = sta::analyze(&mapped, &p2, &r2);
+        let t2 = sta::analyze(&mapped, &p2, &r2, extra_hold);
         // only a routable result counts
         if r2.overflow == 0 && t2.fmax > timing.fmax { placement = p2; routing = r2; timing = t2; }
+    }
+    let _ = routing;
+    // clock tree on the final placement, then routing and timing with the propagated clock
+    let fmax_ideal = timing.fmax;
+    let t0 = now();
+    let cts = cts::build(&mut mapped, &mut placement);
+    t("cts", t0);
+    let mut routing = route::route(&mapped, &placement);
+    let mut timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
+    // hold: delay buffers (≈ 50 ps each) in front of violating inputs
+    let mut hold_bufs = 0;
+    for _ in 0..3 {
+        if timing.hold_viol.is_empty() { break; }
+        let fixes: Vec<(usize, &'static str, usize)> = timing.hold_viol.iter().map(|&(i, p, s)| (i, p, ((-s + 0.01) / 0.05).ceil().max(1.0) as usize)).collect();
+        hold_bufs += cts::fix_hold(&mut mapped, &mut placement, &fixes);
+        routing = route::route(&mapped, &placement);
+        timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
     }
     let area = mapped.cells.iter().map(lib::cell_area).sum();
     let mut m: std::collections::BTreeMap<String, usize> = Default::default();
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs })
 }
 
 #[cfg(not(target_arch = "wasm32"))]

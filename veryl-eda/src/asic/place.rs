@@ -54,9 +54,12 @@ pub fn nets(nl: &Netlist, pins: &[Pin]) -> Vec<PNet> {
     order.into_iter().map(|b| m.remove(&b).unwrap()).filter(|n| n.cells.len() + n.pins.len() > 1).collect()
 }
 
-/// wires that drive clock / asynchronous set-reset pins (built as trees, not placed by wirelength)
+/// wires that drive clock / asynchronous set-reset pins, through their
+/// buffer trees (built by CTS, not placed by wirelength)
 pub fn special_nets(nl: &Netlist) -> std::collections::HashSet<Bit> {
-    nl.cells.iter().filter(|c| c.is_ff()).flat_map(|c| c.conns.iter().filter(|(p, _)| matches!(*p, "CK" | "RN" | "SN")).map(|x| x.1)).collect()
+    let mut s: std::collections::HashSet<Bit> = nl.cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| matches!(*p, "CK" | "RN" | "SN")).map(|x| x.1)).collect();
+    for c in nl.cells.iter().filter(|c| c.typ == "CLKBUF") { s.extend(c.conns.iter().map(|x| x.1)); }
+    s
 }
 
 /// `weights`: per net, a factor on its wirelength (timing-driven placement;

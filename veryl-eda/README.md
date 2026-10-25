@@ -91,8 +91,12 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 | `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹）；同步讀取的記憶體（與 FPGA 的 block RAM 推論相同條件）變成 **SRAM 巨集**，每個讀取埠一個 |
 | `place.rs` | 依利用率 65% 決定晶粒（加上巨集面積），SRAM 巨集先由左下角起成排固定擺放，IO 腳放在四周；標準元件依各列空位比例蛇形初始擺放，再以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL |
 | `route.rs` | gcell（4 µm）**全域繞線**：水平 M2/M4、垂直 M3/M5，每邊 16 軌；端點依 Prim 順序以 A* 連到已建好的樹，PathFinder（現況 + 歷史成本）消除溢出；統計線長與 via |
-| `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；起點輸入腳 / DFF clk→Q，終點 DFF D（+setup）/ 輸出腳；另算每條 net 的關鍵度（給時序導向佈局） |
+| `cts.rs` | **時脈樹合成**（佈局之後）：clock 與非同步 reset 的負載依位置遞迴對半切（沿較長方向取中位數，H-tree 式平衡二元樹），每群 ≤ 16 個負載一個 CLKBUF，緩衝器放在所驅動者重心的最近空位；另有 hold 修正（在違規的 D 前插延遲 BUF） |
+| `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；CTS 之後時脈是 propagated：每個正反器有自己的時脈到達時間，setup 以發送端 / 接收端時脈計算，再用最短路徑做 **hold 檢查**（IO 視為同步於平均延遲的虛擬時脈）；另算每條 net 的關鍵度（給時序導向佈局） |
 | `mod.rs` | `flow()` 串起來；`def()` 輸出 DEF 佈局 |
+
+流程：映射 → 佈局（線長）→ 時序導向佈局 → CTS → 繞線 → STA（propagated clock、hold）→ 有 hold 違規就插延遲 BUF、重繞、重算。
+例：RiscvSoc 的 i_clk 有 232 個負載 → 31 個 CLKBUF、5 級，插入延遲 0.74 ns、skew 104 ps；RiscvCore 1056 個負載 → 194 個 CLKBUF、8 級、skew 170 ps。
 
 | 設計 | 標準元件 | 面積 | 晶粒 | 線長 | Fmax |
 |---|---|---|---|---|---|

@@ -19,7 +19,8 @@ export interface AsicResult {
     gx: number; gy: number; cap: number; iters: number[]; wirelength: number; vias: number; overflow: number;
     nets: { name: string; clock: boolean; len: number; vias: number; crit: boolean; segs: number[] }[];
   };
-  timing: { period: number; fmax: number; fmax_wl: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
+  cts: { buffers: number; hold_bufs: number; trees: { net: string; sinks: number; buffers: number; levels: number }[] };
+  timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
   verilog: string;
   def: string;
 }
@@ -29,6 +30,7 @@ export const S = 4;
 
 export function stdColor(t: string): string {
   if (t === 'SRAM') return '#7d6b9e';
+  if (t === 'CLKBUF') return '#57c27a';
   if (t.startsWith('DFF')) return '#d08770';
   if (t === 'MUX2') return '#ebcb8b';
   if (t === 'BUF') return '#8fbcbb';
