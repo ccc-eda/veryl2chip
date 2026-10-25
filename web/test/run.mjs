@@ -33,6 +33,26 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   }
   console.log(`${line}  (${Date.now() - t0} ms)`);
 }
+// post-synthesis simulation: the same testbenches with the design module
+// replaced by its generic / iCE40 / standard-cell netlist give the RTL result
+for (const ex of ctx.VERYL_EXAMPLES) {
+  if (!ex.synth) continue;
+  const rtl = core.simulate(ex.files).tops.map((t) => `${t.name}:${t.fails}`).join(' ');
+  for (const gate of ['opt', 'ice40', 'asic']) {
+    const t0 = Date.now();
+    try {
+      const r = core.call({ cmd: 'simulate', files: ex.files, top: null, max_time: 1_000_000, vcd: false, gate, synth: ex.synth });
+      const got = r.tops.map((t) => `${t.name}:${t.fails}`).join(' ');
+      const ok = got === rtl;
+      if (!ok) bad++;
+      console.log(`${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} gate-level ${gate.padEnd(5)} ${r.gate.cells} cells: ${got}${ok ? ' = RTL' : ` (RTL ${rtl})`}  (${Date.now() - t0} ms)`);
+    } catch (e) {
+      bad++;
+      console.log(`FAIL ${ex.id.padEnd(9)} gate-level ${gate} ${e.message}`);
+    }
+  }
+}
+
 // synthesis stages: every example's design module; cell counts must equal the CLI's
 const cli = path.join(dist, '../../veryl-eda/target/release/veryl-eda');
 const haveCli = fs.existsSync(cli);

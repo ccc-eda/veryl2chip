@@ -57,7 +57,7 @@ open dist/index.html               # front-end only, works from file:// (no serv
 
 ## Architecture (veryl-sim)
 
-Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracking in Veryl.lock/examples). Flow: `main.rs` (CLI, parse, top selection) → `elab.rs` (syntax tree → sim IR, hierarchy/inst expansion) → `sim.rs` (eval, delta cycles, NBA scheduling, clock gen, VCD). `expr.rs` is a Pratt parser over veryl-parser tokens; `value.rs` is 4-state (0/1/x) bit vectors over a fixed-width multi-limb integer `Bits` (max `MAXW` = 256 bits); veryl-eda reuses it for constants. `iface.rs` (interfaces, modport resolution) and `gen.rs` (generate-for indices) are shared with veryl-eda (path dependency).
+Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracking in Veryl.lock/examples). Flow: `main.rs` (CLI, parse, top selection) → `elab.rs` (syntax tree → sim IR, hierarchy/inst expansion) → `sim.rs` (eval, delta cycles, NBA scheduling, clock gen, VCD). `expr.rs` is a Pratt parser over veryl-parser tokens; `value.rs` is 4-state (0/1/x) bit vectors over a fixed-width multi-limb integer `Bits` (max `MAXW` = 256 bits); veryl-eda reuses it for constants. `iface.rs` (interfaces, modport resolution) and `gen.rs` (generate-for indices) are shared with veryl-eda (path dependency). `gates.rs` builds a module from a gate netlist instead of its RTL (`run_gates`); veryl-eda's `gatesim.rs` converts its netlists (`--gatesim opt|ice40|asic`, also the web's simulation selector). Gate models keep x-propagation like RTL (LUTs are mux trees, not table lookups).
 
 ## Architecture (veryl-eda)
 

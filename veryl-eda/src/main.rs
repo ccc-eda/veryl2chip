@@ -7,13 +7,15 @@ fn usage() -> ! {
     eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven]]");
-    eprintln!("                 [--asic [--seed N] [-v]]");
+    eprintln!("                 [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]");
     eprintln!("                 FILE.veryl...");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
     eprintln!("  gate-level netlist of yosys internal cells and prints its statistics.");
     eprintln!("  --ice40 maps it to SB_LUT4/SB_DFF* cells; --asc/--bin then run");
     eprintln!("  place & route (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and icepack.");
     eprintln!("  --asic maps to the vlib standard cells, places rows, routes and times them.");
+    eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
+    eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
     std::process::exit(2);
 }
 
@@ -23,6 +25,7 @@ fn main() {
     let (mut device, mut package) = ("up5k".to_string(), "sg48".to_string());
     let (mut pnr_tool, mut seed, mut verbose) = ("nextpnr".to_string(), 1u64, false);
     let mut asic_flow = false;
+    let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
     let mut files = vec![];
     let mut a = std::env::args().skip(1);
@@ -34,6 +37,7 @@ fn main() {
             "--list" => list = true,
             "--ice40" => ice40 = true,
             "--asic" => asic_flow = true,
+            "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "--no-timing-driven" => timing_driven = false,
             "--pcf" => pcf = a.next(),
             "--asc" => asc = a.next(),
@@ -66,6 +70,19 @@ fn main() {
     let top = top.or_else(|| lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()))
         .unwrap_or_else(|| { eprintln!("no synthesizable (non-#[test]) module found"); std::process::exit(1) });
 
+    if let Some(kind) = &gatesim {
+        let srcs: Vec<(String, String)> = files.iter().map(|f| (f.display().to_string(), std::fs::read_to_string(f).unwrap())).collect();
+        let prov = veryl_eda::gatesim::Provider::new(&lib, &top, kind);
+        let f = |m: &str, ov: &std::collections::HashMap<String, veryl_sim::value::Val>| prov.get(m, ov);
+        let r = veryl_sim::run_gates(&srcs, None, 1_000_000, false, true, Some(&f));
+        for (ps, n) in prov.built.borrow().iter() {
+            println!("gate-level simulation: {}{} as {} cells ({})", top, if ps.is_empty() { String::new() } else { format!(" #({})", ps) }, n, kind);
+        }
+        match r {
+            Ok(r) => std::process::exit(if r.tops.iter().any(|t| t.fails > 0) { 1 } else { 0 }),
+            Err(e) => { eprintln!("{}", e); std::process::exit(1) }
+        }
+    }
     let (mut nl, warnings) = match elab::synthesize(&lib, &top) {
         Ok(r) => r,
         Err(e) => { eprintln!("synthesis error in '{}': {}", top, e); std::process::exit(1) }

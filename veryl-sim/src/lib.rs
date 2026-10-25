@@ -2,6 +2,7 @@
 //! Used by the command line (`main.rs`) and the WebAssembly build.
 
 pub mod elab;
+pub mod gates;
 pub mod gen;
 pub mod iface;
 pub mod expr;
@@ -60,6 +61,14 @@ pub fn list(files: &[(String, String)]) -> Result<Vec<(String, bool)>, String> {
 
 /// Simulate `top` (default: every #[test] module, else the last module).
 pub fn run(files: &[(String, String)], top: Option<&str>, max_time: u64, vcd: bool, echo: bool) -> Result<RunResult, String> {
+    run_gates(files, top, max_time, vcd, echo, None)
+}
+
+/// like `run`, but every module instance for which `gates` gives a netlist
+/// is simulated from those gates (post-synthesis simulation with the RTL
+/// testbenches); `gates` gets the module name and the instance's parameter
+/// overrides
+pub fn run_gates(files: &[(String, String)], top: Option<&str>, max_time: u64, vcd: bool, echo: bool, gates: Option<&gates::GateFn>) -> Result<RunResult, String> {
     let parsers = parse_all(files)?;
     let mut mods = vec![];
     for p in &parsers {
@@ -79,6 +88,7 @@ pub fn run(files: &[(String, String)], top: Option<&str>, max_time: u64, vcd: bo
         let say = |s: &str, res: &mut RunResult| { if echo { println!("{}", s); } res.log.push_str(s); res.log.push('\n'); };
         say(&format!("=== simulating {} ===", t), &mut res);
         let mut e = elab::Elab::new(HashMap::new());
+        e.gates = gates;
         e.lib = mods.iter().map(|(m, test)| (m.identifier.identifier_token.to_string(), elab::ModInfo { decl: m, is_test: *test })).collect();
         for p in &parsers {
             let mut v = vec![];

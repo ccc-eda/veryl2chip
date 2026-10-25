@@ -175,7 +175,8 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
 
     // flip-flops
     let mut inv: HashMap<Bit, Bit> = HashMap::new();
-    let all_bits = nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()));
+    // (the RAMs' unused RDATA pins got fresh wires too)
+    let all_bits = nl.cells.iter().chain(inf.rams.iter()).flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()));
     let mut next_wire = all_bits.filter_map(|b| if let Bit::W(w) = b { Some(w) } else { None }).max().unwrap_or(1) + 1;
     for c in nl.cells.iter().filter(|c| c.is_ff()) {
         // $_DFF_P_ / $_DFF_PN0_ / $_SDFF_NP1_ ...

@@ -178,14 +178,19 @@ async function runSim(): Promise<void> {
     const t0 = performance.now();
     const banner = $('banner');
     try {
-      const r = await core.call<SimResult>({ cmd: 'simulate', files: st.files, top, max_time: 1_000_000, vcd: true });
+      const mode = $<HTMLSelectElement>('simMode').value;
+      if (mode !== 'rtl' && !st.ex.synth) throw new Error('這個範例沒有指定合成的頂層模組，只能做 RTL 模擬');
+      const gate = mode === 'rtl' ? {} : { gate: mode, synth: st.ex.synth };
+      const r = await core.call<SimResult & { gate: { top: string; kind: string; cells: number } | null }>({ cmd: 'simulate', files: st.files, top, max_time: 1_000_000, vcd: true, ...gate });
       showVcds(r.vcd);
       $('log').textContent = r.log;
       const fails = r.tops.reduce((a, t) => a + t.fails, 0);
       banner.className = fails ? 'fail' : 'pass';
-      banner.textContent = fails
+      const kindName: Record<string, string> = { opt: '通用閘', ice40: 'iCE40', asic: '標準元件' };
+      const where = r.gate ? `（閘級：${r.gate.top} 換成 ${r.gate.cells} 個${kindName[r.gate.kind] ?? r.gate.kind}元件）` : '';
+      banner.textContent = (fails
         ? `✗ ${fails} 個斷言失敗（${r.tops.filter(t => t.fails).map(t => t.name).join(', ')}）`
-        : `✓ PASS：${r.tops.map(t => t.name).join(', ')}`;
+        : `✓ PASS：${r.tops.map(t => t.name).join(', ')}`) + where;
       status(`模擬完成 ${(performance.now() - t0).toFixed(0)} ms`);
     } catch (e) {
       banner.className = 'fail';

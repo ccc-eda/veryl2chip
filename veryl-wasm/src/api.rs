@@ -304,9 +304,27 @@ pub fn dispatch(v: &Value) -> R<Value> {
             let top = v.get("top").and_then(|t| t.as_str());
             let max_time = v.get("max_time").and_then(|t| t.as_u64()).unwrap_or(1_000_000);
             let vcd = v.get("vcd").and_then(|t| t.as_bool()).unwrap_or(false);
-            let r = veryl_sim::run(&files(v)?, top, max_time, vcd, false)?;
+            let mut gate_info = Value::Null;
+            // post-synthesis simulation: every instance of `synth` replaced by its netlist
+            let fs = files(v)?;
+            let r = if let (Some(kind), Some(synth_top)) = (v.get("gate").and_then(|g| g.as_str()), v.get("synth").and_then(|t| t.as_str())) {
+                let mut parsers = vec![];
+                for (name, src) in &fs { parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?); }
+                let mut lib = veryl_eda::elab::Lib::new();
+                for p in &parsers { lib.add(&p.veryl); }
+                let prov = veryl_eda::gatesim::Provider::new(&lib, synth_top, kind);
+                let f = |m: &str, ov: &std::collections::HashMap<String, veryl_sim::value::Val>| prov.get(m, ov);
+                let r = veryl_sim::run_gates(&fs, top, max_time, vcd, false, Some(&f))?;
+                let built = prov.built.borrow();
+                gate_info = json!({ "top": synth_top, "kind": kind, "cells": built.first().map(|b| b.1).unwrap_or(0),
+                    "netlists": built.iter().map(|(p, n)| json!({ "params": p, "cells": n })).collect::<Vec<_>>() });
+                r
+            } else {
+                veryl_sim::run_gates(&fs, top, max_time, vcd, false, None)?
+            };
             Ok(json!({
                 "ok": true,
+                "gate": gate_info,
                 "log": r.log,
                 "tops": r.tops.iter().map(|t| json!({ "name": t.name, "fails": t.fails, "finished": t.finished })).collect::<Vec<_>>(),
                 "vcd": r.vcd.iter().map(|(t, s)| json!({ "top": t, "text": s })).collect::<Vec<_>>(),

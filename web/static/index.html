@@ -11,6 +11,12 @@
   <h1>veryl2chip <small>Veryl → Chip</small></h1>
   <select id="example" title="範例專案"></select>
   <select id="top" title="模擬的頂層模組（預設：全部 #[test]）"></select>
+  <select id="simMode" title="模擬的對象：RTL，或把範例的合成頂層換成合成後的閘級網表（同一個 testbench）">
+    <option value="rtl">RTL</option>
+    <option value="opt">閘級：通用閘</option>
+    <option value="ice40">閘級：iCE40</option>
+    <option value="asic">閘級：標準元件</option>
+  </select>
   <button id="run" disabled>▶ 模擬</button>
   <button id="synth" disabled title="合成 → FPGA / ASIC 流程">⚙ 合成</button>
   <span id="status">載入 WebAssembly…</span>

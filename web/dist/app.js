@@ -2116,12 +2116,17 @@
       const t0 = performance.now();
       const banner = $2("banner");
       try {
-        const r = await core.call({ cmd: "simulate", files: st.files, top, max_time: 1e6, vcd: true });
+        const mode = $2("simMode").value;
+        if (mode !== "rtl" && !st.ex.synth) throw new Error("\u9019\u500B\u7BC4\u4F8B\u6C92\u6709\u6307\u5B9A\u5408\u6210\u7684\u9802\u5C64\u6A21\u7D44\uFF0C\u53EA\u80FD\u505A RTL \u6A21\u64EC");
+        const gate = mode === "rtl" ? {} : { gate: mode, synth: st.ex.synth };
+        const r = await core.call({ cmd: "simulate", files: st.files, top, max_time: 1e6, vcd: true, ...gate });
         showVcds(r.vcd);
         $2("log").textContent = r.log;
         const fails = r.tops.reduce((a, t) => a + t.fails, 0);
         banner.className = fails ? "fail" : "pass";
-        banner.textContent = fails ? `\u2717 ${fails} \u500B\u65B7\u8A00\u5931\u6557\uFF08${r.tops.filter((t) => t.fails).map((t) => t.name).join(", ")}\uFF09` : `\u2713 PASS\uFF1A${r.tops.map((t) => t.name).join(", ")}`;
+        const kindName = { opt: "\u901A\u7528\u9598", ice40: "iCE40", asic: "\u6A19\u6E96\u5143\u4EF6" };
+        const where = r.gate ? `\uFF08\u9598\u7D1A\uFF1A${r.gate.top} \u63DB\u6210 ${r.gate.cells} \u500B${kindName[r.gate.kind] ?? r.gate.kind}\u5143\u4EF6\uFF09` : "";
+        banner.textContent = (fails ? `\u2717 ${fails} \u500B\u65B7\u8A00\u5931\u6557\uFF08${r.tops.filter((t) => t.fails).map((t) => t.name).join(", ")}\uFF09` : `\u2713 PASS\uFF1A${r.tops.map((t) => t.name).join(", ")}`) + where;
         status(`\u6A21\u64EC\u5B8C\u6210 ${(performance.now() - t0).toFixed(0)} ms`);
       } catch (e) {
         banner.className = "fail";

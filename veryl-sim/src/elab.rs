@@ -63,6 +63,10 @@ pub struct ModInfo<'a> { pub decl: &'a ModuleDeclaration, pub is_test: bool }
 pub struct Elab<'a> {
     pub lib: HashMap<String, ModInfo<'a>>,
     pub ifaces: HashMap<String, &'a InterfaceDeclaration>,
+    /// modules simulated from a gate netlist instead of their RTL
+    pub gates: Option<&'a crate::gates::GateFn<'a>>,
+    /// netlists already built, by module and parameter overrides
+    gate_cache: HashMap<String, Option<crate::gates::GateNetlist>>,
     pub pkgs: HashMap<String, PkgDef>,
     /// "Pkg::Enum::Member" -> value
     pub enum_vals: HashMap<String, Val>,
@@ -305,7 +309,7 @@ fn call_args(f: &FunctionCall) -> Vec<Vec<String>> {
 
 impl<'a> Elab<'a> {
     pub fn new(lib: HashMap<String, ModInfo<'a>>) -> Self {
-        Elab { lib, ifaces: HashMap::new(), pkgs: HashMap::new(), enum_vals: HashMap::new(), tb_clk: HashMap::new(), sim: Sim::new(), procs: vec![], inits: vec![], watched: vec![] }
+        Elab { lib, ifaces: HashMap::new(), gates: None, gate_cache: HashMap::new(), pkgs: HashMap::new(), enum_vals: HashMap::new(), tb_clk: HashMap::new(), sim: Sim::new(), procs: vec![], inits: vec![], watched: vec![] }
     }
 
     // ---------------- scope helpers ----------------
@@ -897,8 +901,6 @@ impl<'a> Elab<'a> {
             for (n, id) in &isc.sigs { sc.sigs.insert(format!("{}.{}", iname, n), *id); }
             return Ok(());
         }
-        let child = self.lib.get(&kind).ok_or(format!("unknown module '{}'", kind))?.decl;
-
         let mut ov = HashMap::new();
         if let Some(p) = &ci.component_instantiation_opt1 {
             let mut v = vec![];
@@ -911,12 +913,27 @@ impl<'a> Elab<'a> {
                 ov.insert(n, val);
             }
         }
+        let gate = match self.gates {
+            Some(f) => {
+                let mut ps: Vec<String> = ov.iter().map(|(n, v)| format!("{}={}", n, v.fmt_hex())).collect();
+                ps.sort();
+                let key = format!("{}#{}", kind, ps.join(","));
+                if !self.gate_cache.contains_key(&key) { let g = f(&kind, &ov)?; self.gate_cache.insert(key.clone(), g); }
+                self.gate_cache[&key].clone()
+            }
+            None => None,
+        };
+        let child = if gate.is_some() { None } else { Some(self.lib.get(&kind).ok_or(format!("unknown module '{}'", kind))?.decl) };
         let mut conns: NamedToks = vec![];
         if let Some(p) = &ci.component_instantiation_opt2 {
             if let Some(o) = &p.inst_port.inst_port_opt { ipo_list(&o.inst_port_list, &mut conns); }
         }
         let prefix = if sc.prefix.is_empty() { iname.clone() } else { format!("{}.{}", sc.prefix, iname) };
-        let csc = self.elab_module(child, &prefix, &ov)?;
+        let csc = match (&gate, child) {
+            (Some(g), _) => self.elab_gates(g, &prefix)?,
+            (None, Some(m)) => self.elab_module(m, &prefix, &ov)?,
+            _ => unreachable!(),
+        };
         for (pname, dir, psig) in &csc.ports {
             // a modport member `bus.valid` connects through the connection of `bus`
             let (base, member) = match pname.split_once('.') { Some((b, m)) => (b.to_string(), Some(m.to_string())), None => (pname.clone(), None) };

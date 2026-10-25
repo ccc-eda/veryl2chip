@@ -14,6 +14,8 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 - 預設合成最後一個**非** `#[test]` 的 module；`--top` 可指定。會印出 port 與 cell 統計（類似 yosys `stat`）。
 - `-o` 輸出 yosys JSON（`read_json` 可讀）；`--verilog` 輸出閘級 Verilog（iverilog 可模擬）。
 - `--ice40` 做 iCE40 技術映射；加 `--asc` / `--bin` 會再做佈局繞線（預設 `nextpnr-ice40`，時序不過會失敗；`--pnr veryl` 用自己的）與 `icepack`。
+- `--gatesim opt|ice40|asic`：**合成後模擬**，把 `--top` 的 module 換成它的通用閘 / iCE40 / 標準元件網表（`src/gatesim.rs` → veryl-sim 的閘級模型），
+  直接跑原本的 `#[test]` testbench（`test.sh` 對 12 個設計 × 3 種網表都跑，結果必須和 RTL 一樣）。
 - `--asic` 做 ASIC 後端（見下）；`--verilog` 此時輸出標準元件 netlist（附 vlib 元件的 Verilog 模型），`-v` 印出關鍵路徑。
 - `./test.sh`：單元測試 + 合成全部範例 + yosys `read_json; check -assert` + FPGA 流程 +
   對 `veryl build` 產生的 SystemVerilog 做**形式等價驗證**（需要有 slang 前端的 yosys，例如 oss-cad-suite，路徑用 `YOSYS_SLANG` 指定）。

@@ -17,6 +17,7 @@ mkdir -p "$OUT"
 YOSYS=${YOSYS:-yosys}
 YOSYS_SLANG=${YOSYS_SLANG:-/Users/Shared/ccc/oss-cad-suite/bin/yosys}
 
+fail=0
 cargo test --release -q
 cargo build --release -q
 BIN=$ROOT/target/release/veryl-eda
@@ -44,6 +45,23 @@ for d in $DESIGNS; do
     [[ " $FPGA_EQ " == *" $m "* ]] && "$BIN" --ice40 --top "$m" -o "$OUT/${m}_ice40.json" $files | grep -E "SB_RAM40_4K" 
 done
 
+echo "== gate-level simulation: the RTL testbenches on the synthesized netlists"
+# top:files (the module replaced by its netlist; its file's #[test] modules run)
+GATESIM="Adder:adder Max3:max3 AluUnit:alu_pkg GrayConv:gen_rev Seq101:seq101 PktReg:pkt_reg Ram:ram SyncRam:sync_ram
+Top:features BramMix:sync_ram+bram_tests HsTop:lang RiscvCore:rv32i+rv32i_rom"
+for d in $GATESIM; do
+    IFS=: read -r m f <<< "$d"
+    files=""
+    for part in ${f//+/ }; do files="$files $(src "$part")"; done
+    for kind in opt ice40 asic; do
+        if r=$("$BIN" --gatesim $kind --top "$m" $files 2>&1) && ! grep -q "failure" <<< "$r"; then
+            printf "%-10s %-6s PASS\n" "$m" "$kind"
+        else
+            printf "%-10s %-6s FAILED\n" "$m" "$kind"; echo "$r" | tail -5; fail=1
+        fi
+    done
+done
+
 if command -v nextpnr-ice40 > /dev/null && command -v icebox_vlog > /dev/null; then
     echo "== FPGA flow (iCE40)"
     ./fpga/flow.sh | grep -E "LC:|Max frequency|PASS|FAIL|bitstream"
@@ -56,7 +74,7 @@ fi
 
 if ! "$YOSYS_SLANG" -m slang -p "help read_slang" > /dev/null 2>&1; then
     echo "== skipping equivalence check: no yosys with slang at $YOSYS_SLANG"
-    exit 0
+    exit $fail
 fi
 
 echo "== formal equivalence vs. veryl build"
@@ -64,7 +82,6 @@ mkdir -p "$OUT/gold"
 cp -r "$EX/Veryl.toml" "$EX/Veryl.lock" "$EX/src" "$OUT/gold/"
 cp "$ROOT"/examples/*.veryl "$OUT/gold/src/"
 (cd "$OUT/gold" && veryl build > /dev/null 2>&1)
-fail=0
 for kind in gate asic fpga; do
 for d in $DESIGNS; do
     IFS=: read -r f m mode <<< "$d"

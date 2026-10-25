@@ -12,6 +12,7 @@
 |---|---|
 | `value.rs` | 4 態 (0/1/x) 位元向量，最多 256 bit（`LIMBS` × 64，可調） |
 | `iface.rs` | interface：收集宣告、展開內容、解析 modport（與 veryl-eda 共用） |
+| `gates.rs` | 閘級模型：模擬時把某個 module 換成合成後的網表（通用閘、iCE40、vlib 標準元件、RAM），testbench 不用改 |
 | `gen.rs`   | generate-for 的索引序列（`rev`、`step +=` 等；與 veryl-eda 共用） |
 | `expr.rs`  | 運算式 IR + 優先權解析器（吃 veryl-parser 的 token 串） |
 | `elab.rs`  | 走訪 veryl-parser 語法樹、展開階層、轉成模擬 IR |

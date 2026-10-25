@@ -15,6 +15,8 @@ Open `web/dist/index.html` in a browser. It needs no server and no install, and 
 
 - **Source**: example projects (several files each) in an editor; edits are kept in the browser (localStorage).
 - **▶ 模擬**: runs every `#[test]` testbench in WebAssembly, with a log, clickable errors and a waveform viewer.
+  The selector next to it switches to **post-synthesis simulation**: the example's design module is replaced by its
+  synthesized netlist (generic gates, iCE40 LUTs / block RAM, or standard cells) under the same testbench.
 - **⚙ 合成**: the synthesis view. Each stage shows a report, a zoomable drawing and a detail panel:
   - common: ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn
   - FPGA: ④ LUT4 Techmap → ⑤ Placement (annealing animation) → ⑥ Global+Detail Routing → ⑦ Timing (STA).

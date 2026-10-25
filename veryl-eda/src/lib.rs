@@ -6,6 +6,7 @@ pub mod asic;
 pub mod bram;
 pub mod elab;
 pub mod expr;
+pub mod gatesim;
 pub mod ice40;
 pub mod netlist;
 pub mod netsim;

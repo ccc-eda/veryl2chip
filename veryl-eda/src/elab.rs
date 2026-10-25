@@ -1671,7 +1671,12 @@ impl<'l, 'a> Synth<'l, 'a> {
 
 /// Synthesize `top` into a flat, optimized gate-level netlist.
 pub fn synthesize(lib: &Lib, top: &str) -> R<(Netlist, Vec<String>)> {
-    let st = synthesize_stages(lib, top)?;
+    synthesize_with(lib, top, &HashMap::new())
+}
+
+/// `synthesize` with the top's parameters overridden
+pub fn synthesize_with(lib: &Lib, top: &str, ov: &HashMap<String, Val>) -> R<(Netlist, Vec<String>)> {
+    let st = synthesize_stages_with(lib, top, ov)?;
     Ok((st.opt, st.warnings))
 }
 
@@ -1690,11 +1695,13 @@ pub struct Stages {
     pub warnings: Vec<String>,
 }
 
-pub fn synthesize_stages(lib: &Lib, top: &str) -> R<Stages> {
+pub fn synthesize_stages(lib: &Lib, top: &str) -> R<Stages> { synthesize_stages_with(lib, top, &HashMap::new()) }
+
+pub fn synthesize_stages_with(lib: &Lib, top: &str, ov: &HashMap<String, Val>) -> R<Stages> {
     let (m, _) = lib.modules.get(top).ok_or(format!("module '{}' not found", top))?;
     let mut b = Builder::new();
     let mut s = Synth::new(lib, &mut b);
-    let sc = s.module(m, "", &HashMap::new())?;
+    let sc = s.module(m, "", ov)?;
     let ports: Vec<Port> = sc.ports.iter().map(|(n, d)| Port { name: n.clone(), dir: *d, bits: sc.sigs[n].bits.clone() }).collect();
     let mut insts = vec![(String::new(), top.to_string())];
     insts.extend(std::mem::take(&mut s.insts));
