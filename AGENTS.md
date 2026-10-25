@@ -42,9 +42,11 @@ npm install                        # esbuild + typescript (dev only)
 npm run build                      # cargo build veryl-wasm (wasm32) + bundle into web/dist/
 npm test                           # Node: every example through the built dist/ (same wasm + TS API as the page)
 open dist/index.html               # front-end only, works from file:// (no server, no fetch)
+open dist/ide.html                 # M11 IDE (VS Code style): projects in localStorage, live check, tests, flow tabs
 ```
 
 - Web architecture (`web/PLAN.md`): `veryl-sim` and `veryl-eda` are lib+bin crates; `veryl-wasm/` is a cdylib with a C ABI (`alloc`/`call(JSON)`/`result_len`/`dealloc`, zero imports, panic message via `panic_message`). The wasm is embedded as base64 in `dist/wasm.js` and examples in `dist/examples.js`, so the page needs no fetch. `src/api.ts` has no DOM and is also bundled as `dist/api.cjs` for the Node tests. `web/dist` is committed (open-and-use); rebuild it after changing Rust or TS.
+- Two pages share the core: `index.html` (demo, `src/main.ts`, synthesis as an overlay) and `ide.html` (M11, `src/ide/`: `editor.ts` is a transparent textarea over highlighted `<pre>`, `highlight.ts` the Veryl tokenizer, `main.ts` projects/tests/flow). Both reuse `SynthOverlay` (`src/synth/overlay.ts`; the IDE passes `embedded` and hosts the same `syn*` element ids in an editor tab). Live checking uses the `list` command (parse only); elaboration errors come from `simulate`.
 - The browser preview pane snapshots `file://` pages without their scripts; test the page over HTTP (`.claude/launch.json` serves `web/dist` on 8766).
 
 ## Veryl 0.22.0 quirks (verified against `veryl check`/`veryl test`)

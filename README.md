@@ -29,6 +29,19 @@ Open `web/dist/index.html` in a browser. It needs no server and no install, and 
 
 The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&target=asic`.
 
+### IDE
+`web/dist/ide.html` is a fuller, VS Code style IDE on the same core (the demo page above stays as it is):
+
+- activity bar and side bar: project files and module outline, example library, the synthesis flow stages, tests, help
+- tabbed editor with Veryl syntax highlighting and live syntax checking (problems panel, gutter markers, squiggles)
+- projects kept in the browser: several projects, new / rename / delete / import files, `.zip` export
+- ▶ tests (RTL or gate-level), ✔ full verification: every testbench on RTL and on the three synthesized netlists
+- ⚙ the flow as an editor tab: common ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦ or
+  ASIC ④–⑨, and FPGA vs ASIC
+- bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)
+
+`ide.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests.
+
 Rebuild (Rust + wasm32 target, Node.js):
 
 ```sh

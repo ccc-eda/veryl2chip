@@ -180,6 +180,26 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   }
 }
 
+// IDE highlighter: lossless (tags removed = source) on every example, and
+// keywords / numbers / comments tagged
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/highlight.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const hp = path.join(tmp, 'highlight.cjs');
+  fs.writeFileSync(hp, js);
+  const { highlight } = createRequire(import.meta.url)(hp);
+  const unesc = (h) => h.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  let n = 0, lossy = '';
+  for (const ex of ctx.VERYL_EXAMPLES) for (const f of ex.files) {
+    n++;
+    if (unesc(highlight(f.src).join('\n')) !== f.src) lossy ||= `${ex.id}/${f.name}`;
+  }
+  const h = highlight("module M { // c\n  var a: logic<8> = 8'hFF; /* x\n y */ $assert(a); }").join('\n');
+  const tagged = ['t-kw">module', 't-type">logic', "t-num\">8'hFF", 't-com">// c', 't-com"> y */', 't-sys">$assert', 't-name">M'].every((t) => h.includes(t));
+  if (lossy || !tagged) bad++;
+  console.log(`${lossy || !tagged ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files${lossy ? ': changes ' + lossy : ''}${tagged ? '' : ': tokens not tagged'}`);
+}
+
 // a broken source must come back as a message, not crash the core
 try { core.simulate([{ name: 'x.veryl', src: 'module X ( a: input logic ) { assign b = ; }' }]); bad++; console.log('FAIL parse error not reported'); }
 catch (e) { console.log(`ok   parse error reported: ${e.message}`); }

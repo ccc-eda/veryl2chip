@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>veryl2chip IDE</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="ide.css">
+</head>
+<body class="ide">
+<div id="titlebar">
+  <span class="brand">veryl2chip <b>IDE</b></span>
+  <div class="tb-group">
+    <button id="cmdRun" class="tb-btn primary" disabled title="執行測試（Ctrl/⌘+Enter）">▶ 測試</button>
+    <select id="simTop" title="模擬的頂層（預設：全部 #[test]）"></select>
+    <select id="simMode" title="模擬對象：RTL，或把合成頂層換成合成後的閘級網表（同一個 testbench）">
+      <option value="rtl">RTL</option>
+      <option value="opt">閘級：通用閘</option>
+      <option value="ice40">閘級：iCE40</option>
+      <option value="asic">閘級：標準元件</option>
+    </select>
+    <button id="cmdVerify" class="tb-btn" disabled title="RTL + 三種閘級網表全部跑一遍（驗證矩陣）">✔ 全面驗證</button>
+  </div>
+  <div class="tb-group">
+    <button id="cmdSynth" class="tb-btn" disabled title="合成並檢視各階段（Ctrl/⌘+Shift+B）">⚙ 合成</button>
+    <select id="synthTop" title="合成的頂層模組"></select>
+  </div>
+  <span class="spacer"></span>
+  <button id="cmdPalette" class="tb-btn ghost" title="命令選單（Ctrl/⌘+Shift+P）">⌘ 命令</button>
+  <a id="demoLink" class="tb-link" href="index.html" title="原本的展示介面">展示版 ↗</a>
+</div>
+<div id="workbench">
+  <nav id="activity">
+    <button data-view="explorer" class="cur" title="檔案總管">📁</button>
+    <button data-view="examples" title="範例庫">📚</button>
+    <button data-view="flow" title="合成流程（各階段檢視）">⚙</button>
+    <button data-view="tests" title="測試">✔</button>
+    <span class="spacer"></span>
+    <button data-view="help" title="說明與快捷鍵">?</button>
+  </nav>
+  <aside id="sidebar">
+    <section id="view-explorer" class="sideview">
+      <div class="side-head">
+        <span>專案</span>
+        <span class="spacer"></span>
+        <button id="projNew" class="icon" title="新專案">＋</button>
+        <button id="projRename" class="icon" title="重新命名專案">✎</button>
+        <button id="projDel" class="icon" title="刪除專案">🗑</button>
+      </div>
+      <select id="projSel" title="切換專案"></select>
+      <div class="side-head">
+        <span>檔案</span>
+        <span class="spacer"></span>
+        <button id="fileNew" class="icon" title="新增 .veryl 檔">＋</button>
+        <button id="fileImport" class="icon" title="從電腦匯入 .veryl 檔">⇪</button>
+        <button id="projZip" class="icon" title="下載整個專案 .zip（Veryl.toml + src/）">⬇</button>
+      </div>
+      <input id="importIn" type="file" accept=".veryl,.pcf" multiple class="hidden">
+      <div id="fileList" class="tree"></div>
+      <div class="side-head"><span>模組</span></div>
+      <div id="outline" class="tree"></div>
+    </section>
+    <section id="view-examples" class="sideview hidden">
+      <div class="side-head"><span>範例庫</span></div>
+      <p class="side-hint">點一下開成新專案（你的修改存在瀏覽器，不會改到範例）。</p>
+      <div id="exList" class="tree"></div>
+    </section>
+    <section id="view-flow" class="sideview hidden">
+      <div class="side-head"><span>合成流程</span><span class="spacer"></span>
+        <select id="flowTarget" title="後端"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select></div>
+      <div id="flowList" class="tree"></div>
+      <div id="flowSum" class="side-hint"></div>
+    </section>
+    <section id="view-tests" class="sideview hidden">
+      <div class="side-head"><span>測試</span><span class="spacer"></span>
+        <button id="testsRun" class="icon" title="全部執行">▶</button>
+        <button id="testsVerify" class="icon" title="全面驗證（RTL + 閘級）">✔</button></div>
+      <div id="testList" class="tree"></div>
+    </section>
+    <section id="view-help" class="sideview hidden">
+      <div class="side-head"><span>說明</span></div>
+      <div class="side-hint help">
+        <p><b>Veryl → 晶片</b>，全部在瀏覽器裡（WebAssembly），不需要伺服器。</p>
+        <table>
+          <tr><td>Ctrl/⌘+Enter</td><td>執行測試</td></tr>
+          <tr><td>Ctrl/⌘+Shift+B</td><td>合成</td></tr>
+          <tr><td>Ctrl/⌘+Shift+P</td><td>命令選單</td></tr>
+          <tr><td>Ctrl/⌘+P</td><td>快速開檔</td></tr>
+          <tr><td>Ctrl/⌘+/</td><td>註解 / 取消註解</td></tr>
+          <tr><td>Tab / Shift+Tab</td><td>縮排 / 反縮排</td></tr>
+          <tr><td>Ctrl/⌘+S</td><td>儲存（其實隨打隨存）</td></tr>
+        </table>
+        <p>編輯時會即時語法檢查（官方 veryl-parser）；錯誤顯示在「問題」面板與行號旁。</p>
+        <p>流程：共 ① RTL→Logic → ② Logic Netlist → ③ 技術無關最佳化 → FPGA ④ LUT4 → ⑤ 佈局退火 → ⑥ 繞線 → ⑦ STA；ASIC ④ 標準元件 → ⑤ 列式佈局 → ⑥ CTS + 全域繞線 → ⑦ 細部繞線 → ⑧ STA → ⑨ 功耗。</p>
+        <p>「全面驗證」用同一組 testbench 跑 RTL 和三種合成後網表，結果必須一致。</p>
+      </div>
+    </section>
+  </aside>
+  <div id="sideResize" class="resizer v"></div>
+  <main id="center">
+    <div id="edTabs"></div>
+    <div id="edArea">
+      <div id="editorHost"></div>
+      <div id="welcome" class="hidden"></div>
+      <div id="synOverlay" class="hidden flowpane">
+        <div id="synBar">
+          <h1 id="synTitle">合成 → FPGA（iCE40UP5K）</h1>
+          <div id="synStats"></div>
+          <span class="spacer"></span>
+          <label class="inl">頂層 <select id="synTop"></select></label>
+        </div>
+        <div id="synPipe">
+          <select id="synTarget" title="後端"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select>
+          <div id="synChips"></div>
+          <span class="spacer"></span>
+          <button id="synAnim" class="hidden">▶ 退火動畫</button>
+          <button id="synAsc" class="hidden" title="下載 IceStorm .asc">⬇ .asc</button>
+          <button id="synPcf" class="hidden" title="下載腳位指定">⬇ .pcf</button>
+          <button id="synBin" class="hidden" title="下載位元流（iceprog 可燒錄）">⬇ .bin</button>
+          <button id="synV" class="hidden" title="下載標準元件網表（Verilog）">⬇ .v</button>
+          <button id="synDef" class="hidden" title="下載佈局（DEF）">⬇ .def</button>
+          <button id="synEdges">⌁ 連線：開</button>
+        </div>
+        <div id="synInfo"></div>
+        <div id="synBody">
+          <div id="synCanvasWrap">
+            <canvas id="synCanvas"></canvas>
+            <div id="synZoom"><button id="synZin">＋</button><button id="synZout">－</button><button id="synZfit">⤢</button></div>
+          </div>
+          <div id="synSide"></div>
+        </div>
+      </div>
+    </div>
+    <div id="panelResize" class="resizer h"></div>
+    <section id="panel">
+      <div id="panelTabs">
+        <button data-panel="problems" class="cur">問題 <span id="probCount" class="badge hidden">0</span></button>
+        <button data-panel="output">輸出</button>
+        <button data-panel="results">測試結果</button>
+        <button data-panel="wave">波形</button>
+        <span class="spacer"></span>
+        <select id="waveTop" class="hidden" title="testbench"></select>
+        <button id="panelToggle" class="icon" title="收合 / 展開面板">▾</button>
+      </div>
+      <div id="panelBody">
+        <div id="p-problems" class="pview"></div>
+        <pre id="p-output" class="pview hidden"></pre>
+        <div id="p-results" class="pview hidden"></div>
+        <div id="p-wave" class="pview hidden">
+          <div id="wavePane">
+            <div id="waveSide"><input id="waveFilter" placeholder="篩選訊號…"><div id="wavePick"></div></div>
+            <div id="waveWrap"><canvas id="waveCanvas"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<footer id="statusbar">
+  <span id="sbCore">載入 WebAssembly…</span>
+  <span id="sbProblems" class="sb-btn">⊗ 0  ⚠ 0</span>
+  <span id="sbTest"></span>
+  <span class="spacer"></span>
+  <span id="sbSynth"></span>
+  <span id="sbPos"></span>
+  <span>Veryl</span>
+</footer>
+<div id="palette" class="hidden">
+  <input id="palIn" placeholder="輸入命令或檔名…" autocomplete="off">
+  <div id="palList"></div>
+</div>
+<script src="wasm.js"></script>
+<script src="examples.js"></script>
+<script src="chipdb.js"></script>
+<script src="ide.js"></script>
+</body>
+</html>

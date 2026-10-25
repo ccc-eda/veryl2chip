@@ -10,6 +10,8 @@ button { padding: 5px 14px; cursor: pointer; }
 button.small { padding: 2px 10px; font-size: 12px; }
 button:disabled { opacity: .5; cursor: default; }
 #status { margin-left: auto; font-size: 13px; color: #9fb2c8; }
+#ideLink { color: #7ec3ff; text-decoration: none; font-size: 13px; border: 1px solid #435269; border-radius: 5px; padding: 4px 10px; }
+#ideLink:hover { background: #2a3441; }
 main { display: grid; grid-template-columns: 52% 1fr; gap: 14px; padding: 14px; height: calc(100vh - 56px); }
 section.col { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
 .panel { display: flex; flex-direction: column; background: #232b36; border: 1px solid #38445a; border-radius: 8px; padding: 8px; min-height: 0; }
