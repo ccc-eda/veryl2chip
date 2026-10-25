@@ -1,4 +1,4 @@
-use veryl_eda::{elab, ice40, netlist, output, pnr};
+use veryl_eda::{asic, elab, ice40, netlist, output, pnr};
 
 use std::path::PathBuf;
 use veryl_parser::Parser;
@@ -7,11 +7,13 @@ fn usage() -> ! {
     eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N]]");
+    eprintln!("                 [--asic [--seed N] [-v]]");
     eprintln!("                 FILE.veryl...");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
     eprintln!("  gate-level netlist of yosys internal cells and prints its statistics.");
     eprintln!("  --ice40 maps it to SB_LUT4/SB_DFF* cells; --asc/--bin then run");
     eprintln!("  place & route (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and icepack.");
+    eprintln!("  --asic maps to the vlib standard cells, places rows, routes and times them.");
     std::process::exit(2);
 }
 
@@ -20,6 +22,7 @@ fn main() {
     let (mut ice40, mut pcf, mut asc, mut bin) = (false, None::<String>, None::<String>, None::<String>);
     let (mut device, mut package) = ("up5k".to_string(), "sg48".to_string());
     let (mut pnr_tool, mut seed, mut verbose) = ("nextpnr".to_string(), 1u64, false);
+    let mut asic_flow = false;
     let mut files = vec![];
     let mut a = std::env::args().skip(1);
     while let Some(x) = a.next() {
@@ -29,6 +32,7 @@ fn main() {
             "--verilog" => verilog = a.next(),
             "--list" => list = true,
             "--ice40" => ice40 = true,
+            "--asic" => asic_flow = true,
             "--pcf" => pcf = a.next(),
             "--asc" => asc = a.next(),
             "--bin" => bin = a.next(),
@@ -65,6 +69,14 @@ fn main() {
         Err(e) => { eprintln!("synthesis error in '{}': {}", top, e); std::process::exit(1) }
     };
     if asc.is_some() || bin.is_some() { ice40 = true; }
+    let mut asic_out = None;
+    if asic_flow {
+        if ice40 { eprintln!("--asic and --ice40 exclude each other"); std::process::exit(2); }
+        let out = asic::flow(&nl, seed).unwrap_or_else(|e| { eprintln!("ASIC flow error: {}", e); std::process::exit(1) });
+        let mut out = out;
+        nl = std::mem::replace(&mut out.mapped, netlist::Netlist { name: String::new(), ports: vec![], nets: vec![], cells: vec![] });
+        asic_out = Some(out);
+    }
     if ice40 {
         nl = ice40::map(&nl).unwrap_or_else(|e| { eprintln!("iCE40 mapping error: {}", e); std::process::exit(1) });
     }
@@ -76,6 +88,13 @@ fn main() {
     for p in &nl.ports { println!("  port {:6} {:3} {}", if p.dir == netlist::Dir::In { "input" } else { "output" }, p.bits.len(), p.name); }
     println!("  cells: {}", total);
     for (t, n) in st { println!("    {:14} {}", t, n); }
+    if let Some(o) = &asic_out {
+        let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
+        println!("asic: area {:.1} µm² (cells), die {:.1} × {:.1} µm, {} rows, utilization {:.0}%", o.area, pl.w, pl.h, pl.rows, pl.util * 100.0);
+        println!("asic: wirelength {:.0} µm, {} vias, overflow {} after {} routing iterations", rt.wirelength, rt.vias, rt.overflow, rt.iters.len());
+        println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints)", tm.period, tm.fmax, tm.endpoints);
+        if verbose { for s in &tm.path { println!("  {:8.3} {:+7.3}  {}", s.at, s.delay, s.what); } }
+    }
 
     if let Some(p) = &json {
         std::fs::write(&p, output::to_json(&nl)).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
@@ -129,7 +148,9 @@ fn main() {
         }
     }
     if let Some(p) = verilog {
-        std::fs::write(&p, output::to_verilog(&nl)).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
+        let mut v = output::to_verilog(&nl);
+        if asic_out.is_some() { v += &asic::lib::verilog_models(); }
+        std::fs::write(&p, v).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
         println!("wrote {}", p);
     }
 }

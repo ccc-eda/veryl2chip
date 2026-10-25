@@ -91,6 +91,38 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   }
 }
 
+// ASIC flow in wasm: same cells, wirelength and Fmax as the CLI; legal rows; no overflow
+for (const ex of ctx.VERYL_EXAMPLES) {
+  if (!ex.synth) continue;
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'asic', files: ex.files, top: ex.synth, seed: 1 });
+    const problems = [];
+    const occ = new Set();
+    r.cells.forEach(([row, site, w], i) => {
+      if (row >= r.die.rows || site + w > r.die.sites) problems.push(`cell ${i} outside`);
+      for (let k = site; k < site + w; k++) { const key = row * 1e6 + k; if (occ.has(key)) problems.push(`overlap at ${row}/${k}`); occ.add(key); }
+    });
+    if (r.route.overflow) problems.push(`overflow ${r.route.overflow}`);
+    if (!r.def.includes('END DESIGN') || !r.verilog.includes('module DFF')) problems.push('missing DEF / Verilog');
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const out = execFileSync(cli, ['--top', ex.synth, '--asic', ...paths], { encoding: 'utf8' });
+      const cells = +/cells: (\d+)/.exec(out)[1];
+      const wl = +/wirelength (\d+)/.exec(out)[1];
+      const fmax = /Fmax ([\d.]+)/.exec(out)[1];
+      if (cells !== r.map.cells.length || wl !== Math.round(r.route.wirelength) || fmax !== r.timing.fmax.toFixed(1)) problems.push(`CLI: ${cells} cells, ${wl} µm, ${fmax} MHz`);
+      else note = ' = CLI';
+    }
+    if (problems.length) bad++;
+    console.log(`${problems.length ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} asic ${r.top}: ${r.map.cells.length} cells, ${r.area.toFixed(0)} µm², ${(r.route.wirelength / 1000).toFixed(2)} mm, Fmax ${r.timing.fmax.toFixed(1)} MHz${note}${problems.length ? ' ' + problems.slice(0, 3).join('; ') : ''}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL ${ex.id.padEnd(9)} asic ${e.message}`);
+  }
+}
+
 // a broken source must come back as a message, not crash the core
 try { core.simulate([{ name: 'x.veryl', src: 'module X ( a: input logic ) { assign b = ; }' }]); bad++; console.log('FAIL parse error not reported'); }
 catch (e) { console.log(`ok   parse error reported: ${e.message}`); }

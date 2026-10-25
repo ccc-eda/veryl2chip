@@ -1,13 +1,13 @@
 //! Synthesize the examples and run their testbench scenarios on the
-//! gate-level netlist and on its iCE40 (LUT4 / SB_DFF) mapping
-//! (`cargo test --release`).
+//! gate-level netlist, on its iCE40 (LUT4 / SB_DFF) mapping and on its vlib
+//! standard-cell mapping (`cargo test --release`).
 
 use crate::elab::{synthesize, Lib};
 use crate::netsim::NetSim;
 use veryl_parser::Parser;
 
 /// synthesize `top` from the given files, then run `check` on the gate
-/// netlist and on the iCE40-mapped netlist
+/// netlist, the iCE40-mapped netlist and the standard-cell netlist
 fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     let mut parsers = vec![];
     for f in files {
@@ -23,6 +23,9 @@ fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     let mapped = crate::ice40::map(&nl).unwrap();
     assert!(mapped.cells.iter().all(|c| c.typ.starts_with("SB_")));
     check(&mut NetSim::new(&mapped));
+    let cells = crate::asic::map::map(&nl).unwrap();
+    assert!(cells.cells.iter().all(|c| crate::asic::lib::LIB.iter().any(|l| l.name == c.typ)));
+    check(&mut NetSim::new(&cells));
 }
 
 /// release the (active-low) reset after one clock in reset
@@ -234,4 +237,48 @@ fn riscv_soc_fib() {
         }
         assert_eq!(s.get("o_led"), 55, "fib(10) after {} cycles", cycles);
     });
+}
+
+/// the ASIC back end: legal rows (no overlap, inside the die), every routed
+/// net one connected tree over its terminals, no overflow, a sane STA
+#[test]
+fn asic_flow_legal() {
+    for (files, top) in [(&["ram.veryl"][..], "Ram"), (&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"][..], "RiscvSoc")] {
+        let mut parsers = vec![];
+        for f in files {
+            let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), f);
+            let path = if std::path::Path::new(&path).exists() { path } else { format!("{}/examples/{}", env!("CARGO_MANIFEST_DIR"), f) };
+            parsers.push(Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap());
+        }
+        let mut lib = Lib::new();
+        for p in &parsers { lib.add(&p.veryl); }
+        let nl = synthesize(&lib, top).unwrap().0;
+        let o = crate::asic::flow(&nl, 1).unwrap();
+        let pl = &o.placement;
+        let mut occ = vec![vec![false; pl.sites as usize]; pl.rows as usize];
+        for (i, c) in o.mapped.cells.iter().enumerate() {
+            let (r, x) = pl.pos[i];
+            let w = crate::asic::lib::cell(&c.typ).width;
+            assert!(r < pl.rows && x + w <= pl.sites, "{}: cell {} outside the die", top, i);
+            for s in x..x + w { assert!(!occ[r as usize][s as usize], "{}: overlap at row {} site {}", top, r, s); occ[r as usize][s as usize] = true; }
+        }
+        assert_eq!(o.routing.overflow, 0, "{}: routing overflow", top);
+        for n in &o.routing.nets {
+            // union-find over the gcells the segments touch
+            let mut parent: std::collections::HashMap<(u32, u32), (u32, u32)> = Default::default();
+            fn find(p: &mut std::collections::HashMap<(u32, u32), (u32, u32)>, x: (u32, u32)) -> (u32, u32) {
+                let y = *p.entry(x).or_insert(x);
+                if y == x { x } else { let r = find(p, y); p.insert(x, r); r }
+            }
+            for &(x0, y0, x1, y1) in &n.segs {
+                assert_eq!(x0.abs_diff(x1) + y0.abs_diff(y1), 1);
+                let (a, b) = (find(&mut parent, (x0, y0)), find(&mut parent, (x1, y1)));
+                parent.insert(a, b);
+            }
+            let roots: std::collections::HashSet<_> = parent.keys().copied().collect::<Vec<_>>().into_iter().map(|k| find(&mut parent, k)).collect();
+            assert!(roots.len() <= 1, "{}: net {:?} routed in {} pieces", top, n.bit, roots.len());
+        }
+        assert!(o.timing.fmax > 10.0 && o.timing.fmax < 2000.0, "{}: Fmax {}", top, o.timing.fmax);
+        assert!(!o.timing.path.is_empty());
+    }
 }

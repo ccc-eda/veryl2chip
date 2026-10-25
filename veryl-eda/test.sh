@@ -4,7 +4,8 @@
 #   2. synthesize every example design and load the JSON back into yosys (check -assert)
 #   3. FPGA flow (fpga/flow.sh): iCE40 mapping, nextpnr, icepack, and the
 #      RISC-V SoC simulated from the mapped netlist and from the routed bitstream
-#   4. formal equivalence against the SystemVerilog emitted by `veryl build`
+#   4. formal equivalence against the SystemVerilog emitted by `veryl build`,
+#      for the gate netlist and for its vlib standard-cell mapping (--asic)
 #      (needs a yosys with the slang frontend, e.g. oss-cad-suite; set YOSYS_SLANG)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -32,7 +33,8 @@ for d in $DESIGNS; do
     files="$(src "$f")"
     [ "$f" = soc ] && files="$EX/src/rv32i.veryl $files"
     "$BIN" --top "$m" -o "$OUT/$m.json" --verilog "$OUT/$m.v" $files | grep -E "^===|cells:" | tr '\n' ' '
-    "$YOSYS" -q -p "read_json $OUT/$m.json; check -assert" && echo "| yosys read_json ok"
+    "$YOSYS" -q -p "read_json $OUT/$m.json; check -assert" && printf "| yosys read_json ok | "
+    "$BIN" --asic --top "$m" --verilog "$OUT/${m}_asic.v" $files | grep -E "^timing" 
 done
 
 if command -v nextpnr-ice40 > /dev/null && command -v icebox_vlog > /dev/null; then
@@ -56,6 +58,7 @@ cp -r "$EX/Veryl.toml" "$EX/Veryl.lock" "$EX/src" "$OUT/gold/"
 cp "$ROOT"/examples/*.veryl "$OUT/gold/src/"
 (cd "$OUT/gold" && veryl build > /dev/null 2>&1)
 fail=0
+for kind in gate asic; do
 for d in $DESIGNS; do
     IFS=: read -r f m mode <<< "$d"
     case $mode in
@@ -70,7 +73,7 @@ read_slang $gold --top examples_$m
 proc; flatten; memory; opt_clean; async2sync
 rename examples_$m gold
 design -stash gold
-read_json $OUT/$m.json
+$([ $kind = gate ] && echo "read_json $OUT/$m.json" || echo "read_verilog $OUT/${m}_asic.v; hierarchy -top $m; proc; flatten")
 async2sync
 rename $m gate
 design -stash gate
@@ -80,7 +83,8 @@ miter -equiv -flatten -make_assert -ignore_gold_x gold gate miter
 hierarchy -top miter
 $prove
 EOF
-    printf "%-10s %-6s " "$m" "$mode"; t0=$SECONDS
-    if "$YOSYS_SLANG" -m slang -q "$OUT/eq_$m.ys" > "$OUT/eq_$m.log" 2>&1; then echo "equivalent ($((SECONDS - t0))s)"; else echo "FAILED (see $OUT/eq_$m.log)"; fail=1; fi
+    printf "%-5s %-12s %-6s " "$kind" "$m" "$mode"; t0=$SECONDS
+    if "$YOSYS_SLANG" -m slang -q "$OUT/eq_$m.ys" > "$OUT/eq_${kind}_$m.log" 2>&1; then echo "equivalent ($((SECONDS - t0))s)"; else echo "FAILED (see $OUT/eq_${kind}_$m.log)"; fail=1; fi
+done
 done
 exit $fail

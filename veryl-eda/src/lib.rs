@@ -2,6 +2,7 @@
 //! technology mapping, place & route, netlist writers.
 //! Used by the command line (`main.rs`) and the WebAssembly build.
 
+pub mod asic;
 pub mod elab;
 pub mod expr;
 pub mod ice40;

@@ -48,20 +48,22 @@
 </main>
 <div id="synOverlay" class="hidden">
   <div id="synBar">
-    <h1>合成 → FPGA（iCE40UP5K）</h1>
+    <h1 id="synTitle">合成 → FPGA（iCE40UP5K）</h1>
     <div id="synStats"></div>
     <span class="spacer"></span>
     <label class="inl">頂層 <select id="synTop"></select></label>
     <button id="synClose">關閉 ✕</button>
   </div>
   <div id="synPipe">
-    <select id="synTarget" title="後端"><option value="fpga">FPGA</option><option value="asic" disabled>ASIC</option></select>
+    <select id="synTarget" title="後端"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select>
     <div id="synChips"></div>
     <span class="spacer"></span>
     <button id="synAnim" class="hidden">▶ 退火動畫</button>
     <button id="synAsc" class="hidden" title="下載 IceStorm .asc（icepack 可轉成位元流）">⬇ .asc</button>
     <button id="synPcf" class="hidden" title="下載腳位指定">⬇ .pcf</button>
     <button id="synBin" class="hidden" title="下載位元流（iceprog 可燒錄；與 icepack 輸出相同）">⬇ .bin</button>
+    <button id="synV" class="hidden" title="下載標準元件網表（Verilog，含 vlib 元件模型）">⬇ .v</button>
+    <button id="synDef" class="hidden" title="下載佈局（DEF）">⬇ .def</button>
     <button id="synEdges">⌁ 連線：開</button>
   </div>
   <div id="synInfo"></div>

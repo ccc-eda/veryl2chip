@@ -33,6 +33,13 @@ impl<'n> NetSim<'n> {
     /// (reset pin, active-high, async, value) of a flip-flop with reset/set
     fn reset_of(c: &Cell) -> Option<(&'static str, bool, bool, bool)> {
         let t = c.typ.as_str();
+        // vlib flip-flops: active-low asynchronous reset / set
+        match t {
+            "DFFR" | "DFFNR" => return Some(("RN", false, true, false)),
+            "DFFS" | "DFFNS" => return Some(("SN", false, true, true)),
+            "DFF" | "DFFN" => return None,
+            _ => {}
+        }
         if let Some(k) = t.strip_prefix("SB_DFF") {
             // SB_DFF[N][S]{R,S}: iCE40 resets/sets are active-high
             let k = k.trim_start_matches('N');
@@ -57,6 +64,19 @@ impl<'n> NetSim<'n> {
                     "$_OR_" => g("A", self) | g("B", self),
                     "$_XOR_" => g("A", self) ^ g("B", self),
                     "$_MUX_" => if g("S", self) { g("B", self) } else { g("A", self) },
+                    "INV" => !g("A", self),
+                    "BUF" => g("A", self),
+                    "NAND2" => !(g("A", self) & g("B", self)),
+                    "NOR2" => !(g("A", self) | g("B", self)),
+                    "AND2" => g("A", self) & g("B", self),
+                    "OR2" => g("A", self) | g("B", self),
+                    "XOR2" => g("A", self) ^ g("B", self),
+                    "XNOR2" => !(g("A", self) ^ g("B", self)),
+                    "AOI21" => !((g("A", self) & g("B", self)) | g("C", self)),
+                    "OAI21" => !((g("A", self) | g("B", self)) & g("C", self)),
+                    "MUX2" => if g("S", self) { g("B", self) } else { g("A", self) },
+                    "TIEL" => false,
+                    "TIEH" => true,
                     "SB_CARRY" => { let (a, b, ci) = (g("I0", self), g("I1", self), g("CI", self)); (a & b) | ((a | b) & ci) }
                     "SB_LUT4" => {
                         let idx = ["I0", "I1", "I2", "I3"].iter().enumerate().fold(0, |a, (i, p)| a | ((g(p, self) as usize) << i));

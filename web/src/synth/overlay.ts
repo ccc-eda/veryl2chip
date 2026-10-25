@@ -3,6 +3,7 @@
 import { fromBase64, VFile } from '../api';
 import type { Core } from '../client';
 import { Box, CanvasView } from '../view/canvas';
+import { AsicResult, asicRouteLines, congestion, dieScene, stdColor } from './asic';
 import { deviceScene, heat, lcColor, PnrResult, routeLines } from './device';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
 import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
@@ -20,7 +21,21 @@ const FPGA_STAGES: StageDef[] = [
   { key: 'route', tag: 'fpga', label: 'F ⑥ Global+Detail Routing' },
   { key: 'sta', tag: 'fpga', label: 'F ⑦ Timing (STA)' },
 ];
+const ASIC_STAGES: StageDef[] = [
+  ...FPGA_STAGES.slice(0, 3),
+  { key: 'amap', tag: 'asic', label: 'A ④ Standard Cell Map' },
+  { key: 'aplace', tag: 'asic', label: 'A ⑤ Row Placement 退火' },
+  { key: 'aroute', tag: 'asic', label: 'A ⑥ Global Routing' },
+  { key: 'asta', tag: 'asic', label: 'A ⑦ Timing (STA)' },
+];
 const PNR = new Set(['place', 'route', 'sta']);
+const ASIC = new Set(['amap', 'aplace', 'aroute', 'asta']);
+const APHYS = new Set(['aplace', 'aroute', 'asta']);
+/** the matching stage of the other back end */
+const OTHER: Record<string, string> = { map: 'amap', place: 'aplace', route: 'aroute', sta: 'asta', amap: 'map', aplace: 'place', aroute: 'route', asta: 'sta' };
+
+type NetKey = 'raw' | 'opt' | 'map' | 'amap';
+const isNet = (k: string): k is NetKey => k === 'raw' || k === 'opt' || k === 'map' || k === 'amap';
 
 interface NetView { nl: JNetlist; lev: Leveled; lay: NetLayout; names: Map<number, string> }
 
@@ -38,6 +53,11 @@ export class SynthOverlay {
   private pcf: string | undefined;
   private anim = 0;
   private gen = 0;
+  private target: 'fpga' | 'asic' = 'fpga';
+  private asic: AsicResult | null = null;
+  private asicErr: string | null = null;
+  private asicBusy = false;
+  private asicMs = 0;
 
   constructor(private core: Core) {
     this.view = new CanvasView($<HTMLCanvasElement>('synCanvas'));
@@ -51,14 +71,18 @@ export class SynthOverlay {
     $('synAsc').onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
     $('synPcf').onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
     $('synBin').onclick = () => this.pnr && download(`${this.pnr.top}.bin`, fromBase64(this.pnr.bin));
+    $('synV').onclick = () => this.asic && download(`${this.asic.top}_vlib.v`, this.asic.verilog);
+    $('synDef').onclick = () => this.asic && download(`${this.asic.top}.def`, this.asic.def);
+    $<HTMLSelectElement>('synTarget').onchange = () => this.setTarget($<HTMLSelectElement>('synTarget').value as 'fpga' | 'asic');
     $<HTMLSelectElement>('synTop').onchange = () => this.run($<HTMLSelectElement>('synTop').value);
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('synOverlay').classList.contains('hidden')) this.close(); });
     this.chips();
   }
 
-  open(files: VFile[], top?: string, pcf?: string): void {
+  open(files: VFile[], top?: string, pcf?: string, target?: 'fpga' | 'asic'): void {
     this.files = files;
     this.pcf = pcf;
+    if (target) this.setTarget(target, false);
     $('synOverlay').classList.remove('hidden');
     this.run(top);
   }
@@ -71,6 +95,8 @@ export class SynthOverlay {
     this.res = null;
     this.pnr = null;
     this.pnrErr = null;
+    this.asic = null;
+    this.asicErr = null;
     this.nets.clear();
     $('synInfo').textContent = '合成中…';
     $('synSide').innerHTML = '';
@@ -130,10 +156,45 @@ export class SynthOverlay {
   private pnrMs = 0;
   private synMs = 0;
 
+  private setTarget(t: 'fpga' | 'asic', show = true): void {
+    this.target = t;
+    $<HTMLSelectElement>('synTarget').value = t;
+    $('synTitle').textContent = t === 'fpga' ? '合成 → FPGA（iCE40UP5K）' : '合成 → ASIC（vlib 標準元件）';
+    this.chips();
+    const cur = ASIC.has(this.stage) !== (t === 'asic') && OTHER[this.stage] ? OTHER[this.stage] : this.stage;
+    if (this.res) this.stats(this.synMs);
+    if (show) this.show(cur); else this.stage = cur;
+  }
+
+  private async runAsic(): Promise<void> {
+    if (!this.res || this.asic || this.asicBusy) return;
+    const gen = this.gen;
+    this.asicBusy = true;
+    const t0 = performance.now();
+    const tick = setInterval(() => {
+      if (gen === this.gen && ASIC.has(this.stage)) $('synInfo').textContent = `ASIC 流程中：標準元件對應 → 列式佈局退火 → 全域繞線 → STA…（${((performance.now() - t0) / 1000).toFixed(1)} s）`;
+    }, 200);
+    try {
+      const r = await this.core.call<AsicResult>({ cmd: 'asic', files: this.files, top: this.res.top, seed: 1 });
+      if (gen !== this.gen) return;
+      this.asic = r;
+      this.asicMs = performance.now() - t0;
+    } catch (e) {
+      if (gen !== this.gen) return;
+      this.asicErr = String((e as Error).message ?? e);
+    } finally {
+      clearInterval(tick);
+      this.asicBusy = false;
+    }
+    this.stats(this.synMs);
+    this.buttons();
+    if (ASIC.has(this.stage)) this.show(this.stage);
+  }
+
   private chips(): void {
     const box = $('synChips');
     box.innerHTML = '';
-    FPGA_STAGES.forEach((s, i) => {
+    (this.target === 'fpga' ? FPGA_STAGES : ASIC_STAGES).forEach((s, i) => {
       if (i) { const a = document.createElement('span'); a.className = 'arrow'; a.textContent = '→'; box.appendChild(a); }
       const b = document.createElement('button');
       b.textContent = s.label;
@@ -146,17 +207,18 @@ export class SynthOverlay {
 
   /** stage-dependent buttons */
   private buttons(): void {
-    const p = PNR.has(this.stage);
-    $('synAnim').classList.toggle('hidden', this.stage !== 'place');
-    $<HTMLButtonElement>('synAnim').disabled = !this.pnr;
+    const p = PNR.has(this.stage), a = ASIC.has(this.stage);
+    $('synAnim').classList.toggle('hidden', this.stage !== 'place' && this.stage !== 'aplace');
+    $<HTMLButtonElement>('synAnim').disabled = a ? !this.asic : !this.pnr;
     for (const id of ['synAsc', 'synPcf', 'synBin']) { $(id).classList.toggle('hidden', !p); $<HTMLButtonElement>(id).disabled = !this.pnr; }
-    $('synEdges').classList.toggle('hidden', p && this.stage === 'place');
+    for (const id of ['synV', 'synDef']) { $(id).classList.toggle('hidden', !a); $<HTMLButtonElement>(id).disabled = !this.asic; }
+    $('synEdges').classList.toggle('hidden', this.stage === 'place' || this.stage === 'aplace');
   }
 
-  private netView(key: 'raw' | 'opt' | 'map'): NetView {
+  private netView(key: NetKey): NetView {
     let v = this.nets.get(key);
     if (!v) {
-      const nl = this.res![key];
+      const nl = key === 'amap' ? this.asic!.map : this.res![key];
       const lev = levelize(nl);
       v = { nl, lev, lay: netScene(nl, lev), names: netNames(nl) };
       this.nets.set(key, v);
@@ -167,6 +229,7 @@ export class SynthOverlay {
   private stats(ms: number): void {
     this.synMs = ms;
     const r = this.res!;
+    if (this.target === 'asic') { this.asicStats(ms); return; }
     const m = r.map.cells;
     const luts = m.filter(c => c.t === 'SB_LUT4').length;
     const ffs = m.filter(c => isFF(c.t)).length;
@@ -186,6 +249,20 @@ export class SynthOverlay {
         `F<sub>max</sub> <b>${p.timing.fmax.toFixed(1)}</b> MHz`, `關鍵路徑 <b>${p.timing.period.toFixed(2)}</b> ns`);
     }
     items.push(`合成 <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `，佈局繞線 <b>${(this.pnrMs / 1000).toFixed(1)}</b> s` : ''));
+    $('synStats').innerHTML = items.join('<span class="sep">│</span>');
+  }
+
+  private asicStats(ms: number): void {
+    const r = this.res!;
+    const items = [`頂層 <b>${r.top}</b>`, `閘 <b>${r.raw.cells.length}</b> → <b>${r.opt.cells.length}</b>`];
+    const a = this.asic;
+    if (a) {
+      const ffs = a.map.cells.filter(c => isFF(c.t)).length;
+      items.push(`標準元件 <b>${a.map.cells.length}</b>（DFF ${ffs}）`, `面積 <b>${fmtArea(a.area)}</b>`,
+        `晶粒 <b>${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)}</b> µm（${a.die.rows} 列，利用率 ${(a.die.util * 100).toFixed(0)}%）`,
+        `線長 <b>${(a.route.wirelength / 1000).toFixed(2)}</b> mm`, `F<sub>max</sub> <b>${a.timing.fmax.toFixed(1)}</b> MHz`);
+    }
+    items.push(`合成 <b>${ms.toFixed(0)}</b> ms` + (a ? `，ASIC 流程 <b>${(this.asicMs / 1000).toFixed(1)}</b> s` : ''));
     $('synStats').innerHTML = items.join('<span class="sep">│</span>');
   }
 
@@ -217,7 +294,21 @@ export class SynthOverlay {
       this.side(this.rtlSide());
       return;
     }
-    if (key === 'raw' || key === 'opt' || key === 'map') {
+    if (ASIC.has(key) && !this.asic) {
+      this.view.set({ boxes: [], lines: [], texts: [] });
+      this.side(document.createElement('div'));
+      if (this.asicErr) { this.info(['ASIC 流程失敗：', this.asicErr]); return; }
+      this.info(['ASIC 流程中…']);
+      this.runAsic();
+      return;
+    }
+    if (APHYS.has(key)) {
+      this.drawAsic(true);
+      this.info(this.asicReport(key));
+      this.side(this.asicSide(key));
+      return;
+    }
+    if (isNet(key)) {
       const v = this.netView(key);
       this.view.set({ ...v.lay.scene, lines: netLines(v.nl, v.lev, v.lay, this.edges && edgeCount(v.nl) <= 6000, null) });
       this.info(this.netReport(key, v));
@@ -328,6 +419,7 @@ export class SynthOverlay {
   }
 
   private animate(): void {
+    if (this.stage === 'aplace') { this.animateAsic(); return; }
     if (!this.pnr || this.stage !== 'place') return;
     this.stopAnim();
     const p = this.pnr;
@@ -344,13 +436,128 @@ export class SynthOverlay {
     step();
   }
 
+  private animateAsic(): void {
+    const a = this.asic;
+    if (!a) return;
+    this.stopAnim();
+    let f = 0;
+    const step = () => {
+      const fr = a.history[f];
+      this.view.set(dieScene(a, fr.pos), false);
+      $('synInfo').textContent = `A ⑤ 退火動畫：第 ${f + 1}/${a.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${(fr.cost / 1000).toFixed(2)} mm　接受率 ${(fr.accept * 100).toFixed(0)}%`;
+      f++;
+      if (f < a.history.length) this.anim = window.setTimeout(step, 110);
+      else this.anim = window.setTimeout(() => { this.anim = 0; this.info(this.asicReport('aplace')); }, 1200);
+    };
+    step();
+  }
+
+  private selNetA: number | null = null;
+
+  private drawAsic(fit: boolean): void {
+    const a = this.asic!;
+    const k = this.stage;
+    let color: ((i: number) => string) | undefined;
+    if (k === 'asta') {
+      const max = Math.max(...a.cells.map(c => c[3]), 1e-9);
+      color = i => heat(a.cells[i][3] / max);
+    }
+    const scene = dieScene(a, undefined, color);
+    for (const b of scene.boxes) b.hl = b.id === this.sel || (k === 'asta' && b.id < a.cells.length && a.cells[b.id][4] === 1);
+    if (k === 'aroute') {
+      scene.bg = [...(scene.bg ?? []), ...congestion(a)];
+      scene.lines = this.edges ? asicRouteLines(a, { net: this.selNetA }) : [];
+    }
+    if (k === 'asta') scene.lines = asicRouteLines(a, { dim: true });
+    this.view.set(scene, fit);
+  }
+
+  private asicReport(key: string): string[] {
+    const a = this.asic!;
+    if (key === 'aplace') {
+      const h = a.history;
+      return [
+        `A ⑤ Row Placement 退火（晶粒 ${a.die.w.toFixed(1)} × ${a.die.h.toFixed(1)} µm，${a.die.rows} 列 × ${a.die.sites} site）`,
+        '依目標利用率 65% 決定晶粒大小，IO 腳平均放在四周（輸入：左、上；輸出：右、下）。初始依網表順序蛇形填列，再以模擬退火最小化 HPWL：每一步把元件移到空位或與另一個元件交換，永遠保持合法（不重疊、對齊 site）。',
+        '',
+        `${a.cells.length} 個元件，列利用率 ${(a.die.util * 100).toFixed(1)}%；HPWL：初始 ${(h[0].cost / 1000).toFixed(2)} mm → 退火後 ${(h[h.length - 1].cost / 1000).toFixed(2)} mm　按「▶ 退火動畫」重播`,
+        '顏色：橘＝DFF、黃＝MUX2、藍＝AND/OR 類、紫＝XOR/AOI/OAI、綠＝INV、青＝BUF；綠/紅小方塊＝輸入/輸出腳',
+      ];
+    }
+    if (key === 'aroute') {
+      const r = a.route;
+      return [
+        `A ⑥ Global Routing（${r.gx} × ${r.gy} 個 gcell，每格 4 µm；水平線走 M2/M4、垂直線走 M3/M5，每邊 ${r.cap} 軌）`,
+        '每條 net 的端點依 Prim 最小生成樹順序，用 A* 從端點連到已建好的樹；超過容量的邊以 PathFinder（現況 + 歷史成本）協商重繞，直到沒有溢出。',
+        '',
+        `${r.nets.length} 條 net，總線長 ${(r.wirelength / 1000).toFixed(2)} mm，via ${r.vias} 個；每輪溢出：${r.iters.join(' → ')}`,
+        '顏色：藍＝水平、紫＝垂直、綠＝clock / reset；底色＝擁塞（綠鬆 → 紅滿）。點元件看細節、點右側 net 高亮。',
+      ];
+    }
+    const t = a.timing;
+    return [
+      'A ⑦ Timing (STA)',
+      '元件延遲 = 本徵延遲 + 每扇出負載 × 扇出；線延遲 = 驅動整條繞線的電容 + 到該負載的分佈 RC（依曼哈頓距離）。路徑起點為輸入腳與 DFF（clk→Q），終點為 DFF D（加 setup）與輸出腳；clock 視為理想。',
+      '',
+      `關鍵路徑 ${t.period.toFixed(3)} ns → Fmax ${t.fmax.toFixed(1)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，元件顏色＝到達時間（綠早紅晚）`,
+    ];
+  }
+
+  private asicSide(key: string): HTMLElement {
+    const a = this.asic!;
+    const d = document.createElement('div');
+    const det = document.createElement('div');
+    det.id = 'synDetail';
+    det.innerHTML = '<p class="hint">點元件看細節（種類、位置、接腳訊號、到達時間）。</p>';
+    d.appendChild(det);
+    const div = document.createElement('div');
+    if (key === 'asta') {
+      div.innerHTML = `<h3>關鍵路徑（${a.timing.period.toFixed(3)} ns）</h3>` + table(['累計 ns', '延遲', '經過'], a.timing.path.map(s => [s.at.toFixed(3), s.delay.toFixed(3), esc(s.what)]));
+    } else if (key === 'aroute') {
+      div.innerHTML = `<h3>Net（${a.route.nets.length}，依線長）</h3>`;
+      const list = document.createElement('div');
+      list.className = 'clist';
+      const order = a.route.nets.map((_, i) => i).sort((x, y) => a.route.nets[y].len - a.route.nets[x].len);
+      for (const i of order.slice(0, 400)) {
+        const n = a.route.nets[i];
+        const row = document.createElement('div');
+        row.textContent = `${n.name}  ${n.len.toFixed(0)} µm  ${n.vias} via${n.clock ? '  [clock/reset]' : ''}`;
+        row.onclick = () => { this.selNetA = i; this.drawAsic(false); };
+        list.appendChild(row);
+      }
+      div.appendChild(list);
+    } else {
+      div.innerHTML = `<h3>元件數量</h3>` + table(['元件', '數量', '面積 µm²'], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (n * (a.lib.find(l => l.name === t)?.area ?? 0)).toFixed(0)]));
+    }
+    div.innerHTML += `<h3>IO 腳</h3>` + table(['訊號', '方向', 'x µm', 'y µm'], a.pins.map(p => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)]));
+    d.appendChild(div);
+    return d;
+  }
+
+  private stdDetail(): void {
+    const det = document.getElementById('synDetail');
+    if (!det || !this.asic) return;
+    if (this.sel === null) { det.innerHTML = '<p class="hint">點元件看細節（種類、位置、接腳訊號、到達時間）。</p>'; return; }
+    const a = this.asic;
+    const v = this.netView('amap');
+    const c = a.map.cells[this.sel];
+    const [row, site, w, arr, crit] = a.cells[this.sel];
+    const lib = a.lib.find(l => l.name === c.t);
+    let h = `<h3><span class="sw" style="background:${stdColor(c.t)}"></span>#${this.sel} ${c.t}${crit ? '（關鍵路徑）' : ''}</h3>`;
+    h += `<p>第 ${row} 列，site ${site}–${site + w - 1}（x = ${(site * a.die.site_w).toFixed(1)} µm）<br>輸出到達時間 ${arr.toFixed(3)} ns</p>`;
+    if (lib) h += `<p><code>${esc(lib.verilog)}</code></p>`;
+    h += table(['接腳', '訊號'], c.c.map(([p, b]) => [p, esc(bitName(v.names, b))]));
+    det.innerHTML = h;
+  }
+
   private stopAnim(): void { if (this.anim) { clearTimeout(this.anim); this.anim = 0; } }
 
   private redrawLines(): void {
     $('synEdges').textContent = `⌁ 連線：${this.edges ? '開' : '關'}`;
     const k = this.stage;
     if (PNR.has(k)) { if (this.pnr) this.drawPnr(false); return; }
-    if (k !== 'raw' && k !== 'opt' && k !== 'map') return;
+    if (APHYS.has(k)) { if (this.asic) this.drawAsic(false); return; }
+    if (!isNet(k)) return;
     const v = this.netView(k);
     const all = this.edges && edgeCount(v.nl) <= 6000;
     for (const b of v.lay.scene.boxes) b.hl = b.id === this.sel;
@@ -381,6 +588,17 @@ export class SynthOverlay {
         `${r.raw.cells.length} → ${v.nl.cells.length} 個元件（少了 ${d}，${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%）；DFF ${rf} → ${ffs}`,
         `${types}`,
         `組合邏輯深度 ${v.lev.depth} 層 ${big}`,
+      ];
+    }
+    if (key === 'amap') {
+      const a = this.asic!;
+      const bufs = v.nl.cells.filter(c => c.t === 'BUF').length;
+      return [
+        'A ④ Standard Cell Map（vlib：列高 4.0 µm、site 0.5 µm，約 130 nm 慢速角）',
+        '把網表在多扇出點切成樹，對每棵樹做動態規劃的 tree covering（最小面積）：反相器併入 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21；同步 set/reset 變成 D 前的邏輯，非同步的用 DFFR / DFFS（低態有效，必要時加 INV）；扇出 > 12 的訊號插入 BUF 樹。',
+        '',
+        `${types}`,
+        `元件面積 ${fmtArea(a.area)}，BUF ${bufs} 個，組合邏輯深度 ${v.lev.depth} 層 ${big}`,
       ];
     }
     const luts = v.nl.cells.filter(c => c.t === 'SB_LUT4');
@@ -430,6 +648,12 @@ export class SynthOverlay {
     }
     if (v.nl.cells.length > n) { const m = document.createElement('div'); m.className = 'more'; m.textContent = `… 共 ${v.nl.cells.length} 個（點圖上的方塊看其他元件）`; list.appendChild(m); }
     d.appendChild(list);
+    if (v.nl === this.asic?.map) {
+      const lib = document.createElement('div');
+      lib.innerHTML = `<h3>vlib 元件庫</h3>` + table(['元件', '寬', '面積 µm²', '延遲 ns', '+每扇出', '功能'],
+        this.asic.lib.map(c => [`<span class="sw" style="background:${stdColor(c.name)}"></span>${c.name}`, String(c.width), c.area.toFixed(0), c.delay.toFixed(3), c.load.toFixed(3), esc(c.verilog.replace(/^assign Y = |;$/g, ''))]));
+      d.appendChild(lib);
+    }
     const det = document.createElement('div');
     det.id = 'synDetail';
     det.innerHTML = '<p class="hint">點圖上的元件看細節：接腳、所連訊號、LUT 真值表。</p>';
@@ -446,8 +670,15 @@ export class SynthOverlay {
       this.lcDetail();
       return;
     }
+    if (APHYS.has(k)) {
+      if (!this.asic || this.anim) return;
+      this.sel = b && b.id < this.asic.cells.length ? b.id : null;
+      this.drawAsic(false);
+      this.stdDetail();
+      return;
+    }
     if (!b) { this.select(null); return; }
-    if (k === 'raw' || k === 'opt' || k === 'map') {
+    if (isNet(k)) {
       const v = this.netView(k);
       if (b.id < v.nl.cells.length) this.select(b.id);
     }
@@ -472,7 +703,7 @@ export class SynthOverlay {
     this.redrawLines();
     const det = document.getElementById('synDetail');
     const k = this.stage;
-    if (!det || (k !== 'raw' && k !== 'opt' && k !== 'map')) return;
+    if (!det || !isNet(k)) return;
     if (i === null) { det.innerHTML = '<p class="hint">點圖上的元件看細節：接腳、所連訊號、LUT 真值表。</p>'; return; }
     const v = this.netView(k);
     const c = v.nl.cells[i];
@@ -505,4 +736,8 @@ function download(name: string, data: string | Uint8Array): void {
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+function fmtArea(um2: number): string {
+  return um2 >= 1e5 ? `${(um2 / 1e6).toFixed(3)} mm²` : `${um2.toFixed(0)} µm²`;
 }

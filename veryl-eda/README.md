@@ -1,17 +1,20 @@
 # veryl-eda
 
-Veryl 的邏輯合成與 FPGA 流程（類似 yosys `synth` / `synth_ice40` 加上 nextpnr）：以
+Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice40` 加上 nextpnr，以及 OpenROAD 式的標準元件後端）：以
 [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) 為前端，把 Veryl 設計展開成**扁平的閘級 netlist**，
-可再映射成 iCE40 的 `SB_LUT4` / `SB_CARRY` / `SB_DFF*`，再用**自己的佈局繞線**（`--pnr veryl`）或 nextpnr-ice40 產生 `.asc`，icepack 產生位元流。
+可再映射成 iCE40 的 `SB_LUT4` / `SB_CARRY` / `SB_DFF*`，再用**自己的佈局繞線**（`--pnr veryl`）或 nextpnr-ice40 產生 `.asc`，icepack 產生位元流；
+或用 `--asic` 映射到自製的 **vlib 標準元件庫**，做列式佈局、全域繞線與靜態時序分析。
 
     cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--list]
                            [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                                     [--pnr nextpnr|veryl] [--seed N] [-v]]
+                           [--asic [--seed N] [-v]]
                            a.veryl b.veryl ...
 
 - 預設合成最後一個**非** `#[test]` 的 module；`--top` 可指定。會印出 port 與 cell 統計（類似 yosys `stat`）。
 - `-o` 輸出 yosys JSON（`read_json` 可讀）；`--verilog` 輸出閘級 Verilog（iverilog 可模擬）。
 - `--ice40` 做 iCE40 技術映射；加 `--asc` / `--bin` 會再做佈局繞線（預設 `nextpnr-ice40`，時序不過會失敗；`--pnr veryl` 用自己的）與 `icepack`。
+- `--asic` 做 ASIC 後端（見下）；`--verilog` 此時輸出標準元件 netlist（附 vlib 元件的 Verilog 模型），`-v` 印出關鍵路徑。
 - `./test.sh`：單元測試 + 合成全部範例 + yosys `read_json; check -assert` + FPGA 流程 +
   對 `veryl build` 產生的 SystemVerilog 做**形式等價驗證**（需要有 slang 前端的 yosys，例如 oss-cad-suite，路徑用 `YOSYS_SLANG` 指定）。
 
@@ -64,6 +67,26 @@ Veryl 的邏輯合成與 FPGA 流程（類似 yosys `synth` / `synth_ice40` 加�
 | RiscvSoc（自己的 P&R） | 1252 / 5280 | 15.6 MHz（板上 12 MHz，通過） |
 | RiscvSoc（nextpnr） | 1279 / 5280 | 17.3 MHz |
 
+## ASIC 後端（`--asic`，`src/asic/`）
+教學用的標準元件庫 **vlib**（列高 4.0 µm、site 0.5 µm，延遲約 130 nm 慢速角）：
+`INV BUF NAND2 NOR2 AND2 OR2 XOR2 XNOR2 AOI21 OAI21 MUX2 TIEL TIEH DFF DFFN DFFR DFFS DFFNR DFFNS`（R/S 腳低態有效）。
+| 檔案 | 內容 |
+|---|---|
+| `lib.rs` | 元件庫：寬度、面積、本徵延遲 + 每扇出負載、setup、Verilog 行為模型 |
+| `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹） |
+| `place.rs` | 依利用率 65% 決定晶粒，IO 腳放在四周；蛇形初始擺放後以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL |
+| `route.rs` | gcell（4 µm）**全域繞線**：水平 M2/M4、垂直 M3/M5，每邊 16 軌；端點依 Prim 順序以 A* 連到已建好的樹，PathFinder（現況 + 歷史成本）消除溢出；統計線長與 via |
+| `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；起點輸入腳 / DFF clk→Q，終點 DFF D（+setup）/ 輸出腳 |
+| `mod.rs` | `flow()` 串起來；`def()` 輸出 DEF 佈局 |
+
+| 設計 | 標準元件 | 面積 | 晶粒 | 線長 | Fmax |
+|---|---|---|---|---|---|
+| RiscvSoc | 2553 | 31360 µm² | 220 × 220 µm | 117 mm | 109 MHz |
+| RiscvCore（整顆 RV32I，暫存器檔 1024 個 DFF） | 9795 | 0.132 mm² | 449 × 452 µm | 1088 mm | 67.5 MHz |
+
+驗證：`cargo test` 在標準元件 netlist 上也跑每個範例的 testbench（含 RV32I 測試程式），並檢查佈局合法、每條 net 繞成連通的樹、沒有溢出；
+`./test.sh` 用 yosys 對 `veryl build` 的輸出做標準元件 netlist 的形式等價驗證。
+
 ## 流程
 | 檔案 | 內容 |
 |---|---|
@@ -109,4 +132,5 @@ interface/modport、`inout`、遞迴、非常數的除法、latch（不完整賦
 | RiscvTestRom（rv32i 測試程式 ROM） | SAT 完整證明 |
 | `examples/features.veryl`：Shifter / Funcs / Ranges / Counter / Top | SAT / SAT / SAT / k-induction / BMC 20 |
 
-另外 `cargo test` 在閘級 netlist **與** iCE40 映射後的 netlist 上都跑各範例的 testbench 情境（RiscvCore 跑完整的 RV32I 測試程式並比對 41 個結果、ALU 每種運算對 Rust 參考值、RiscvSoc 在 LED 顯示 55）。
+上表每個設計都驗證兩次：閘級 netlist（`gate`）與 vlib 標準元件 netlist（`asic`）。
+另外 `cargo test` 在閘級 netlist、iCE40 映射後與標準元件映射後的 netlist 上都跑各範例的 testbench 情境（RiscvCore 跑完整的 RV32I 測試程式並比對 41 個結果、ALU 每種運算對 Rust 參考值、RiscvSoc 在 LED 顯示 55）。

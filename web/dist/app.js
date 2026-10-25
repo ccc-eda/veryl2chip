@@ -337,6 +337,102 @@
     }
   };
 
+  // src/synth/asic.ts
+  var S = 4;
+  function stdColor(t) {
+    if (t.startsWith("DFF")) return "#d08770";
+    if (t === "MUX2") return "#ebcb8b";
+    if (t === "BUF") return "#8fbcbb";
+    if (t === "INV") return "#a3be8c";
+    if (t.startsWith("TIE")) return "#7f8c9a";
+    if (t.startsWith("X")) return "#c39bd3";
+    if (t.endsWith("AND2")) return "#6aa1d4";
+    if (t.endsWith("OR2")) return "#7ec3ff";
+    return "#b48ead";
+  }
+  function dieScene(r, pos, colorOf) {
+    const d = r.die;
+    const H = d.h * S;
+    const bg = [{ x: -2, y: -2, w: d.w * S + 4, h: H + 4, fill: "#2a3441" }];
+    for (let row = 0; row < d.rows; row++) bg.push({ x: 0, y: H - (row + 1) * d.row_h * S, w: d.w * S, h: d.row_h * S, fill: row % 2 ? "#1f2833" : "#222c38" });
+    const boxes = r.cells.map(([row, site, w], i) => {
+      const [rr, ss] = pos ? [pos[2 * i], pos[2 * i + 1]] : [row, site];
+      return {
+        id: i,
+        x: ss * d.site_w * S + 0.25,
+        y: H - (rr + 1) * d.row_h * S + 0.6,
+        w: w * d.site_w * S - 0.5,
+        h: d.row_h * S - 1.2,
+        fill: colorOf ? colorOf(i) : stdColor(r.map.cells[i].t)
+      };
+    });
+    const texts = [];
+    const n = r.cells.length;
+    r.pins.forEach((p, k) => {
+      const x = p.x * S, y = H - p.y * S;
+      boxes.push({ id: n + k, x: x - 2.5, y: y - 2.5, w: 5, h: 5, fill: p.dir === "in" ? "#57c27a" : "#e06c75", stroke: "#0f1318" });
+      if (r.pins.length <= 120) {
+        const left = p.x <= 0, right = p.x >= d.w, bottom = p.y <= 0;
+        texts.push({
+          x: left ? x - 5 : right ? x + 5 : x,
+          y: left || right ? y : bottom ? y + 9 : y - 6,
+          s: p.name,
+          color: p.dir === "in" ? "#8fe0a8" : "#f0a0a8",
+          size: 8,
+          align: left ? "right" : right ? "left" : "center"
+        });
+      }
+    });
+    return { bg, boxes, lines: [], texts };
+  }
+  function gc(r, x, y) {
+    const g = r.die.row_h * S;
+    return [(x + 0.5) * g, r.die.h * S - (y + 0.5) * g];
+  }
+  function edgeUse(r) {
+    const { gx, gy } = r.route;
+    const h = new Uint16Array(gx * gy), v = new Uint16Array(gx * gy);
+    for (const n of r.route.nets) {
+      const s = n.segs;
+      for (let i = 0; i < s.length; i += 4) {
+        const [x0, y0, x1, y1] = [s[i], s[i + 1], s[i + 2], s[i + 3]];
+        if (y0 === y1) h[y0 * gx + Math.min(x0, x1)]++;
+        else v[Math.min(y0, y1) * gx + x0]++;
+      }
+    }
+    return { h, v };
+  }
+  function congestion(r) {
+    const { gx, gy, cap } = r.route;
+    const u = edgeUse(r);
+    const g = r.die.row_h * S;
+    const out = [];
+    for (let y = 0; y < gy; y++) for (let x = 0; x < gx; x++) {
+      const k = y * gx + x;
+      const m = Math.max(u.h[k], u.v[k], x ? u.h[k - 1] : 0, y ? u.v[k - gx] : 0) / cap;
+      if (m < 0.25) continue;
+      const [cx, cy] = gc(r, x, y);
+      out.push({ x: cx - g / 2, y: cy - g / 2, w: g, h: g, fill: `hsla(${120 - 120 * Math.min(m, 1)}, 70%, 45%, ${0.15 + 0.35 * Math.min(m, 1)})` });
+    }
+    return out;
+  }
+  function asicRouteLines(r, opts) {
+    const out = [], top = [];
+    r.route.nets.forEach((n, ni) => {
+      const s = n.segs;
+      const sel = opts.net === ni;
+      for (let i = 0; i < s.length; i += 4) {
+        const [ax, ay] = gc(r, s[i], s[i + 1]), [bx, by] = gc(r, s[i + 2], s[i + 3]);
+        const pts = [ax, ay, bx, by];
+        if (opts.dim && n.crit) top.push({ pts, color: "#ff5c5c", width: 2.4 });
+        else if (sel) top.push({ pts, color: "#ffd479", width: 2.4 });
+        else if (opts.dim) out.push({ pts, color: "rgba(126,150,180,0.15)", width: 0.8 });
+        else out.push({ pts, color: n.clock ? "rgba(87,194,122,0.8)" : s[i + 1] === s[i + 3] ? "rgba(94,159,214,0.55)" : "rgba(180,142,173,0.6)", width: 0.9 });
+      }
+    });
+    return out.concat(top);
+  }
+
   // src/synth/device.ts
   var T = 12;
   var TILE_FILL = {
@@ -525,6 +621,7 @@
   function cellColor(t, inputs = 4) {
     if (t.includes("DFF")) return "#d08770";
     if (t === "SB_LUT4") return LUT_COLOR[inputs];
+    if (/^[A-Z]/.test(t) && !t.startsWith("SB_") && t !== "PI" && t !== "PO") return stdColor(t);
     return TYPE_COLOR[t] ?? "#9fb2c8";
   }
   function shortType(t) {
@@ -666,7 +763,18 @@
     { key: "route", tag: "fpga", label: "F \u2465 Global+Detail Routing" },
     { key: "sta", tag: "fpga", label: "F \u2466 Timing (STA)" }
   ];
+  var ASIC_STAGES = [
+    ...FPGA_STAGES.slice(0, 3),
+    { key: "amap", tag: "asic", label: "A \u2463 Standard Cell Map" },
+    { key: "aplace", tag: "asic", label: "A \u2464 Row Placement \u9000\u706B" },
+    { key: "aroute", tag: "asic", label: "A \u2465 Global Routing" },
+    { key: "asta", tag: "asic", label: "A \u2466 Timing (STA)" }
+  ];
   var PNR = /* @__PURE__ */ new Set(["place", "route", "sta"]);
+  var ASIC = /* @__PURE__ */ new Set(["amap", "aplace", "aroute", "asta"]);
+  var APHYS = /* @__PURE__ */ new Set(["aplace", "aroute", "asta"]);
+  var OTHER = { map: "amap", place: "aplace", route: "aroute", sta: "asta", amap: "map", aplace: "place", aroute: "route", asta: "sta" };
+  var isNet = (k) => k === "raw" || k === "opt" || k === "map" || k === "amap";
   var SynthOverlay = class {
     constructor(core2) {
       __publicField(this, "core", core2);
@@ -683,9 +791,15 @@
       __publicField(this, "pcf");
       __publicField(this, "anim", 0);
       __publicField(this, "gen", 0);
+      __publicField(this, "target", "fpga");
+      __publicField(this, "asic", null);
+      __publicField(this, "asicErr", null);
+      __publicField(this, "asicBusy", false);
+      __publicField(this, "asicMs", 0);
       __publicField(this, "pnrMs", 0);
       __publicField(this, "synMs", 0);
       __publicField(this, "selNet", null);
+      __publicField(this, "selNetA", null);
       this.view = new CanvasView($("synCanvas"));
       this.view.onPick = (b) => this.pick(b);
       $("synClose").onclick = () => this.close();
@@ -700,15 +814,19 @@
       $("synAsc").onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
       $("synPcf").onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
       $("synBin").onclick = () => this.pnr && download(`${this.pnr.top}.bin`, fromBase64(this.pnr.bin));
+      $("synV").onclick = () => this.asic && download(`${this.asic.top}_vlib.v`, this.asic.verilog);
+      $("synDef").onclick = () => this.asic && download(`${this.asic.top}.def`, this.asic.def);
+      $("synTarget").onchange = () => this.setTarget($("synTarget").value);
       $("synTop").onchange = () => this.run($("synTop").value);
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !$("synOverlay").classList.contains("hidden")) this.close();
       });
       this.chips();
     }
-    open(files, top, pcf) {
+    open(files, top, pcf, target) {
       this.files = files;
       this.pcf = pcf;
+      if (target) this.setTarget(target, false);
       $("synOverlay").classList.remove("hidden");
       this.run(top);
     }
@@ -722,6 +840,8 @@
       this.res = null;
       this.pnr = null;
       this.pnrErr = null;
+      this.asic = null;
+      this.asicErr = null;
       this.nets.clear();
       $("synInfo").textContent = "\u5408\u6210\u4E2D\u2026";
       $("synSide").innerHTML = "";
@@ -776,10 +896,44 @@
       this.buttons();
       if (PNR.has(this.stage)) this.show(this.stage);
     }
+    setTarget(t, show = true) {
+      this.target = t;
+      $("synTarget").value = t;
+      $("synTitle").textContent = t === "fpga" ? "\u5408\u6210 \u2192 FPGA\uFF08iCE40UP5K\uFF09" : "\u5408\u6210 \u2192 ASIC\uFF08vlib \u6A19\u6E96\u5143\u4EF6\uFF09";
+      this.chips();
+      const cur = ASIC.has(this.stage) !== (t === "asic") && OTHER[this.stage] ? OTHER[this.stage] : this.stage;
+      if (this.res) this.stats(this.synMs);
+      if (show) this.show(cur);
+      else this.stage = cur;
+    }
+    async runAsic() {
+      if (!this.res || this.asic || this.asicBusy) return;
+      const gen = this.gen;
+      this.asicBusy = true;
+      const t0 = performance.now();
+      const tick = setInterval(() => {
+        if (gen === this.gen && ASIC.has(this.stage)) $("synInfo").textContent = `ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`;
+      }, 200);
+      try {
+        const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1 });
+        if (gen !== this.gen) return;
+        this.asic = r;
+        this.asicMs = performance.now() - t0;
+      } catch (e) {
+        if (gen !== this.gen) return;
+        this.asicErr = String(e.message ?? e);
+      } finally {
+        clearInterval(tick);
+        this.asicBusy = false;
+      }
+      this.stats(this.synMs);
+      this.buttons();
+      if (ASIC.has(this.stage)) this.show(this.stage);
+    }
     chips() {
       const box = $("synChips");
       box.innerHTML = "";
-      FPGA_STAGES.forEach((s, i) => {
+      (this.target === "fpga" ? FPGA_STAGES : ASIC_STAGES).forEach((s, i) => {
         if (i) {
           const a = document.createElement("span");
           a.className = "arrow";
@@ -796,19 +950,23 @@
     }
     /** stage-dependent buttons */
     buttons() {
-      const p = PNR.has(this.stage);
-      $("synAnim").classList.toggle("hidden", this.stage !== "place");
-      $("synAnim").disabled = !this.pnr;
+      const p = PNR.has(this.stage), a = ASIC.has(this.stage);
+      $("synAnim").classList.toggle("hidden", this.stage !== "place" && this.stage !== "aplace");
+      $("synAnim").disabled = a ? !this.asic : !this.pnr;
       for (const id of ["synAsc", "synPcf", "synBin"]) {
         $(id).classList.toggle("hidden", !p);
         $(id).disabled = !this.pnr;
       }
-      $("synEdges").classList.toggle("hidden", p && this.stage === "place");
+      for (const id of ["synV", "synDef"]) {
+        $(id).classList.toggle("hidden", !a);
+        $(id).disabled = !this.asic;
+      }
+      $("synEdges").classList.toggle("hidden", this.stage === "place" || this.stage === "aplace");
     }
     netView(key) {
       let v = this.nets.get(key);
       if (!v) {
-        const nl = this.res[key];
+        const nl = key === "amap" ? this.asic.map : this.res[key];
         const lev = levelize(nl);
         v = { nl, lev, lay: netScene(nl, lev), names: netNames(nl) };
         this.nets.set(key, v);
@@ -818,6 +976,10 @@
     stats(ms) {
       this.synMs = ms;
       const r = this.res;
+      if (this.target === "asic") {
+        this.asicStats(ms);
+        return;
+      }
       const m = r.map.cells;
       const luts = m.filter((c) => c.t === "SB_LUT4").length;
       const ffs = m.filter((c) => isFF(c.t)).length;
@@ -841,6 +1003,23 @@
         );
       }
       items.push(`\u5408\u6210 <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `\uFF0C\u4F48\u5C40\u7E5E\u7DDA <b>${(this.pnrMs / 1e3).toFixed(1)}</b> s` : ""));
+      $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
+    }
+    asicStats(ms) {
+      const r = this.res;
+      const items = [`\u9802\u5C64 <b>${r.top}</b>`, `\u9598 <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`];
+      const a = this.asic;
+      if (a) {
+        const ffs = a.map.cells.filter((c) => isFF(c.t)).length;
+        items.push(
+          `\u6A19\u6E96\u5143\u4EF6 <b>${a.map.cells.length}</b>\uFF08DFF ${ffs}\uFF09`,
+          `\u9762\u7A4D <b>${fmtArea(a.area)}</b>`,
+          `\u6676\u7C92 <b>${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)}</b> \xB5m\uFF08${a.die.rows} \u5217\uFF0C\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(0)}%\uFF09`,
+          `\u7DDA\u9577 <b>${(a.route.wirelength / 1e3).toFixed(2)}</b> mm`,
+          `F<sub>max</sub> <b>${a.timing.fmax.toFixed(1)}</b> MHz`
+        );
+      }
+      items.push(`\u5408\u6210 <b>${ms.toFixed(0)}</b> ms` + (a ? `\uFF0CASIC \u6D41\u7A0B <b>${(this.asicMs / 1e3).toFixed(1)}</b> s` : ""));
       $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
     }
     show(key) {
@@ -871,7 +1050,24 @@
         this.side(this.rtlSide());
         return;
       }
-      if (key === "raw" || key === "opt" || key === "map") {
+      if (ASIC.has(key) && !this.asic) {
+        this.view.set({ boxes: [], lines: [], texts: [] });
+        this.side(document.createElement("div"));
+        if (this.asicErr) {
+          this.info(["ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", this.asicErr]);
+          return;
+        }
+        this.info(["ASIC \u6D41\u7A0B\u4E2D\u2026"]);
+        this.runAsic();
+        return;
+      }
+      if (APHYS.has(key)) {
+        this.drawAsic(true);
+        this.info(this.asicReport(key));
+        this.side(this.asicSide(key));
+        return;
+      }
+      if (isNet(key)) {
         const v = this.netView(key);
         this.view.set({ ...v.lay.scene, lines: netLines(v.nl, v.lev, v.lay, this.edges && edgeCount(v.nl) <= 6e3, null) });
         this.info(this.netReport(key, v));
@@ -978,6 +1174,10 @@
       return d;
     }
     animate() {
+      if (this.stage === "aplace") {
+        this.animateAsic();
+        return;
+      }
       if (!this.pnr || this.stage !== "place") return;
       this.stopAnim();
       const p = this.pnr;
@@ -996,6 +1196,122 @@
       };
       step();
     }
+    animateAsic() {
+      const a = this.asic;
+      if (!a) return;
+      this.stopAnim();
+      let f = 0;
+      const step = () => {
+        const fr = a.history[f];
+        this.view.set(dieScene(a, fr.pos), false);
+        $("synInfo").textContent = `A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`;
+        f++;
+        if (f < a.history.length) this.anim = window.setTimeout(step, 110);
+        else this.anim = window.setTimeout(() => {
+          this.anim = 0;
+          this.info(this.asicReport("aplace"));
+        }, 1200);
+      };
+      step();
+    }
+    drawAsic(fit) {
+      const a = this.asic;
+      const k = this.stage;
+      let color;
+      if (k === "asta") {
+        const max = Math.max(...a.cells.map((c) => c[3]), 1e-9);
+        color = (i) => heat(a.cells[i][3] / max);
+      }
+      const scene = dieScene(a, void 0, color);
+      for (const b of scene.boxes) b.hl = b.id === this.sel || k === "asta" && b.id < a.cells.length && a.cells[b.id][4] === 1;
+      if (k === "aroute") {
+        scene.bg = [...scene.bg ?? [], ...congestion(a)];
+        scene.lines = this.edges ? asicRouteLines(a, { net: this.selNetA }) : [];
+      }
+      if (k === "asta") scene.lines = asicRouteLines(a, { dim: true });
+      this.view.set(scene, fit);
+    }
+    asicReport(key) {
+      const a = this.asic;
+      if (key === "aplace") {
+        const h = a.history;
+        return [
+          `A \u2464 Row Placement \u9000\u706B\uFF08\u6676\u7C92 ${a.die.w.toFixed(1)} \xD7 ${a.die.h.toFixed(1)} \xB5m\uFF0C${a.die.rows} \u5217 \xD7 ${a.die.sites} site\uFF09`,
+          "\u4F9D\u76EE\u6A19\u5229\u7528\u7387 65% \u6C7A\u5B9A\u6676\u7C92\u5927\u5C0F\uFF0CIO \u8173\u5E73\u5747\u653E\u5728\u56DB\u5468\uFF08\u8F38\u5165\uFF1A\u5DE6\u3001\u4E0A\uFF1B\u8F38\u51FA\uFF1A\u53F3\u3001\u4E0B\uFF09\u3002\u521D\u59CB\u4F9D\u7DB2\u8868\u9806\u5E8F\u86C7\u5F62\u586B\u5217\uFF0C\u518D\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316 HPWL\uFF1A\u6BCF\u4E00\u6B65\u628A\u5143\u4EF6\u79FB\u5230\u7A7A\u4F4D\u6216\u8207\u53E6\u4E00\u500B\u5143\u4EF6\u4EA4\u63DB\uFF0C\u6C38\u9060\u4FDD\u6301\u5408\u6CD5\uFF08\u4E0D\u91CD\u758A\u3001\u5C0D\u9F4A site\uFF09\u3002",
+          "",
+          `${a.cells.length} \u500B\u5143\u4EF6\uFF0C\u5217\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(1)}%\uFF1BHPWL\uFF1A\u521D\u59CB ${(h[0].cost / 1e3).toFixed(2)} mm \u2192 \u9000\u706B\u5F8C ${(h[h.length - 1].cost / 1e3).toFixed(2)} mm\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`,
+          "\u984F\u8272\uFF1A\u6A58\uFF1DDFF\u3001\u9EC3\uFF1DMUX2\u3001\u85CD\uFF1DAND/OR \u985E\u3001\u7D2B\uFF1DXOR/AOI/OAI\u3001\u7DA0\uFF1DINV\u3001\u9752\uFF1DBUF\uFF1B\u7DA0/\u7D05\u5C0F\u65B9\u584A\uFF1D\u8F38\u5165/\u8F38\u51FA\u8173"
+        ];
+      }
+      if (key === "aroute") {
+        const r = a.route;
+        return [
+          `A \u2465 Global Routing\uFF08${r.gx} \xD7 ${r.gy} \u500B gcell\uFF0C\u6BCF\u683C 4 \xB5m\uFF1B\u6C34\u5E73\u7DDA\u8D70 M2/M4\u3001\u5782\u76F4\u7DDA\u8D70 M3/M5\uFF0C\u6BCF\u908A ${r.cap} \u8ECC\uFF09`,
+          "\u6BCF\u689D net \u7684\u7AEF\u9EDE\u4F9D Prim \u6700\u5C0F\u751F\u6210\u6A39\u9806\u5E8F\uFF0C\u7528 A* \u5F9E\u7AEF\u9EDE\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF1B\u8D85\u904E\u5BB9\u91CF\u7684\u908A\u4EE5 PathFinder\uFF08\u73FE\u6CC1 + \u6B77\u53F2\u6210\u672C\uFF09\u5354\u5546\u91CD\u7E5E\uFF0C\u76F4\u5230\u6C92\u6709\u6EA2\u51FA\u3002",
+          "",
+          `${r.nets.length} \u689D net\uFF0C\u7E3D\u7DDA\u9577 ${(r.wirelength / 1e3).toFixed(2)} mm\uFF0Cvia ${r.vias} \u500B\uFF1B\u6BCF\u8F2A\u6EA2\u51FA\uFF1A${r.iters.join(" \u2192 ")}`,
+          "\u984F\u8272\uFF1A\u85CD\uFF1D\u6C34\u5E73\u3001\u7D2B\uFF1D\u5782\u76F4\u3001\u7DA0\uFF1Dclock / reset\uFF1B\u5E95\u8272\uFF1D\u64C1\u585E\uFF08\u7DA0\u9B06 \u2192 \u7D05\u6EFF\uFF09\u3002\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\u3001\u9EDE\u53F3\u5074 net \u9AD8\u4EAE\u3002"
+        ];
+      }
+      const t = a.timing;
+      return [
+        "A \u2466 Timing (STA)",
+        "\u5143\u4EF6\u5EF6\u9072 = \u672C\u5FB5\u5EF6\u9072 + \u6BCF\u6247\u51FA\u8CA0\u8F09 \xD7 \u6247\u51FA\uFF1B\u7DDA\u5EF6\u9072 = \u9A45\u52D5\u6574\u689D\u7E5E\u7DDA\u7684\u96FB\u5BB9 + \u5230\u8A72\u8CA0\u8F09\u7684\u5206\u4F48 RC\uFF08\u4F9D\u66FC\u54C8\u9813\u8DDD\u96E2\uFF09\u3002\u8DEF\u5F91\u8D77\u9EDE\u70BA\u8F38\u5165\u8173\u8207 DFF\uFF08clk\u2192Q\uFF09\uFF0C\u7D42\u9EDE\u70BA DFF D\uFF08\u52A0 setup\uFF09\u8207\u8F38\u51FA\u8173\uFF1Bclock \u8996\u70BA\u7406\u60F3\u3002",
+        "",
+        `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(3)} ns \u2192 Fmax ${t.fmax.toFixed(1)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0C\u5143\u4EF6\u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`
+      ];
+    }
+    asicSide(key) {
+      const a = this.asic;
+      const d = document.createElement("div");
+      const det = document.createElement("div");
+      det.id = "synDetail";
+      det.innerHTML = '<p class="hint">\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+      d.appendChild(det);
+      const div = document.createElement("div");
+      if (key === "asta") {
+        div.innerHTML = `<h3>\u95DC\u9375\u8DEF\u5F91\uFF08${a.timing.period.toFixed(3)} ns\uFF09</h3>` + table(["\u7D2F\u8A08 ns", "\u5EF6\u9072", "\u7D93\u904E"], a.timing.path.map((s) => [s.at.toFixed(3), s.delay.toFixed(3), esc(s.what)]));
+      } else if (key === "aroute") {
+        div.innerHTML = `<h3>Net\uFF08${a.route.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09</h3>`;
+        const list = document.createElement("div");
+        list.className = "clist";
+        const order = a.route.nets.map((_, i) => i).sort((x, y) => a.route.nets[y].len - a.route.nets[x].len);
+        for (const i of order.slice(0, 400)) {
+          const n = a.route.nets[i];
+          const row = document.createElement("div");
+          row.textContent = `${n.name}  ${n.len.toFixed(0)} \xB5m  ${n.vias} via${n.clock ? "  [clock/reset]" : ""}`;
+          row.onclick = () => {
+            this.selNetA = i;
+            this.drawAsic(false);
+          };
+          list.appendChild(row);
+        }
+        div.appendChild(list);
+      } else {
+        div.innerHTML = `<h3>\u5143\u4EF6\u6578\u91CF</h3>` + table(["\u5143\u4EF6", "\u6578\u91CF", "\u9762\u7A4D \xB5m\xB2"], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (n * (a.lib.find((l) => l.name === t)?.area ?? 0)).toFixed(0)]));
+      }
+      div.innerHTML += `<h3>IO \u8173</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "x \xB5m", "y \xB5m"], a.pins.map((p) => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)]));
+      d.appendChild(div);
+      return d;
+    }
+    stdDetail() {
+      const det = document.getElementById("synDetail");
+      if (!det || !this.asic) return;
+      if (this.sel === null) {
+        det.innerHTML = '<p class="hint">\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+        return;
+      }
+      const a = this.asic;
+      const v = this.netView("amap");
+      const c = a.map.cells[this.sel];
+      const [row, site, w, arr, crit] = a.cells[this.sel];
+      const lib = a.lib.find((l) => l.name === c.t);
+      let h = `<h3><span class="sw" style="background:${stdColor(c.t)}"></span>#${this.sel} ${c.t}${crit ? "\uFF08\u95DC\u9375\u8DEF\u5F91\uFF09" : ""}</h3>`;
+      h += `<p>\u7B2C ${row} \u5217\uFF0Csite ${site}\u2013${site + w - 1}\uFF08x = ${(site * a.die.site_w).toFixed(1)} \xB5m\uFF09<br>\u8F38\u51FA\u5230\u9054\u6642\u9593 ${arr.toFixed(3)} ns</p>`;
+      if (lib) h += `<p><code>${esc(lib.verilog)}</code></p>`;
+      h += table(["\u63A5\u8173", "\u8A0A\u865F"], c.c.map(([p, b]) => [p, esc(bitName(v.names, b))]));
+      det.innerHTML = h;
+    }
     stopAnim() {
       if (this.anim) {
         clearTimeout(this.anim);
@@ -1009,7 +1325,11 @@
         if (this.pnr) this.drawPnr(false);
         return;
       }
-      if (k !== "raw" && k !== "opt" && k !== "map") return;
+      if (APHYS.has(k)) {
+        if (this.asic) this.drawAsic(false);
+        return;
+      }
+      if (!isNet(k)) return;
       const v = this.netView(k);
       const all = this.edges && edgeCount(v.nl) <= 6e3;
       for (const b of v.lay.scene.boxes) b.hl = b.id === this.sel;
@@ -1039,6 +1359,17 @@
           `${r.raw.cells.length} \u2192 ${v.nl.cells.length} \u500B\u5143\u4EF6\uFF08\u5C11\u4E86 ${d}\uFF0C${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%\uFF09\uFF1BDFF ${rf} \u2192 ${ffs}`,
           `${types}`,
           `\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`
+        ];
+      }
+      if (key === "amap") {
+        const a = this.asic;
+        const bufs = v.nl.cells.filter((c) => c.t === "BUF").length;
+        return [
+          "A \u2463 Standard Cell Map\uFF08vlib\uFF1A\u5217\u9AD8 4.0 \xB5m\u3001site 0.5 \xB5m\uFF0C\u7D04 130 nm \u6162\u901F\u89D2\uFF09",
+          "\u628A\u7DB2\u8868\u5728\u591A\u6247\u51FA\u9EDE\u5207\u6210\u6A39\uFF0C\u5C0D\u6BCF\u68F5\u6A39\u505A\u52D5\u614B\u898F\u5283\u7684 tree covering\uFF08\u6700\u5C0F\u9762\u7A4D\uFF09\uFF1A\u53CD\u76F8\u5668\u4F75\u5165 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21\uFF1B\u540C\u6B65 set/reset \u8B8A\u6210 D \u524D\u7684\u908F\u8F2F\uFF0C\u975E\u540C\u6B65\u7684\u7528 DFFR / DFFS\uFF08\u4F4E\u614B\u6709\u6548\uFF0C\u5FC5\u8981\u6642\u52A0 INV\uFF09\uFF1B\u6247\u51FA > 12 \u7684\u8A0A\u865F\u63D2\u5165 BUF \u6A39\u3002",
+          "",
+          `${types}`,
+          `\u5143\u4EF6\u9762\u7A4D ${fmtArea(a.area)}\uFF0CBUF ${bufs} \u500B\uFF0C\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`
         ];
       }
       const luts = v.nl.cells.filter((c) => c.t === "SB_LUT4");
@@ -1088,6 +1419,14 @@
         list.appendChild(m);
       }
       d.appendChild(list);
+      if (v.nl === this.asic?.map) {
+        const lib = document.createElement("div");
+        lib.innerHTML = `<h3>vlib \u5143\u4EF6\u5EAB</h3>` + table(
+          ["\u5143\u4EF6", "\u5BEC", "\u9762\u7A4D \xB5m\xB2", "\u5EF6\u9072 ns", "+\u6BCF\u6247\u51FA", "\u529F\u80FD"],
+          this.asic.lib.map((c) => [`<span class="sw" style="background:${stdColor(c.name)}"></span>${c.name}`, String(c.width), c.area.toFixed(0), c.delay.toFixed(3), c.load.toFixed(3), esc(c.verilog.replace(/^assign Y = |;$/g, ""))])
+        );
+        d.appendChild(lib);
+      }
       const det = document.createElement("div");
       det.id = "synDetail";
       det.innerHTML = '<p class="hint">\u9EDE\u5716\u4E0A\u7684\u5143\u4EF6\u770B\u7D30\u7BC0\uFF1A\u63A5\u8173\u3001\u6240\u9023\u8A0A\u865F\u3001LUT \u771F\u503C\u8868\u3002</p>';
@@ -1103,11 +1442,18 @@
         this.lcDetail();
         return;
       }
+      if (APHYS.has(k)) {
+        if (!this.asic || this.anim) return;
+        this.sel = b && b.id < this.asic.cells.length ? b.id : null;
+        this.drawAsic(false);
+        this.stdDetail();
+        return;
+      }
       if (!b) {
         this.select(null);
         return;
       }
-      if (k === "raw" || k === "opt" || k === "map") {
+      if (isNet(k)) {
         const v = this.netView(k);
         if (b.id < v.nl.cells.length) this.select(b.id);
       }
@@ -1133,7 +1479,7 @@
       this.redrawLines();
       const det = document.getElementById("synDetail");
       const k = this.stage;
-      if (!det || k !== "raw" && k !== "opt" && k !== "map") return;
+      if (!det || !isNet(k)) return;
       if (i === null) {
         det.innerHTML = '<p class="hint">\u9EDE\u5716\u4E0A\u7684\u5143\u4EF6\u770B\u7D30\u7BC0\uFF1A\u63A5\u8173\u3001\u6240\u9023\u8A0A\u865F\u3001LUT \u771F\u503C\u8868\u3002</p>';
         return;
@@ -1170,6 +1516,9 @@
       URL.revokeObjectURL(a.href);
       a.remove();
     }, 1e3);
+  }
+  function fmtArea(um2) {
+    return um2 >= 1e5 ? `${(um2 / 1e6).toFixed(3)} mm\xB2` : `${um2.toFixed(0)} \xB5m\xB2`;
   }
 
   // src/wave.ts
@@ -1677,7 +2026,7 @@
       $2("run").disabled = false;
       $2("synth").disabled = false;
       synth = new SynthOverlay(core);
-      if (/[#&]synth=1/.test(hash)) synth.open(st.files, st.ex.synth, st.ex.pcf);
+      if (/[#&]synth=1/.test(hash)) synth.open(st.files, st.ex.synth, st.ex.pcf, /[#&]target=asic/.test(hash) ? "asic" : void 0);
       refreshTops();
     } catch (e) {
       status("WebAssembly \u8F09\u5165\u5931\u6557");

@@ -26,6 +26,7 @@ cargo test --release               # synthesizes examples/, runs their testbench
 PNR=veryl ./fpga/flow.sh           # same with veryl-eda's own place & route (src/pnr/)
 ./fpga/pnr_test.sh                 # own P&R on every design: routed bitstream vs netlist co-simulation + icetime Fmax
 cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--ice40 [--pcf P] [--asc A] [--bin B]] a.veryl ...
+cargo run --release -- --asic [-v] [--verilog out.v] a.veryl ...   # vlib standard cells: map, place, route, STA
 ```
 
 - veryl-eda default top: the last non-`#[test]` module (testbench modules are not synthesizable).
@@ -60,7 +61,7 @@ Parses Veryl source with the crates.io `veryl-parser` 0.22 crate (grammar tracki
 
 ## Architecture (veryl-eda)
 
-Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax tree to a name-based statement IR and *symbolically executes* it into gates (if/case → mux, loops unrolled, functions inlined, always_ff → yosys `$_DFF_*`/`$_SDFF_*` cells). Every declared signal gets placeholder wires; drivers are recorded as aliases and resolved in `netlist::optimize`, which also rebuilds with constant folding/hashing, detects comb loops, and sweeps dead logic. Hierarchy is flattened (`inst.sig` net names). `optimize` also iterates constant-node proving (random sim + exhaustive check over ≤16-input supports) and removal of stuck-at-0 flip-flops. `ice40.rs` maps to SB_CARRY (recognized full-adder carries), SB_LUT4 (cut-based, depth-first) and SB_DFF*. `output.rs` writes yosys JSON + structural Verilog; `netsim.rs` is a 2-state gate simulator for tests (generic and iCE40 cells). Packed structs put the first field at the MSB (matches veryl's SV).
+Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax tree to a name-based statement IR and *symbolically executes* it into gates (if/case → mux, loops unrolled, functions inlined, always_ff → yosys `$_DFF_*`/`$_SDFF_*` cells). Every declared signal gets placeholder wires; drivers are recorded as aliases and resolved in `netlist::optimize`, which also rebuilds with constant folding/hashing, detects comb loops, and sweeps dead logic. Hierarchy is flattened (`inst.sig` net names). `optimize` also iterates constant-node proving (random sim + exhaustive check over ≤16-input supports) and removal of stuck-at-0 flip-flops. `ice40.rs` maps to SB_CARRY (recognized full-adder carries), SB_LUT4 (cut-based, depth-first) and SB_DFF*. `output.rs` writes yosys JSON + structural Verilog; `netsim.rs` is a 2-state gate simulator for tests (generic, iCE40 and vlib cells). `asic/` is the standard-cell back end: `lib.rs` (vlib cells), `map.rs` (tree-covering DP + BUF trees for fanout > 12), `place.rs` (legal row annealing), `route.rs` (gcell global routing, Prim order + A* + PathFinder), `sta.rs`; the `cargo test` scenarios also run on the vlib netlist and `test.sh` proves it equivalent to `veryl build`. Packed structs put the first field at the MSB (matches veryl's SV).
 
 ## Limits / gotchas
 

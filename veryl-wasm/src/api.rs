@@ -40,6 +40,56 @@ fn kind_name(k: Kind) -> &'static str {
     }
 }
 
+/// readable wire names: declared nets first, then ports (the first name wins)
+fn net_names(nls: &[&Netlist]) -> std::collections::HashMap<Bit, String> {
+    let mut m = std::collections::HashMap::new();
+    let idx = |n: &str, i: usize, len: usize| if len > 1 { format!("{}[{}]", n, i) } else { n.to_string() };
+    for nl in nls { for (n, bits) in &nl.nets { for (i, b) in bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(n, i, bits.len())); } } }
+    for nl in nls { for p in &nl.ports { for (i, b) in p.bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(&p.name, i, p.bits.len())); } } }
+    m
+}
+
+/// the ASIC flow on the vlib standard cells
+fn asic(v: &Value) -> R<Value> {
+    use veryl_eda::asic;
+    let (top, (st, _)) = synth_netlists(v)?;
+    let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1);
+    let o = asic::flow(&st.opt, seed)?;
+    let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
+    let n = o.mapped.cells.len();
+    let crit: std::collections::HashSet<usize> = tm.crit_cells.iter().copied().collect();
+    let names = net_names(&[&o.mapped, &st.opt]);
+    let crit_nets: std::collections::HashSet<Bit> = tm.crit_nets.iter().copied().collect();
+    // at most 30 annealing frames (big designs: 20)
+    let maxf = if n > 3000 { 20 } else { 30 };
+    let hl = pl.history.len();
+    let frames: Vec<usize> = if hl <= maxf { (0..hl).collect() } else { (0..maxf).map(|i| i * (hl - 1) / (maxf - 1)).collect() };
+    let mut verilog = veryl_eda::output::to_verilog(&o.mapped);
+    verilog += &asic::lib::verilog_models();
+    Ok(json!({
+        "ok": true,
+        "top": top,
+        "map": netlist_json(&o.mapped),
+        "lib": asic::lib::LIB.iter().map(|c| json!({ "name": c.name, "ins": c.ins, "width": c.width, "delay": c.delay, "load": c.load, "setup": c.setup, "area": asic::lib::area(c.name), "verilog": c.verilog })).collect::<Vec<_>>(),
+        "counts": o.counts,
+        "area": o.area,
+        "die": { "w": pl.w, "h": pl.h, "rows": pl.rows, "sites": pl.sites, "util": pl.util, "row_h": asic::lib::ROW_H, "site_w": asic::lib::SITE_W },
+        "cells": o.mapped.cells.iter().enumerate().map(|(i, c)| json!([pl.pos[i].0, pl.pos[i].1, asic::lib::cell(&c.typ).width, (tm.arrival[i] * 1000.0).round() / 1000.0, crit.contains(&i) as u8])).collect::<Vec<_>>(),
+        "pins": pl.pins.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "x": p.x, "y": p.y })).collect::<Vec<_>>(),
+        "history": frames.iter().map(|&k| { let f = &pl.history[k]; json!({ "temp": f.temp, "cost": f.cost, "accept": f.accept, "pos": f.pos.iter().flat_map(|p| [p.0, p.1]).collect::<Vec<_>>() }) }).collect::<Vec<_>>(),
+        "route": {
+            "gx": rt.gx, "gy": rt.gy, "cap": asic::route::CAP, "iters": rt.iters, "wirelength": rt.wirelength, "vias": rt.vias, "overflow": rt.overflow,
+            "nets": rt.nets.iter().map(|r| json!({
+                "name": names.get(&r.bit).cloned().unwrap_or_else(|| match r.bit { Bit::W(w) => format!("n{}", w), _ => "const".into() }), "clock": r.clock, "len": r.length, "vias": r.vias, "crit": crit_nets.contains(&r.bit),
+                "segs": r.segs.iter().flat_map(|s| [s.0, s.1, s.2, s.3]).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        },
+        "timing": { "period": tm.period, "fmax": tm.fmax, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>() },
+        "verilog": verilog,
+        "def": asic::def(&o),
+    }))
+}
+
 fn pnr(v: &Value) -> R<Value> {
     let (top, lib_out) = synth_netlists(v)?;
     let (st, mapped) = lib_out;
@@ -220,6 +270,7 @@ pub fn dispatch(v: &Value) -> R<Value> {
         }
         "synth" => synth(v),
         "pnr" => pnr(v),
+        "asic" => asic(v),
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),
         c => Err(format!("unknown command '{}'", c)),
     }

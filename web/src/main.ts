@@ -267,7 +267,7 @@ async function boot(): Promise<void> {
     $<HTMLButtonElement>('run').disabled = false;
     $<HTMLButtonElement>('synth').disabled = false;
     synth = new SynthOverlay(core);
-    if (/[#&]synth=1/.test(hash)) synth.open(st!.files, st!.ex.synth, st!.ex.pcf);
+    if (/[#&]synth=1/.test(hash)) synth.open(st!.files, st!.ex.synth, st!.ex.pcf, /[#&]target=asic/.test(hash) ? 'asic' : undefined);
     refreshTops();
   } catch (e) {
     status('WebAssembly 載入失敗');

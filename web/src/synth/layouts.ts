@@ -1,6 +1,7 @@
 // Scenes for the synthesis stages: instance hierarchy and levelized netlists.
 
 import type { Box, Line, Scene, Text } from '../view/canvas';
+import { stdColor } from './asic';
 import { isOut, JNetlist, Leveled, lutInputs } from './model';
 
 export const TYPE_COLOR: Record<string, string> = {
@@ -12,6 +13,7 @@ const LUT_COLOR = ['#5a6b80', '#8fbcbb', '#88c0d0', '#81a1c1', '#5e81ac'];
 export function cellColor(t: string, inputs = 4): string {
   if (t.includes('DFF')) return '#d08770';
   if (t === 'SB_LUT4') return LUT_COLOR[inputs];
+  if (/^[A-Z]/.test(t) && !t.startsWith('SB_') && t !== 'PI' && t !== 'PO') return stdColor(t); // vlib standard cell
   return TYPE_COLOR[t] ?? '#9fb2c8';
 }
 
