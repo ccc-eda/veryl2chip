@@ -38,6 +38,9 @@ done
 if command -v nextpnr-ice40 > /dev/null && command -v icebox_vlog > /dev/null; then
     echo "== FPGA flow (iCE40)"
     ./fpga/flow.sh | grep -E "LC:|Max frequency|PASS|FAIL|bitstream"
+    echo "== own place & route (--pnr veryl): routed bitstream vs netlist"
+    ./fpga/pnr_test.sh
+    PNR=veryl ./fpga/flow.sh | grep -E "veryl pnr|PASS|FAIL"
 else
     echo "== skipping FPGA flow: nextpnr-ice40 / icestorm not installed"
 fi

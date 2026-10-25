@@ -17,13 +17,18 @@ done
 DESIGNS=${DESIGNS:-"adder:Adder max3:Max3 alu_pkg:AluUnit gen_rev:BitRev gen_rev:GrayConv
 seq101:Seq101:i_clk:i_rst:0 pkt_reg:PktReg:i_clk:i_rst:0 ram:Ram:i_clk:i_rst:0
 features:Shifter features:Ranges features:Counter:i_clk:i_rst:1 features:Top:i_clk:i_rst:1
-pnr_tests:AccTest:i_clk:i_rst:0"}
+pnr_tests:AccTest:i_clk:i_rst:0 rv32i+soc:RiscvSoc:i_clk:i_rst:0"}
 fail=0
 for d in $DESIGNS; do
     IFS=: read -r f m clk rst act <<< "$d"
-    src="$EX/$f.veryl"; [ -f "$src" ] || src="../examples/$f.veryl"
-    $BIN --top "$m" --ice40 -o $B/$m.json --verilog $B/$m.v "$src" > /dev/null
-    info=$($BIN --top "$m" --ice40 --pnr veryl --asc $B/$m.asc --bin $B/$m.bin "$src" | grep "veryl pnr" | sed 's/^ *veryl pnr: //')
+    srcs=()
+    for part in ${f//+/ }; do
+        if [ -f "$EX/$part.veryl" ]; then srcs+=("$EX/$part.veryl"); else srcs+=("../examples/$part.veryl"); fi
+    done
+    pcf=()
+    [ "$m" = RiscvSoc ] && pcf=(--pcf ../examples/icebreaker.pcf)
+    $BIN --top "$m" --ice40 -o $B/$m.json --verilog $B/$m.v "${srcs[@]}" > /dev/null
+    info=$($BIN --top "$m" --ice40 --pnr veryl ${pcf[@]+"${pcf[@]}"} --asc $B/$m.asc --bin $B/$m.bin "${srcs[@]}" | grep "veryl pnr" | sed 's/^ *veryl pnr: //')
     args=()
     [ -n "${clk:-}" ] && args+=(--clock "$clk")
     [ -n "${rst:-}" ] && args+=(--reset "$rst:$act")

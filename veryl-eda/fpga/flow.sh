@@ -3,6 +3,7 @@
 #   1. veryl-eda: synthesis + iCE40 mapping, nextpnr-ice40 place & route, icepack
 #   2. simulate the mapped netlist (yosys iCE40 cell models)
 #   3. turn the routed bitstream back into Verilog (icebox_vlog) and simulate it
+# PNR=veryl uses veryl-eda's own place & route instead of nextpnr-ice40.
 # Program a board with: iceprog build/soc.bin
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -10,9 +11,10 @@ B=build
 mkdir -p $B
 EX=../../examples/src
 PCF=${PCF:-../examples/icebreaker.pcf}
+PNR=${PNR:-nextpnr}
 
 (cd .. && cargo build --release -q)
-../target/release/veryl-eda --top RiscvSoc --ice40 --pcf "$PCF" \
+../target/release/veryl-eda --top RiscvSoc --ice40 --pnr "$PNR" --pcf "$PCF" \
     -o $B/soc.json --verilog $B/soc_mapped.v --asc $B/soc.asc --bin $B/soc.bin \
     $EX/rv32i.veryl ../examples/soc.veryl | grep -v "^  port"
 

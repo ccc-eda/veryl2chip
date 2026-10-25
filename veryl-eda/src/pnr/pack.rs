@@ -214,20 +214,23 @@ pub fn pack(nl: &Netlist) -> R<Packed> {
             if !ext {
                 match nxt { Some(n) => { cur = n; continue } None => break }
             }
-            // the carry-out is needed by ordinary logic
+            // the carry-out is needed by ordinary logic: read it out through
+            // the next LC's LUT; a sum LUT that was going there moves to its
+            // own LC and reads the carry back from routing (the chain itself
+            // stays unbroken, which keeps the carry path fast)
             let fo = cx.fresh();
-            cx.rewire(co, fo, &keep);
             for pb in port_bits.iter_mut() { if pb.2 == co { pb.2 = fo; } }
-            match (nxt, nsum) {
-                (Some(n), None) => { pass_out = Some(fo); cur = n; }
-                _ => {
+            match nxt {
+                Some(n) => {
+                    cx.rewire(co, fo, &move |u, _| u == n);
+                    if let Some(u) = nsum { sum_lut.remove(&n); taken.remove(&u); }
+                    pass_out = Some(fo);
+                    cur = n;
+                }
+                None => {
+                    cx.rewire(co, fo, &|_, _| false);
                     chain.lcs.push(lcs.len());
                     lcs.push(Lc { in3_chain: true, init: PASS[3], out: Some(fo), ..Default::default() });
-                    if let Some(n) = nxt {
-                        // split: the rest becomes a new chain fed from `fo`
-                        cx.rewire(co, fo, &|_, _| false);
-                        work.push_front(n);
-                    }
                     break;
                 }
             }

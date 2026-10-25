@@ -23,6 +23,8 @@ cd veryl-eda
 cargo test --release               # synthesizes examples/, runs their testbenches on the gate netlist
 ./test.sh                          # + yosys read_json check + FPGA flow + formal equivalence vs `veryl build` output
 ./fpga/flow.sh                     # RISC-V SoC -> iCE40 bitstream (nextpnr-ice40, icepack) + post-route simulation
+PNR=veryl ./fpga/flow.sh           # same with veryl-eda's own place & route (src/pnr/)
+./fpga/pnr_test.sh                 # own P&R on every design: routed bitstream vs netlist co-simulation + icetime Fmax
 cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--ice40 [--pcf P] [--asc A] [--bin B]] a.veryl ...
 ```
 
@@ -30,6 +32,7 @@ cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--ice40 [
 - Equivalence checking needs the oss-cad-suite yosys with the slang plugin (`YOSYS_SLANG`, default `/Users/Shared/ccc/oss-cad-suite/bin/yosys`); Homebrew `yosys` cannot parse veryl's enum casts/functions. Gold modules are named `examples_<Module>`.
 - `veryl-eda/examples/features.veryl` also has `#[test]` testbenches (run them with veryl-sim / `veryl test`). New synthesis test designs go in `veryl-eda/examples/` and the `DESIGNS` list in `veryl-eda/test.sh` (copied into the gold Veryl project, so module names must not clash with `examples/src`).
 - FPGA target: iCE40UP5K-SG48 with iCEBreaker pins (`veryl-eda/examples/icebreaker.pcf`); `RiscvSoc` (`veryl-eda/examples/soc.veryl`) wraps `RiscvCore` from `examples/src/rv32i.veryl` and needs both files. `fpga/flow.sh` checks the routed bitstream by converting it back with `icebox_vlog` (its output needs the perl fix-up in the script for iverilog).
+- Own P&R (`--pnr veryl`, `src/pnr/`) reads IceStorm's `chipdb-5k.txt` (`VERYL_EDA_CHIPDB`, else oss-cad-suite's `share/icebox`). Correctness oracle: `fpga/cosim.py` (icebox_vlog of the routed `.asc` vs the mapped netlist, random inputs). `icebox_vlog` ignores column buffers / IO electrical bits, so those are written exactly as nextpnr does (incl. the UP5K tile 25,14 exception for the DSP/IPCON `Cascade.*_inmux02_5` defaults). `icetime` needs `-C <chipdb>`.
 - The optimizer assumes flip-flops power up at 0 (true on iCE40); never-written registers become constants. Equivalence checks therefore use `-set-init-zero`.
 
 ## Veryl 0.22.0 quirks (verified against `veryl check`/`veryl test`)

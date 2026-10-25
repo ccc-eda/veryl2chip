@@ -1,16 +1,17 @@
 # veryl-eda
 
-Veryl 的邏輯合成與 FPGA 流程（類似 yosys `synth` / `synth_ice40`，再接 nextpnr）：以
+Veryl 的邏輯合成與 FPGA 流程（類似 yosys `synth` / `synth_ice40` 加上 nextpnr）：以
 [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) 為前端，把 Veryl 設計展開成**扁平的閘級 netlist**，
-可再映射成 iCE40 的 `SB_LUT4` / `SB_CARRY` / `SB_DFF*`，交給 nextpnr-ice40 佈局繞線、icepack 產生位元流。
+可再映射成 iCE40 的 `SB_LUT4` / `SB_CARRY` / `SB_DFF*`，再用**自己的佈局繞線**（`--pnr veryl`）或 nextpnr-ice40 產生 `.asc`，icepack 產生位元流。
 
     cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--list]
-                           [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]]
+                           [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
+                                    [--pnr nextpnr|veryl] [--seed N] [-v]]
                            a.veryl b.veryl ...
 
 - 預設合成最後一個**非** `#[test]` 的 module；`--top` 可指定。會印出 port 與 cell 統計（類似 yosys `stat`）。
 - `-o` 輸出 yosys JSON（`read_json` 可讀）；`--verilog` 輸出閘級 Verilog（iverilog 可模擬）。
-- `--ice40` 做 iCE40 技術映射；加 `--asc` / `--bin` 會再呼叫 `nextpnr-ice40`（時序不過會失敗）與 `icepack`。
+- `--ice40` 做 iCE40 技術映射；加 `--asc` / `--bin` 會再做佈局繞線（預設 `nextpnr-ice40`，時序不過會失敗；`--pnr veryl` 用自己的）與 `icepack`。
 - `./test.sh`：單元測試 + 合成全部範例 + yosys `read_json; check -assert` + FPGA 流程 +
   對 `veryl build` 產生的 SystemVerilog 做**形式等價驗證**（需要有 slang 前端的 yosys，例如 oss-cad-suite，路徑用 `YOSYS_SLANG` 指定）。
 
@@ -41,6 +42,27 @@ Veryl 的邏輯合成與 FPGA 流程（類似 yosys `synth` / `synth_ice40`，�
 | 時序 | 約 17 MHz（板上時脈 12 MHz，通過） |
 | 映射後 netlist 模擬（yosys iCE40 cell 模型） | 第 70 個 cycle LED = 55 |
 | **繞線後位元流**模擬（`icebox_vlog` 轉回 Verilog） | 第 70 個 cycle LED = 55 |
+
+## 自己的佈局繞線（`--pnr veryl`，`src/pnr/`）
+只針對 iCE40UP5K，架構資料來自 IceStorm 的 `chipdb-5k.txt`（找不到時用 `VERYL_EDA_CHIPDB` 指定）。
+| 檔案 | 內容 |
+|---|---|
+| `chipdb.rs` | 讀晶片資料庫：tile 與設定位元表、繞線圖（10 萬條線、120 萬個 pip，每個 pip = 目的線輸入 mux 的位元樣式）、腳位、全域緩衝、IE/REN、column buffer |
+| `pack.rs` | LUT/進位/正反器 → 邏輯單元（LC）；進位鏈完整保留：訊號當 carry-in 時加 feed-in LC，carry-out 被一般邏輯使用時由下一個 LC 的 LUT 讀出 |
+| `place.rs` | 模擬退火（線長 HPWL）；同一 tile 的正反器必須同 clock / reset / 邊緣；進位鏈放在整欄邏輯 tile、從 LC 0 開始 |
+| `route.rs` | PathFinder 協商擁塞 + A*；clock 與 reset 走全域網路（來源 → `fabout` → `glb_netwk_N` → 各 tile 的 clk / s_r mux） |
+| `mod.rs` | 產生 `.asc`：LC 位元（LUT 位元排列、carry、DFF、set/reset）、進位鏈連接、IO、column buffer、DSP 預設值 |
+
+驗證：
+- `fpga/cosim.py`：把**我們繞好的位元流**用 `icebox_vlog` 轉回 Verilog，和映射後的 netlist 用相同隨機輸入逐 cycle 比對輸出；改壞一個 LUT 位元會被抓到。
+- `fpga/pnr_test.sh`：14 個設計全部 1000 cycle 輸出相同，並用 `icetime`（IceStorm 時序分析）量 Fmax。
+- 非邏輯 tile（IO 設定、column buffer、DSP/IPCON 預設）與 nextpnr 對同一 pcf 的輸出逐位元相同。
+- `PNR=veryl fpga/flow.sh`：RISC-V SoC 用自己的佈局繞線，繞線後位元流模擬 LED = 55。
+
+| 設計 | LC | Fmax（icetime） |
+|---|---|---|
+| RiscvSoc（自己的 P&R） | 1252 / 5280 | 15.6 MHz（板上 12 MHz，通過） |
+| RiscvSoc（nextpnr） | 1279 / 5280 | 17.3 MHz |
 
 ## 流程
 | 檔案 | 內容 |
@@ -74,7 +96,8 @@ module / 參數（`#(param ..)`、`const`、inst 參數覆寫）/ port / `var` /
 
 ## 尚未支援
 interface/modport、`inout`、遞迴、非常數的除法、latch（不完整賦值的 always_comb 會報組合迴路）、
-寬度 > 128 bit 的常數、Block RAM（`SB_RAM40_4K`）推論、PLL、多時脈域的 netsim；佈局繞線使用 nextpnr（不是自己實作）。
+寬度 > 128 bit 的常數、Block RAM（`SB_RAM40_4K`）推論、PLL、多時脈域的 netsim；
+自己的佈局繞線：只支援 UP5K，沒有時序導向的擺放/繞線（目前以線長為準）、沒有 LUT 輸入腳交換。
 
 ## 驗證結果（`./test.sh`）
 | 設計 | 對 `veryl build` 的等價驗證 |
