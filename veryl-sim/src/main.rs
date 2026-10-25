@@ -70,6 +70,9 @@ fn main() {
         println!("=== simulating {} ===", t);
         let mut e = elab::Elab::new(HashMap::new());
         e.lib = lib.iter().map(|(k, v)| (k.clone(), elab::ModInfo { decl: v.decl, is_test: v.is_test })).collect();
+        for p in &parsers {
+            for l in &p.veryl.veryl_list { elab::collect_packages(&l.description_group, &mut e); }
+        }
         if let Err(msg) = e.elab_module(decl, "", &HashMap::new()) {
             eprintln!("elaboration error: {}", msg);
             std::process::exit(1);

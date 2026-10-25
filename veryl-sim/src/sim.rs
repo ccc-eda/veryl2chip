@@ -5,6 +5,7 @@ use crate::value::*;
 use std::cell::Cell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::collections::HashMap;
 use std::io::Write;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -20,6 +21,11 @@ pub struct Signal {
     pub signed: bool,
     pub kind: Kind,
     pub val: Val,
+    /// for arrays: number of elements (this signal is element 0, elements are
+    /// the following `n` signals, each with width `w`)
+    pub arr: Option<u32>,
+    /// for structs: (field name, bit offset, width)
+    pub fields: Vec<(String, u32, u32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -36,7 +42,14 @@ pub enum Stmt {
     Switch(Vec<(Vec<Expr>, Vec<Stmt>)>, Vec<Stmt>),
     For { var: usize, from: Expr, to: Expr, incl: bool, body: Vec<Stmt> },
     Call(String, Vec<Expr>),
+    Return(Expr),
     Wait(usize, Expr), // only legal in `initial`
+}
+
+pub struct FuncDef {
+    pub params: Vec<usize>,
+    pub ret: Option<usize>,
+    pub body: Vec<Stmt>,
 }
 
 pub enum Proc {
@@ -45,6 +58,7 @@ pub enum Proc {
     ClockGen { sig: usize, half: u64 },
 }
 
+#[derive(Clone)]
 pub enum Op {
     Exec(Stmt),
     Wait(usize, Expr),
@@ -62,12 +76,17 @@ pub struct InitState {
 
 pub struct Sim {
     pub sigs: Vec<Signal>,
+    pub funcs: HashMap<String, FuncDef>,
     pub time: u64,
     pub changed: bool,
     pub nba: Vec<(usize, u32, u32, Val)>,
     pub finished: bool,
     pub fails: u32,
     pub rng: Cell<u64>,
+    /// return value / abort flag of the innermost user-function frame
+    pub ret_val: Option<Val>,
+    pub ret_now: bool,
+    pub in_call: Vec<String>,
 }
 
 fn bitv(v: &Val) -> u8 {
@@ -76,11 +95,11 @@ fn bitv(v: &Val) -> u8 {
 
 impl Sim {
     pub fn new() -> Self {
-        Sim { sigs: vec![], time: 0, changed: false, nba: vec![], finished: false, fails: 0, rng: Cell::new(0x2545F4914F6CDD1D) }
+        Sim { sigs: vec![], funcs: HashMap::new(), time: 0, changed: false, nba: vec![], finished: false, fails: 0, rng: Cell::new(0x2545F4914F6CDD1D), ret_val: None, ret_now: false, in_call: vec![] }
     }
 
     // ---------- expression evaluation ----------
-    pub fn eval(&self, e: &Expr, ctx: u32) -> Val {
+    pub fn eval(&mut self, e: &Expr, ctx: u32) -> Val {
         match e {
             Expr::Num(v) => *v,
             Expr::AllBit(b) => {
@@ -93,6 +112,12 @@ impl Sim {
                 Val::new((s.len().clamp(1, 16) * 8) as u32, v)
             }
             Expr::Sig(i) => self.sigs[*i].val,
+            Expr::Elem(base, idx) => {
+                let n = self.sigs[*base].arr.unwrap_or(1);
+                let idx = self.eval(idx, 0);
+                if idx.x != 0 || idx.v >= n as u128 { return Val::allx(self.sigs[*base].w); }
+                self.sigs[*base + idx.v as usize].val
+            }
             Expr::Index(b, i) => {
                 let base = self.eval(b, 0);
                 let idx = self.eval(i, 0);
@@ -158,7 +183,10 @@ impl Sim {
         }
     }
 
-    fn eval_call(&self, name: &str, args: &[Expr]) -> Val {
+    fn eval_call(&mut self, name: &str, args: &[Expr]) -> Val {
+        if !name.starts_with('$') {
+            return self.call_user(name, args);
+        }
         match name {
             "$clog2" => {
                 let v = self.eval(&args[0], 0);
@@ -180,7 +208,38 @@ impl Sim {
         }
     }
 
-    fn eval_un(&self, op: &str, a: &Expr, ctx: u32) -> Val {
+    /// Call a user-declared function: bind args to parameter signals, run the
+    /// body, and return the value assigned by `return`.
+    fn call_user(&mut self, name: &str, args: &[Expr]) -> Val {
+        if self.in_call.iter().any(|n| n == name) {
+            eprintln!("warning: recursion into function '{}' is not supported", name);
+            return Val::allx(1);
+        }
+        let Some(f) = self.funcs.get(name) else { return Val::allx(1) };
+        let (params, ret, body) = (f.params.clone(), f.ret, f.body.clone());
+        // evaluate args first, then bind (allows nested calls of other functions)
+        let mut vals = vec![];
+        for a in args { vals.push(self.eval(a, 0)); }
+        for (i, v) in vals.iter().enumerate() {
+            if let Some(p) = params.get(i) {
+                let w = self.sigs[*p].w;
+                self.write_bits(*p, 0, w, v.resize(w));
+            }
+        }
+        self.in_call.push(name.to_string());
+        self.ret_val = None;
+        self.ret_now = false;
+        self.exec(&body, false);
+        self.ret_now = false;
+        self.in_call.pop();
+        let rw = ret.map(|r| self.sigs[r].w).unwrap_or(1);
+        match self.ret_val.take() {
+            Some(v) => v.resize(rw),
+            None => Val::allx(rw),
+        }
+    }
+
+    fn eval_un(&mut self, op: &str, a: &Expr, ctx: u32) -> Val {
         let v = self.eval(a, ctx);
         let m = mask(v.w);
         match op {
@@ -214,7 +273,7 @@ impl Sim {
 
     fn inv1(r: Val) -> Val { if r.x != 0 { r } else { Val::bit(r.v == 0) } }
 
-    fn eval_bin(&self, op: &str, a: &Expr, b: &Expr, ctx: u32) -> Val {
+    fn eval_bin(&mut self, op: &str, a: &Expr, b: &Expr, ctx: u32) -> Val {
         match op {
             "&&" | "||" => {
                 let (x, y) = (self.eval(a, 0).truth(), self.eval(b, 0).truth());
@@ -314,26 +373,35 @@ impl Sim {
     }
 
     // ---------- assignment ----------
-    /// Returns (bit offset, width) of the target, or None if an index is x/out of range.
-    fn target(&self, lv: &LValue) -> Option<(u32, u32)> {
+    /// Returns (sig, bit offset, width) of the target, or None if an index is x/out of range.
+    fn target(&mut self, lv: &LValue) -> Option<(usize, u32, u32)> {
         let sw = self.sigs[lv.sig].w;
+        let base = |s: usize, lo: u32, w: u32| Some((s, lo, w));
         match &lv.sel {
-            Sel::All => Some((0, sw)),
+            Sel::All => base(lv.sig, 0, sw),
             Sel::Bit(i) => {
                 let i = self.eval(i, 0);
-                if i.x != 0 || i.v >= sw as u128 { None } else { Some((i.v as u32, 1)) }
+                if i.x != 0 || i.v >= sw as u128 { None } else { base(lv.sig, i.v as u32, 1) }
             }
             Sel::Range(h, l) => {
                 let (h, l) = (self.eval(h, 0), self.eval(l, 0));
-                if h.x != 0 || l.x != 0 || h.v < l.v || h.v >= sw as u128 { None } else { Some((l.v as u32, (h.v - l.v + 1) as u32)) }
+                if h.x != 0 || l.x != 0 || h.v < l.v || h.v >= sw as u128 { None } else { base(lv.sig, l.v as u32, (h.v - l.v + 1) as u32) }
             }
             Sel::Plus(b, w) => {
                 let (b, w) = (self.eval(b, 0), self.eval(w, 0));
-                if b.x != 0 || w.x != 0 || b.v + w.v > sw as u128 { None } else { Some((b.v as u32, w.v as u32)) }
+                if b.x != 0 || w.x != 0 || b.v + w.v > sw as u128 { None } else { base(lv.sig, b.v as u32, w.v as u32) }
             }
             Sel::Minus(b, w) => {
                 let (b, w) = (self.eval(b, 0), self.eval(w, 0));
-                if b.x != 0 || w.x != 0 || b.v + 1 < w.v || b.v >= sw as u128 { None } else { Some(((b.v + 1 - w.v) as u32, w.v as u32)) }
+                if b.x != 0 || w.x != 0 || b.v + 1 < w.v || b.v >= sw as u128 { None } else { base(lv.sig, (b.v + 1 - w.v) as u32, w.v as u32) }
+            }
+            Sel::Elem(idx) => {
+                let n = self.sigs[lv.sig].arr.unwrap_or(1);
+                let i = self.eval(idx, 0);
+                if i.x != 0 || i.v >= n as u128 { None } else {
+                    let es = lv.sig + i.v as usize;
+                    base(es, 0, self.sigs[es].w)
+                }
             }
         }
     }
@@ -351,9 +419,9 @@ impl Sim {
     }
 
     pub fn assign(&mut self, lv: &LValue, e: &Expr, nb: bool) {
-        let Some((lo, w)) = self.target(lv) else { return };
+        let Some((sig, lo, w)) = self.target(lv) else { return };
         let v = self.eval(e, w).resize(w);
-        if nb { self.nba.push((lv.sig, lo, w, v)); } else { self.write_bits(lv.sig, lo, w, v); }
+        if nb { self.nba.push((sig, lo, w, v)); } else { self.write_bits(sig, lo, w, v); }
     }
 
     pub fn apply_nba(&mut self) {
@@ -364,9 +432,14 @@ impl Sim {
     // ---------- statements ----------
     pub fn exec(&mut self, body: &[Stmt], nb: bool) {
         for s in body {
-            if self.finished { return; }
+            if self.finished || self.ret_now { return; }
             match s {
                 Stmt::Assign(lv, e) => self.assign(lv, e, nb),
+                Stmt::Return(e) => {
+                    let v = self.eval(e, 0);
+                    self.ret_val = Some(v);
+                    self.ret_now = true;
+                }
                 Stmt::If(arms, els) => {
                     let mut hit = false;
                     for (c, b) in arms {
@@ -415,7 +488,14 @@ impl Sim {
                         i += 1;
                     }
                 }
-                Stmt::Call(name, args) => self.call(name, args),
+                Stmt::Call(name, args) => {
+                    if name.starts_with('$') {
+                        self.call(name, args);
+                    } else {
+                        let vals: Vec<Expr> = args.to_vec();
+                        self.call_user(name, &vals);
+                    }
+                }
                 Stmt::Wait(..) => eprintln!("warning: clk.next() is only valid inside `initial`"),
             }
         }
@@ -445,7 +525,7 @@ impl Sim {
         }
     }
 
-    pub fn format(&self, args: &[Expr]) -> String {
+    pub fn format(&mut self, args: &[Expr]) -> String {
         let mut out = String::new();
         let Some(Expr::Str(f)) = args.first() else {
             return args.iter().map(|e| self.eval(e, 0).fmt_dec()).collect::<Vec<_>>().join(" ");
@@ -602,15 +682,21 @@ impl Design {
             if st.pc >= st.ops.len() { st.done = true; return; }
             let pc = st.pc;
             st.pc += 1;
-            match &self.inits[k].ops[pc] {
-                Op::Exec(s) => { self.sim.exec(std::slice::from_ref(s), false); }
-                Op::Jmp(t) => { self.inits[k].pc = *t; }
+            let op = self.inits[k].ops[pc].clone();
+            match op {
+                Op::Exec(s) => {
+                    self.sim.exec(std::slice::from_ref(&s), false);
+                    // settle combinational logic so later reads in the same
+                    // `initial` block see up-to-date values (delta cycles)
+                    self.settle();
+                }
+                Op::Jmp(t) => { self.inits[k].pc = t; }
                 Op::JmpIfNot(c, t) => {
-                    if self.sim.eval(c, 0).truth() != Some(true) { self.inits[k].pc = *t; }
+                    if self.sim.eval(&c, 0).truth() != Some(true) { self.inits[k].pc = t; }
                 }
                 Op::Wait(clk, n) => {
-                    let n = self.sim.eval(n, 0).v;
-                    if n > 0 { self.inits[k].wait = Some((*clk, n)); return; }
+                    let n = self.sim.eval(&n, 0).v;
+                    if n > 0 { self.inits[k].wait = Some((clk, n)); return; }
                 }
             }
         }

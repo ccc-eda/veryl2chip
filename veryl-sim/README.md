@@ -19,7 +19,9 @@
 module / 參數 (`#(param ..)`, `const`) / port / `var` / `let` / `assign` / `always_comb` / `always_ff`
 (含 `if_reset`、同步/非同步 reset、posedge/negedge) / `if` / `case` / `switch` / `for` / `inst`（含參數覆寫、階層）/
 `initial`（`clk.next(n)`、`rst.assert(clk)`）/ `$tb::clock_gen`、`$tb::reset_gen` /
+package / enum（`Pkg::Enum::Member`）/ package const / struct（欄位存取、整體賦值；第一個欄位在最高位，與 SystemVerilog 相同）/ 一維陣列 /
+使用者 function（不可遞迴）/ generate for、generate if / `import Pkg::*` /
 `$display $write $info $warning $error $fatal $assert $finish $time $clog2 $signed $unsigned $bits $random`。
 
 ## 尚未支援
-interface/modport、package、struct/enum、陣列、使用者 function、generate、`case`/`switch` 運算式、`inout`、寬度 > 128 bit。
+interface/modport、generate 的 `rev`/`step`、遞迴、`inout`、寬度 > 128 bit。

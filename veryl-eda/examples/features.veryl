@@ -129,3 +129,143 @@ module Top (
         o_q  : o_b,
     );
 }
+
+// ---------------- testbenches (veryl test / veryl-sim) ----------------
+
+#[test(test_shifter)]
+module TestShifter {
+    var a : logic<8>;
+    var n : logic<3>;
+    var op: logic<2>;
+    var y : logic<8>;
+    var sl: logic<4>;
+
+    inst u: Shifter #(W: 8) (
+        i_a : a ,
+        i_n : n ,
+        i_op: op,
+        o_y : y ,
+        o_sl: sl,
+    );
+
+    initial {
+        a  = 8'h96;
+        n  = 3'd3;
+        op = 2'd0;
+        $assert(y == 8'hb0, "<<");
+        op = 2'd1;
+        $assert(y == 8'h12, ">>");
+        op = 2'd2;
+        $assert(y == 8'hf2, ">>> keeps the sign");
+        op = 2'd3;
+        $assert(y == 8'h69, "nibble swap");
+        $assert(sl == 4'h2, "variable +: slice");
+        n = 3'd0;
+        $assert(sl == 4'h6, "+: slice at 0");
+        $finish();
+    }
+}
+
+#[test(test_funcs)]
+module TestFuncs {
+    var x: logic<8>;
+    var k: logic<8>;
+    var c: logic<4>;
+    var r: logic<4>;
+    var m: logic<16>;
+    var p: FeatPkg::Pair;
+
+    inst u: Funcs (
+        i_x: x,
+        i_k: k,
+        o_c: c,
+        o_r: r,
+        o_m: m,
+        o_p: p,
+    );
+
+    initial {
+        x = 8'hb5;
+        k = 8'd20;
+        $assert(c == 4'd5, "popcount");
+        $assert(r == 4'd15, "clamp high");
+        $assert(m == 16'd3620, "multiply");
+        $assert(p == 8'h4a, "struct fields");
+        k = 8'd3;
+        $assert(r == 4'd3, "clamp pass-through");
+        $assert(m == 16'd543, "multiply 2");
+        $assert(p.lo == 4'h5, "struct field read");
+        k = 8'd0;
+        $assert(r == 4'd1, "clamp zero");
+        $finish();
+    }
+}
+
+#[test(test_ranges)]
+module TestRanges {
+    var v : logic<6>;
+    var cl: logic<2>;
+    var rv: logic<6>;
+
+    inst u: Ranges (
+        i_v : v ,
+        o_cl: cl,
+        o_rv: rv,
+    );
+
+    initial {
+        v = 6'd0;
+        $assert(cl == 2'd0, "0 in 0..10");
+        $assert(rv == 6'h2a, "reverse, odd bits inverted (0)");
+        v = 6'd9;
+        $assert(cl == 2'd0, "9 in 0..10");
+        v = 6'd10;
+        $assert(cl == 2'd1, "10 in 10..=20");
+        v = 6'd20;
+        $assert(cl == 2'd1, "20 in 10..=20");
+        v = 6'd22;
+        $assert(cl == 2'd2, "22 listed");
+        v = 6'd23;
+        $assert(cl == 2'd3, "23 default");
+        v = 6'h3f;
+        $assert(rv == 6'h15, "reverse, odd bits inverted (all ones)");
+        v = 6'h20;
+        $assert(rv == 6'h2b, "reverse, odd bits inverted (msb)");
+        $finish();
+    }
+}
+
+#[test(test_counters)]
+module TestCounters {
+    inst clk: $tb::clock_gen;
+
+    var rst: reset_sync_high;
+    var en : logic;
+    var a  : logic<4>;
+    var b  : logic<4>;
+
+    inst u: Top (
+        i_clk: clk,
+        i_rst: rst,
+        i_en : en ,
+        o_a  : a  ,
+        o_b  : b  ,
+    );
+
+    initial {
+        rst = 1;
+        en  = 1;
+        clk.next(2);
+        $assert(a == 4'd3, "c0 reset value (INIT = 3)");
+        $assert(b == 4'd5, "c1 reset value (INIT = 5)");
+        rst = 0;
+        clk.next(4);
+        $assert(a == 4'd7, "c0 counts while enabled");
+        $assert(b == 4'd5, "c1 holds while disabled");
+        en = 0;
+        clk.next(3);
+        $assert(a == 4'd7, "c0 holds");
+        $assert(b == 4'd8, "c1 counts");
+        $finish();
+    }
+}

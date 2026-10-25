@@ -10,6 +10,7 @@ pub enum Sel {
     Range(Box<Expr>, Box<Expr>), // [hi:lo]
     Plus(Box<Expr>, Box<Expr>),  // [base +: width]
     Minus(Box<Expr>, Box<Expr>), // [base -: width]
+    Elem(Box<Expr>),             // array element [idx]
 }
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,7 @@ pub enum Expr {
     AllBit(u8), // '0 '1 'x : width comes from context
     Str(String),
     Sig(usize),
+    Elem(usize, Box<Expr>), // array element: sig = first element
     Index(Box<Expr>, Box<Expr>),
     Slice(Box<Expr>, Box<Expr>, Box<Expr>, u8), // 0 = ':', 1 = '+:', 2 = '-:'
     Un(String, Box<Expr>),
@@ -35,19 +37,23 @@ pub enum Expr {
 
 pub enum Res {
     Sig(usize),
+    Arr(usize), // array: sig of element 0
     Const(Val),
+    Fn(String),
 }
 
-pub type Resolver<'a> = &'a dyn Fn(&str) -> Option<Res>;
+pub type Resolver<'a> = &'a dyn Fn(&[String]) -> Option<Res>;
+pub type Fielder<'a> = &'a dyn Fn(usize, &str) -> Option<(u32, u32)>;
 
 pub struct P<'a> {
     pub t: &'a [String],
     pub i: usize,
     pub r: Resolver<'a>,
+    pub f: Fielder<'a>,
 }
 
-pub fn parse_expr(toks: &[String], r: Resolver) -> Result<Expr, String> {
-    let mut p = P { t: toks, i: 0, r };
+pub fn parse_expr(toks: &[String], r: Resolver, f: Fielder) -> Result<Expr, String> {
+    let mut p = P { t: toks, i: 0, r, f };
     let e = p.expr()?;
     if p.i != toks.len() {
         return Err(format!("unexpected token '{}' in expression `{}`", toks[p.i], toks.join(" ")));
@@ -172,17 +178,47 @@ impl<'a> P<'a> {
                 let args = if self.peek() == Some("(") { self.args()? } else { vec![] };
                 return Ok(Expr::Call(t, args));
             }
-            _ => match (self.r)(&t) {
-                Some(Res::Sig(i)) => Expr::Sig(i),
-                Some(Res::Const(v)) => Expr::Num(v),
-                None => return Err(format!("undeclared identifier '{}'", t)),
-            },
+            _ if c.is_ascii_alphabetic() || c == '_' => {
+                // read a (possibly scoped) identifier path: a, a::b, a::b::c
+                let mut path = vec![t.clone()];
+                while self.peek() == Some("::") && self.t.get(self.i + 1).map(|s| s.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false)).unwrap_or(false) {
+                    self.i += 1;
+                    path.push(self.next().unwrap());
+                }
+                match (self.r)(&path) {
+                    Some(Res::Sig(i)) => Expr::Sig(i),
+                    Some(Res::Arr(i)) => Expr::Elem(i, Box::new(Expr::Num(Val::new(32, 0)))), // replaced below by [..]
+                    Some(Res::Const(v)) => Expr::Num(v),
+                    Some(Res::Fn(name)) => {
+                        let args = self.args()?;
+                        return Ok(Expr::Call(name, args));
+                    }
+                    None => return Err(format!("undeclared identifier '{}'", path.join(""))),
+                }
+            }
+            _ => return Err(format!("unexpected token '{}' in expression", t)),
         };
+        // struct field access
+        while self.peek() == Some(".") {
+            let Expr::Sig(sig) = e else { return Err("field access on non-signal".into()) };
+            self.i += 1;
+            let fname = self.next().ok_or("expected field name after '.'")?;
+            let Some((lo, w)) = (self.f)(sig, &fname) else {
+                return Err(format!("no field '{}' on signal #{}", fname, sig));
+            };
+            e = Expr::Slice(Box::new(Expr::Sig(sig)), Box::new(Expr::Num(Val::new(32, (lo + w - 1) as u128))), Box::new(Expr::Num(Val::new(32, lo as u128))), 0);
+        }
         while self.peek() == Some("[") {
             self.i += 1;
             let a = self.expr()?;
             match self.next().as_deref() {
-                Some("]") => e = Expr::Index(Box::new(e), Box::new(a)),
+                Some("]") => {
+                    if let Expr::Elem(base, _) = e {
+                        e = Expr::Elem(base, Box::new(a));
+                    } else {
+                        e = Expr::Index(Box::new(e), Box::new(a));
+                    }
+                }
                 Some(op @ (":" | "+:" | "-:")) => {
                     let k = match op { ":" => 0, "+:" => 1, _ => 2 };
                     let b = self.expr()?;
@@ -265,6 +301,7 @@ pub fn parse_num(s: &str) -> Option<Expr> {
 pub fn to_lvalue(e: &Expr) -> Result<LValue, String> {
     match e {
         Expr::Sig(i) => Ok(LValue { sig: *i, sel: Sel::All }),
+        Expr::Elem(s, idx) => Ok(LValue { sig: *s, sel: Sel::Elem(idx.clone()) }),
         Expr::Index(b, i) => match &**b {
             Expr::Sig(s) => Ok(LValue { sig: *s, sel: Sel::Bit(i.clone()) }),
             _ => Err("unsupported assignment target".into()),

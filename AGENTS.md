@@ -28,7 +28,7 @@ cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--ice40 [
 
 - veryl-eda default top: the last non-`#[test]` module (testbench modules are not synthesizable).
 - Equivalence checking needs the oss-cad-suite yosys with the slang plugin (`YOSYS_SLANG`, default `/Users/Shared/ccc/oss-cad-suite/bin/yosys`); Homebrew `yosys` cannot parse veryl's enum casts/functions. Gold modules are named `examples_<Module>`.
-- New synthesis test designs go in `veryl-eda/examples/` and the `DESIGNS` list in `veryl-eda/test.sh` (copied into the gold Veryl project, so module names must not clash with `examples/src`).
+- `veryl-eda/examples/features.veryl` also has `#[test]` testbenches (run them with veryl-sim / `veryl test`). New synthesis test designs go in `veryl-eda/examples/` and the `DESIGNS` list in `veryl-eda/test.sh` (copied into the gold Veryl project, so module names must not clash with `examples/src`).
 - FPGA target: iCE40UP5K-SG48 with iCEBreaker pins (`veryl-eda/examples/icebreaker.pcf`); `RiscvSoc` (`veryl-eda/examples/soc.veryl`) wraps `RiscvCore` from `examples/src/rv32i.veryl` and needs both files. `fpga/flow.sh` checks the routed bitstream by converting it back with `icebox_vlog` (its output needs the perl fix-up in the script for iverilog).
 - The optimizer assumes flip-flops power up at 0 (true on iCE40); never-written registers become constants. Equivalence checks therefore use `-set-init-zero`.
 
@@ -50,8 +50,8 @@ Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax
 
 ## Limits / gotchas
 
-- Supported by the simulator: module/param/const/port/var/let/assign/always_comb/always_ff (if_reset, sync/async reset)/if/case/switch/for/inst/initial/final, packages, enums (`Pkg::Enum::Member`), structs (field access + whole-value), arrays (1-D, element sigs are contiguous: `sigs[first + i]`), user functions (non-recursive; args bound to param signals, `return` via `ret_val`/`ret_now`), generate for (loop var is a const param in a cloned scope), `import Pkg::*`.
-- Still NOT supported: interfaces/modports, generate if, `rev`/`step` in generate-for, recursion, `inout`, widths > 128 bit.
+- Supported by the simulator: module/param/const/port/var/let/assign/always_comb/always_ff (if_reset, sync/async reset)/if/case/switch/for/inst/initial/final, packages (enums `Pkg::Enum::Member`, consts `Pkg::NAME`), structs (field access + whole-value; first field is the MSB, as in SV), arrays (1-D, element sigs are contiguous: `sigs[first + i]`), user functions (non-recursive; args bound to param signals, `return` via `ret_val`/`ret_now`), generate for (loop var is a const param in a cloned scope), generate if/else and generate blocks, `import Pkg::*`.
+- Still NOT supported: interfaces/modports, `rev`/`step` in generate-for, recursion, `inout`, widths > 128 bit.
 - Testbench support is via `$tb::clock_gen` (the inst IS the clock), `$tb::reset_gen` (`rst.assert()` with no args uses the clock recorded from `inst rst: $tb::reset_gen(clk)`), `initial` blocks with `clk.next(n)`.
 - The sim settles combinational logic after every `initial` statement (delta cycles), so clock-less comb testbenches work.
 - `examples/` is a separate Veryl project (own Veryl.toml/lock); `_doc/` holds a Veryl grammar reference (`grammar.md`).

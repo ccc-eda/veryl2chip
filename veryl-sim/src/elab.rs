@@ -27,9 +27,34 @@ pub struct Scope {
     pub sigs: HashMap<String, usize>,
     pub params: HashMap<String, Val>,
     pub ports: Vec<(String, Dir, usize)>,
+    /// `import Pkg::*` style aliases: local name -> qualified name ("Pkg::Name")
+    pub imports: HashMap<String, String>,
 }
 
-pub struct TypeInfo { pub w: u32, pub signed: bool, pub kind: Kind, pub two_state: bool }
+#[derive(Default, Clone)]
+pub struct PkgDef {
+    /// enum name -> width
+    pub enums: HashMap<String, u32>,
+    /// struct name -> fields (name, width, signed)
+    pub structs: HashMap<String, Vec<(String, u32, bool)>>,
+}
+
+#[derive(Clone)]
+pub struct TypeInfo {
+    pub w: u32,
+    pub signed: bool,
+    pub kind: Kind,
+    pub two_state: bool,
+    pub arr: Option<u32>,
+    /// struct fields: (name, bit offset, width)
+    pub fields: Vec<(String, u32, u32)>,
+}
+
+impl TypeInfo {
+    pub fn scalar(w: u32) -> Self {
+        TypeInfo { w, signed: false, kind: Kind::Normal, two_state: false, arr: None, fields: vec![] }
+    }
+}
 
 pub struct Cx { pub reset: Option<(usize, bool)> } // (sig, active-low)
 
@@ -37,6 +62,11 @@ pub struct ModInfo<'a> { pub decl: &'a ModuleDeclaration, pub is_test: bool }
 
 pub struct Elab<'a> {
     pub lib: HashMap<String, ModInfo<'a>>,
+    pub pkgs: HashMap<String, PkgDef>,
+    /// "Pkg::Enum::Member" -> value
+    pub enum_vals: HashMap<String, Val>,
+    /// "$tb::reset_gen" instance sig -> its clock sig
+    pub tb_clk: HashMap<usize, usize>,
     pub sim: Sim,
     pub procs: Vec<Proc>,
     pub inits: Vec<InitState>,
@@ -69,6 +99,137 @@ fn module_items<'b>(g: &'b ModuleGroup, out: &mut Vec<&'b GenerateItem>) {
         ModuleGroupGroup::LBraceModuleGroupGroupListRBrace(x) => {
             for y in &x.module_group_group_list { module_items(&y.module_group, out); }
         }
+    }
+}
+
+fn collect_gen_items<'b>(b: &'b GenerateNamedBlock, out: &mut Vec<&'b GenerateItem>) {
+    for l in &b.generate_named_block_list { gen_group(&l.generate_group, out); }
+}
+
+fn gen_group<'b>(g: &'b GenerateGroup, out: &mut Vec<&'b GenerateItem>) {
+    match &*g.generate_group_group {
+        GenerateGroupGroup::GenerateItem(x) => out.push(&x.generate_item),
+        GenerateGroupGroup::LBraceGenerateGroupGroupListRBrace(x) => {
+            for y in &x.generate_group_group_list { gen_group(&y.generate_group, out); }
+        }
+    }
+}
+
+/// Collect packages: enums (with member values), structs, consts.
+pub fn collect_packages(g: &DescriptionGroup, elab: &mut Elab) {
+    let mut decls: Vec<&PackageDeclaration> = vec![];
+    fn walk<'x>(dg: &'x DescriptionGroup, out: &mut Vec<&'x PackageDeclaration>) {
+        match &*dg.description_group_group {
+            DescriptionGroupGroup::DescriptionItem(x) => {
+                if let DescriptionItem::DescriptionItemOptPublicDescriptionItem(y) = &*x.description_item {
+                    if let PublicDescriptionItem::PackageDeclaration(z) = &*y.public_description_item {
+                        out.push(&z.package_declaration);
+                    }
+                }
+            }
+            DescriptionGroupGroup::LBraceDescriptionGroupGroupListRBrace(x) => {
+                for y in &x.description_group_group_list { walk(&y.description_group, out); }
+            }
+        }
+    }
+    walk(g, &mut decls);
+    for d in decls {
+        let pname = d.identifier.identifier_token.to_string();
+        let mut pk = PkgDef::default();
+        let mut items: Vec<&PackageItem> = vec![];
+        for l in &d.package_declaration_list {
+            match &*l.package_group.package_group_group {
+                PackageGroupGroup::PackageItem(x) => items.push(&x.package_item),
+                PackageGroupGroup::LBracePackageGroupGroupListRBrace(x) => {
+                    for y in &x.package_group_group_list {
+                        if let PackageGroupGroup::PackageItem(z) = &*y.package_group.package_group_group {
+                            items.push(&z.package_item);
+                        }
+                    }
+                }
+            }
+        }
+        // package consts: "Pkg::NAME" (stored with the enum members)
+        for it in &items {
+            if let PackageItem::ConstDeclaration(x) = it {
+                let c = &x.const_declaration;
+                let t = toks(|k| k.expression(&c.expression));
+                if let Ok(v) = elab.const_in(&Scope::default(), &t) {
+                    elab.enum_vals.insert(format!("{}::{}", pname, c.identifier.identifier_token), v);
+                }
+            }
+        }
+        // enums first (members may be referenced by other items)
+        for it in &items {
+            if let PackageItem::EnumDeclaration(x) = it {
+                let e = &x.enum_declaration;
+                let ename = e.identifier.identifier_token.to_string();
+                let w = match &e.enum_declaration_opt {
+                    Some(o) => {
+                        let t = toks(|c| c.scalar_type(&o.scalar_type));
+                        match elab.parse_type(&Scope::default(), &t) { Ok(ty) => ty.w, Err(_) => 32 }
+                    }
+                    None => 32,
+                };
+                pk.enums.insert(ename.clone(), w);
+                // member values
+                let mut members: Vec<(&EnumItem, Option<&Expression>)> = vec![];
+                fn enum_group<'x>(g: &'x EnumGroup, out: &mut Vec<(&'x EnumItem, Option<&'x Expression>)>) {
+                    match &*g.enum_group_group {
+                        EnumGroupGroup::EnumItem(x) => {
+                            let ei = &x.enum_item;
+                            out.push((ei, ei.enum_item_opt.as_ref().map(|o| &*o.expression)));
+                        }
+                        EnumGroupGroup::LBraceEnumListRBrace(x) => {
+                            enum_group(&x.enum_list.enum_group, out);
+                            for y in &x.enum_list.enum_list_list { enum_group(&y.enum_group, out); }
+                        }
+                    }
+                }
+                enum_group(&e.enum_list.enum_group, &mut members);
+                for y in &e.enum_list.enum_list_list { enum_group(&y.enum_group, &mut members); }
+                let mut next = 0u128;
+                for (ei, mex) in members {
+                    let mname = ei.identifier.identifier_token.to_string();
+                    let v = match mex {
+                        Some(x) => {
+                            let t = toks(|c| c.expression(x));
+                            elab.const_in(&Scope::default(), &t).unwrap_or(Val::new(32, 0)).v
+                        }
+                        None => next,
+                    };
+                    next = v + 1;
+                    elab.enum_vals.insert(format!("{}::{}::{}", pname, ename, mname), Val::new(w, v));
+                }
+            }
+        }
+        // structs
+        for it in &items {
+            if let PackageItem::StructUnionDeclaration(x) = it {
+                let s = &x.struct_union_declaration;
+                if !toks(|c| c.struct_union(&s.struct_union)).join("").contains("struct") { continue; }
+                let sname = s.identifier.identifier_token.to_string();
+                let mut fields: Vec<(String, u32, bool)> = vec![];
+                fn struct_group<'x>(g: &'x StructUnionGroup, elab: &Elab, out: &mut Vec<(String, u32, bool)>) {
+                    match &*g.struct_union_group_group {
+                        StructUnionGroupGroup::StructUnionItem(x) => {
+                            let si = &x.struct_union_item;
+                            let fname = si.identifier.identifier_token.to_string();
+                            let t = toks(|c| c.scalar_type(&si.scalar_type));
+                            if let Ok(ty) = elab.parse_type(&Scope::default(), &t) { out.push((fname, ty.w, ty.signed)); }
+                        }
+                        StructUnionGroupGroup::LBraceStructUnionListRBrace(x) => {
+                            struct_group(&x.struct_union_list.struct_union_group, elab, out);
+                            for y in &x.struct_union_list.struct_union_list_list { struct_group(&y.struct_union_group, elab, out); }
+                        }
+                    }
+                }
+                struct_group(&s.struct_union_list.struct_union_group, elab, &mut fields);
+                for y in &s.struct_union_list.struct_union_list_list { struct_group(&y.struct_union_group, elab, &mut fields); }
+                pk.structs.insert(sname, fields);
+            }
+        }
+        elab.pkgs.insert(pname, pk);
     }
 }
 
@@ -143,33 +304,103 @@ fn call_args(f: &FunctionCall) -> Vec<Vec<String>> {
 
 impl<'a> Elab<'a> {
     pub fn new(lib: HashMap<String, ModInfo<'a>>) -> Self {
-        Elab { lib, sim: Sim::new(), procs: vec![], inits: vec![], watched: vec![] }
+        Elab { lib, pkgs: HashMap::new(), enum_vals: HashMap::new(), tb_clk: HashMap::new(), sim: Sim::new(), procs: vec![], inits: vec![], watched: vec![] }
     }
 
     // ---------------- scope helpers ----------------
+    fn resolve_path(&self, sc: &Scope, path: &[String]) -> Option<Res> {
+        if path.is_empty() { return None; }
+        let name = &path[0];
+        // single identifier: param / signal / import
+        if path.len() == 1 {
+            if let Some(v) = sc.params.get(name) { return Some(Res::Const(*v)); }
+            if let Some(i) = sc.sigs.get(name) {
+                return Some(if self.sim.sigs[*i].arr.is_some() { Res::Arr(*i) } else { Res::Sig(*i) });
+            }
+            // function name?
+            if self.sim.funcs.contains_key(name) { return Some(Res::Fn(name.clone())); }
+            // imported name -> qualified member/type
+            if let Some(q) = sc.imports.get(name) {
+                if let Some(v) = self.enum_vals.get(q) { return Some(Res::Const(*v)); }
+                if let Some((pkg, ty)) = q.split_once("::") {
+                    let p = &self.pkgs[pkg];
+                    if p.enums.contains_key(ty) {
+                        // type used as expression: not valid; fall through
+                    }
+                }
+            }
+            return None;
+        }
+        if path.len() >= 2 {
+            let pkg = &path[0];
+            let joined = path.join("::");
+            if let Some(v) = self.enum_vals.get(&joined) { return Some(Res::Const(*v)); }
+            if path.len() == 2 {
+                if let Some(p) = self.pkgs.get(pkg) {
+                    let ty = &path[1];
+                    if p.enums.contains_key(ty) || p.structs.contains_key(ty) {
+                        return Some(Res::Const(Val::new(32, 0))); // type name in expression: unused
+                    }
+                }
+            }
+            // imported short name: AluOp::Add -> Pkg::AluOp::Add
+            if let Some(q) = sc.imports.get(name) {
+                let full = format!("{}::{}", q, path[1..].join("::"));
+                if let Some(v) = self.enum_vals.get(&full) { return Some(Res::Const(*v)); }
+            }
+        }
+        None
+    }
+
+    fn field_of(&self, sig: usize, name: &str) -> Option<(u32, u32)> {
+        self.sim.sigs.get(sig)?.fields.iter().find(|(n, _, _)| n == name).map(|(_, lo, w)| (*lo, *w))
+    }
+
     fn parse_in(&self, sc: &Scope, t: &[String]) -> R<Expr> {
-        let r = |n: &str| -> Option<Res> {
-            if let Some(v) = sc.params.get(n) { return Some(Res::Const(*v)); }
-            sc.sigs.get(n).map(|i| Res::Sig(*i))
-        };
-        parse_expr(t, &r)
+        parse_expr(t, &|path| self.resolve_path(sc, path), &|sig, f| self.field_of(sig, f))
     }
 
     fn const_in(&self, sc: &Scope, t: &[String]) -> R<Val> {
         let e = self.parse_in(sc, t)?;
-        Ok(self.sim.eval(&e, 0))
+        // evaluate with a fresh kernel: user functions are not available here,
+        // but constant expressions never call them
+        let mut tmp = Sim::new();
+        Ok(tmp.eval(&e, 0))
+    }
+
+    /// const expression used inside `parse_type`, where no Scope is available
+    fn const_eval(e: &Expr) -> Val {
+        let mut tmp = Sim::new();
+        tmp.eval(e, 0)
     }
 
     fn declare(&mut self, sc: &mut Scope, name: &str, ty: &TypeInfo) -> usize {
+        // array: declare `n` contiguous element signals; map name -> element 0
+        if let Some(n) = ty.arr {
+            let elem = TypeInfo { arr: None, ..(*ty).clone() };
+            let mut first = None;
+            for k in 0..n {
+                let full = if sc.prefix.is_empty() { format!("{}[{}]", name, k) } else { format!("{}.{}[{}]", sc.prefix, name, k) };
+                let val = if elem.two_state { Val::new(elem.w, 0) } else { Val::allx(elem.w) }.signed(elem.signed);
+                let id = self.sim.sigs.len();
+                self.sim.sigs.push(Signal { name: full, w: elem.w, signed: elem.signed, kind: elem.kind.clone(), val, arr: None, fields: elem.fields.clone() });
+                if first.is_none() { first = Some(id); }
+            }
+            let f = first.unwrap();
+            self.sim.sigs[f].arr = Some(n);
+            sc.sigs.insert(name.to_string(), f);
+            return f;
+        }
         let full = if sc.prefix.is_empty() { name.to_string() } else { format!("{}.{}", sc.prefix, name) };
         let val = if ty.two_state { Val::new(ty.w, 0) } else { Val::allx(ty.w) }.signed(ty.signed);
         let id = self.sim.sigs.len();
-        self.sim.sigs.push(Signal { name: full, w: ty.w, signed: ty.signed, kind: ty.kind, val });
+        self.sim.sigs.push(Signal { name: full, w: ty.w, signed: ty.signed, kind: ty.kind.clone(), val, arr: None, fields: ty.fields.clone() });
         sc.sigs.insert(name.to_string(), id);
         id
     }
 
-    /// Parse a type from its tokens: logic<8>, bit, u32, clock, reset, ...
+    /// Parse a type from its tokens: logic<8>, bit, u32, clock, reset,
+    /// Pkg::Enum, Pkg::Struct, ... optionally followed by an array size [N].
     fn parse_type(&self, sc: &Scope, t: &[String]) -> R<TypeInfo> {
         let mut i = 0;
         let mut signed = false;
@@ -178,24 +409,26 @@ impl<'a> Elab<'a> {
             i += 1;
         }
         let head = t.get(i).ok_or("missing type")?.as_str();
-        let mut info = TypeInfo { w: 1, signed, kind: Kind::Normal, two_state: false };
+        let mut info = TypeInfo::scalar(1);
+        info.signed = signed;
         match head {
             "logic" | "bit" => {
                 info.two_state = head == "bit";
                 if t.get(i + 1).map(|s| s.as_str()) == Some("<") {
                     let r = |n: &str| -> Option<Res> {
                         if let Some(v) = sc.params.get(n) { return Some(Res::Const(*v)); }
-                        sc.sigs.get(n).map(|i| Res::Sig(*i))
+                        sc.sigs.get(n).map(|k| Res::Sig(*k))
                     };
-                    let mut p = P { t, i: i + 2, r: &r };
+                    let r2 = |path: &[String]| -> Option<Res> { r(&path[0]) };
+                    let mut p = P { t, i: i + 2, r: &r2, f: &|_, _| None };
                     let mut w = 1u128;
                     loop {
                         let e = p.expr()?;
-                        w *= self.sim.eval(&e, 0).v.max(1);
+                        w *= Self::const_eval(&e).v.max(1);
                         match p.peek() { Some(",") => p.i += 1, _ => break }
                     }
                     info.w = w.clamp(1, 128) as u32;
-                    i = p.i;
+                    i = p.i + if p.peek() == Some(">") { 1 } else { 0 };
                 } else { i += 1; }
             }
             "clock" | "clock_posedge" => { info.kind = Kind::Clock(true); i += 1; }
@@ -211,9 +444,52 @@ impl<'a> Elab<'a> {
                 info.two_state = true;
                 i += 1;
             }
-            other => return Err(format!("unsupported type '{}'", other)),
+            other => {
+                // user-defined type: Pkg::Name or imported Name
+                let qualified = if t.get(i + 1).map(|s| s.as_str()) == Some("::") {
+                    format!("{}::{}", other, t[i + 2])
+                } else if let Some(q) = sc.imports.get(other) {
+                    q.clone()
+                } else {
+                    return Err(format!("unsupported type '{}'", other));
+                };
+                let Some((pkg, ty)) = qualified.split_once("::") else {
+                    return Err(format!("unsupported type '{}'", qualified));
+                };
+                let p = self.pkgs.get(pkg).ok_or(format!("unknown package '{}'", pkg))?;
+                if let Some(w) = p.enums.get(ty) {
+                    info.w = *w;
+                    info.two_state = true;
+                    i += if t.get(i + 1).map(|s| s.as_str()) == Some("::") { 3 } else { 1 };
+                } else if let Some(fields) = p.structs.get(ty) {
+                    // packed struct: the first field is the most significant (as in SystemVerilog)
+                    let w: u32 = fields.iter().map(|f| f.1).sum();
+                    let (mut hi, mut offs) = (w, vec![]);
+                    for (fname, fw, _fs) in fields {
+                        hi -= fw;
+                        offs.push((fname.clone(), hi, *fw));
+                    }
+                    info.w = w;
+                    info.fields = offs;
+                    info.two_state = true;
+                    i += if t.get(i + 1).map(|s| s.as_str()) == Some("::") { 3 } else { 1 };
+                } else {
+                    return Err(format!("unknown type '{}'", qualified));
+                }
+            }
         }
-        if t.get(i).map(|s| s.as_str()) == Some("[") { return Err("array types are not supported".into()); }
+        // array dimension
+        if t.get(i).map(|s| s.as_str()) == Some("[") {
+            let r = |n: &str| -> Option<Res> {
+                if let Some(v) = sc.params.get(n) { return Some(Res::Const(*v)); }
+                sc.sigs.get(n).map(|k| Res::Sig(*k))
+            };
+            let r2 = |path: &[String]| -> Option<Res> { r(&path[0]) };
+            let mut p = P { t, i: i + 1, r: &r2, f: &|_, _| None };
+            let cnt = p.expr()?;
+            if p.peek() != Some("]") { return Err("expected ']' in array type".into()); }
+            info.arr = Some(Self::const_eval(&cnt).v as u32);
+        }
         Ok(info)
     }
 
@@ -270,90 +546,228 @@ impl<'a> Elab<'a> {
         for l in &m.module_declaration_list { module_items(&l.module_group, &mut items); }
 
         // pass 1: declarations that other items may refer to
-        for it in &items {
-            match it {
-                GenerateItem::VarDeclaration(x) => self.decl_var(&mut sc, &x.var_declaration)?,
-                GenerateItem::ConstDeclaration(x) => self.decl_const(&mut sc, &x.const_declaration)?,
-                GenerateItem::LetDeclaration(x) => {
-                    let l = &x.let_declaration;
-                    if let Some(o) = &l.let_declaration_opt {
-                        let t = toks(|c| c.array_type(&o.array_type));
-                        let ty = self.parse_type(&sc, &t)?;
-                        self.declare(&mut sc, &l.identifier.identifier_token.to_string(), &ty);
-                    }
-                }
-                GenerateItem::InstDeclaration(x) => {
-                    let ci = &x.inst_declaration.component_instantiation;
-                    let kind = toks(|c| c.scoped_identifier(&ci.scoped_identifier)).join("");
-                    let name = ci.identifier.identifier_token.to_string();
-                    match kind.as_str() {
-                        "$tb::clock_gen" => {
-                            let mut half = 5;
-                            if let Some(p) = &ci.component_instantiation_opt1 {
-                                let mut v = vec![];
-                                if let Some(o) = &p.inst_parameter.inst_parameter_opt { ip_list(&o.inst_parameter_list, &mut v); }
-                                for (n, e) in v {
-                                    if n == "PERIOD" { if let Some(e) = e { half = (self.const_in(&sc, &e)?.v as u64 / 2).max(1); } }
-                                }
-                            }
-                            let id = self.declare(&mut sc, &name, &TypeInfo { w: 1, signed: false, kind: Kind::Clock(true), two_state: true });
-                            self.procs.push(Proc::ClockGen { sig: id, half });
-                        }
-                        "$tb::reset_gen" => {
-                            let id = self.declare(&mut sc, &name, &TypeInfo { w: 1, signed: false, kind: Kind::Reset { low: true, asynch: true }, two_state: true });
-                            self.sim.sigs[id].val = Val::new(1, 1);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
+        for it in &items { self.pass1(&mut sc, it)?; }
 
         // pass 2: behaviour
-        for it in &items {
-            match it {
-                GenerateItem::LetDeclaration(x) => {
-                    let l = &x.let_declaration;
-                    let name = l.identifier.identifier_token.to_string();
-                    let t = toks(|c| c.expression(&l.expression));
-                    let e = self.parse_in(&sc, &t)?;
-                    if !sc.sigs.contains_key(&name) {
-                        let w = self.sim.eval(&e, 0).w;
-                        self.declare(&mut sc, &name, &TypeInfo { w, signed: false, kind: Kind::Normal, two_state: false });
+        let cx = Cx { reset: None };
+        for it in &items { self.pass2(&mut sc, it, &cx)?; }
+        Ok(sc)
+    }
+
+    fn pass1(&mut self, sc: &mut Scope, it: &GenerateItem) -> R<()> {
+        match it {
+            GenerateItem::VarDeclaration(x) => self.decl_var(sc, &x.var_declaration)?,
+            GenerateItem::ConstDeclaration(x) => self.decl_const(sc, &x.const_declaration)?,
+            GenerateItem::LetDeclaration(x) => {
+                let l = &x.let_declaration;
+                if let Some(o) = &l.let_declaration_opt {
+                    let t = toks(|c| c.array_type(&o.array_type));
+                    let ty = self.parse_type(sc, &t)?;
+                    self.declare(sc, &l.identifier.identifier_token.to_string(), &ty);
+                }
+            }
+            GenerateItem::ImportDeclaration(x) => {
+                let d = &x.import_declaration;
+                let pkg = toks(|c| c.scoped_identifier(&d.scoped_identifier)).join("");
+                let names: Vec<String> = match &d.import_declaration_opt {
+                    None => vec![],
+                    Some(o) => match &*o.import_declaration_opt_group {
+                        ImportDeclarationOptGroup::Star(_) => {
+                            let mut v: Vec<String> = self.pkgs.get(&pkg).map(|p| {
+                                p.enums.keys().chain(p.structs.keys()).cloned().collect()
+                            }).unwrap_or_default();
+                            // package consts ("Pkg::NAME", no further "::")
+                            let pre = format!("{}::", pkg);
+                            v.extend(self.enum_vals.keys().filter_map(|k| k.strip_prefix(&pre)).filter(|k| !k.contains("::")).map(|k| k.to_string()));
+                            v
+                        }
+                        ImportDeclarationOptGroup::MultipleImportList(l) => {
+                            let ml = &l.multiple_import_list;
+                            let mut v = vec![ml.multiple_import_item.identifier.identifier_token.to_string()];
+                            for y in &ml.multiple_import_list_list {
+                                v.push(y.multiple_import_item.identifier.identifier_token.to_string());
+                            }
+                            v
+                        }
+                    },
+                };
+                for n in names { sc.imports.insert(n.clone(), format!("{}::{}", pkg, n)); }
+            }
+            GenerateItem::InstDeclaration(x) => {
+                let ci = &x.inst_declaration.component_instantiation;
+                let kind = toks(|c| c.scoped_identifier(&ci.scoped_identifier)).join("");
+                let name = ci.identifier.identifier_token.to_string();
+                match kind.as_str() {
+                    "$tb::clock_gen" => {
+                        let mut half = 5;
+                        if let Some(p) = &ci.component_instantiation_opt1 {
+                            let mut v = vec![];
+                            if let Some(o) = &p.inst_parameter.inst_parameter_opt { ip_list(&o.inst_parameter_list, &mut v); }
+                            for (n, e) in v {
+                                if n == "PERIOD" { if let Some(e) = e { half = (self.const_in(sc, &e)?.v as u64 / 2).max(1); } }
+                            }
+                        }
+                        let ty = TypeInfo::scalar(1);
+                        let id = self.declare(sc, &name, &TypeInfo { kind: Kind::Clock(true), two_state: true, ..ty });
+                        self.procs.push(Proc::ClockGen { sig: id, half });
                     }
-                    let id = sc.sigs[&name];
-                    self.procs.push(Proc::Comb(vec![Stmt::Assign(LValue { sig: id, sel: Sel::All }, e)]));
+                    "$tb::reset_gen" => {
+                        let ty = TypeInfo::scalar(1);
+                        let id = self.declare(sc, &name, &TypeInfo { kind: Kind::Reset { low: true, asynch: true }, two_state: true, ..ty });
+                        self.sim.sigs[id].val = Val::new(1, 1);
+                        // `inst rst: $tb::reset_gen(clk);` — remember the clock
+                        let mut conns: NamedToks = vec![];
+                        if let Some(p) = &ci.component_instantiation_opt2 {
+                            if let Some(o) = &p.inst_port.inst_port_opt { ipo_list(&o.inst_port_list, &mut conns); }
+                        }
+                        if let Some((_, first)) = conns.first() {
+                            let t = first.clone().unwrap_or_else(|| vec![conns[0].0.clone()]);
+                            if let Some(c) = sc.sigs.get(&t[0]) { self.tb_clk.insert(id, *c); }
+                        }
+                    }
+                    _ => {}
                 }
-                GenerateItem::AssignDeclaration(x) => {
-                    let a = &x.assign_declaration;
-                    let AssignDestination::HierarchicalIdentifier(h) = &*a.assign_destination else {
-                        return Err("concatenation as assign destination is not supported".into());
-                    };
-                    let lt = toks(|c| c.hierarchical_identifier(&h.hierarchical_identifier));
-                    let lv = to_lvalue(&self.parse_in(&sc, &lt)?)?;
-                    let rt = toks(|c| c.expression(&a.expression));
-                    let e = self.parse_in(&sc, &rt)?;
-                    self.procs.push(Proc::Comb(vec![Stmt::Assign(lv, e)]));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn pass2(&mut self, sc: &mut Scope, it: &'a GenerateItem, cx: &Cx) -> R<()> {
+        match it {
+            GenerateItem::LetDeclaration(x) => {
+                let l = &x.let_declaration;
+                let name = l.identifier.identifier_token.to_string();
+                let t = toks(|c| c.expression(&l.expression));
+                let e = self.parse_in(sc, &t)?;
+                if !sc.sigs.contains_key(&name) {
+                    let w = self.sim.eval(&e, 0).w;
+                    self.declare(sc, &name, &TypeInfo::scalar(w));
                 }
-                GenerateItem::AlwaysCombDeclaration(x) => {
-                    let body = self.lower_block(&mut sc, &x.always_comb_declaration.statement_block, &Cx { reset: None })?;
-                    self.procs.push(Proc::Comb(body));
-                }
-                GenerateItem::AlwaysFfDeclaration(x) => self.always_ff(&mut sc, &x.always_ff_declaration)?,
-                GenerateItem::InitialDeclaration(x) => {
-                    let body = self.lower_block(&mut sc, &x.initial_declaration.statement_block, &Cx { reset: None })?;
-                    let mut st = InitState::default();
-                    compile_initial(&body, &mut st.ops, &mut self.watched);
-                    self.inits.push(st);
-                }
-                GenerateItem::InstDeclaration(x) => self.instantiate(&mut sc, &x.inst_declaration)?,
-                GenerateItem::VarDeclaration(_) | GenerateItem::ConstDeclaration(_) => {}
-                GenerateItem::FinalDeclaration(_) => {}
-                _ => return Err(format!("unsupported module item (module '{}')", m.identifier.identifier_token)),
+                let id = sc.sigs[&name];
+                self.procs.push(Proc::Comb(vec![Stmt::Assign(LValue { sig: id, sel: Sel::All }, e)]));
+            }
+            GenerateItem::AssignDeclaration(x) => {
+                let a = &x.assign_declaration;
+                let AssignDestination::HierarchicalIdentifier(h) = &*a.assign_destination else {
+                    return Err("concatenation as assign destination is not supported".into());
+                };
+                let lt = toks(|c| c.hierarchical_identifier(&h.hierarchical_identifier));
+                let lv = to_lvalue(&self.parse_in(sc, &lt)?)?;
+                let rt = toks(|c| c.expression(&a.expression));
+                let e = self.parse_in(sc, &rt)?;
+                self.procs.push(Proc::Comb(vec![Stmt::Assign(lv, e)]));
+            }
+            GenerateItem::AlwaysCombDeclaration(x) => {
+                let body = self.lower_block(sc, &x.always_comb_declaration.statement_block, &Cx { reset: None })?;
+                self.procs.push(Proc::Comb(body));
+            }
+            GenerateItem::AlwaysFfDeclaration(x) => self.always_ff(sc, &x.always_ff_declaration)?,
+            GenerateItem::InitialDeclaration(x) => {
+                let body = self.lower_block(sc, &x.initial_declaration.statement_block, cx)?;
+                let mut st = InitState::default();
+                compile_initial(&body, &mut st.ops, &mut self.watched);
+                self.inits.push(st);
+            }
+            GenerateItem::FunctionDeclaration(x) => self.decl_function(sc, &x.function_declaration)?,
+            GenerateItem::GenerateForDeclaration(x) => self.gen_for(sc, &x.generate_for_declaration, cx)?,
+            GenerateItem::GenerateIfDeclaration(x) => self.gen_if(sc, &x.generate_if_declaration, cx)?,
+            GenerateItem::GenerateBlockDeclaration(x) => {
+                let mut items = vec![];
+                collect_gen_items(&x.generate_block_declaration.generate_named_block, &mut items);
+                self.gen_items(sc, &items, cx)?;
+            }
+            GenerateItem::InstDeclaration(x) => self.instantiate(sc, &x.inst_declaration)?,
+            GenerateItem::VarDeclaration(_) | GenerateItem::ConstDeclaration(_) => {}
+            GenerateItem::FinalDeclaration(_) => {}
+            GenerateItem::ImportDeclaration(_) => {}
+            _ => return Err("unsupported module item".into()),
+        }
+        Ok(())
+    }
+
+    fn decl_function(&mut self, sc: &mut Scope, f: &'a FunctionDeclaration) -> R<()> {
+        let name = f.identifier.identifier_token.to_string();
+        let mut fsc = Scope { prefix: format!("{}[fn:{}]", sc.prefix, name), ..Default::default() };
+        let mut params = vec![];
+        if let Some(o) = &f.function_declaration_opt0 {
+            let mut port_items = vec![];
+            if let Some(p) = &o.port_declaration.port_declaration_opt { pd_list(&p.port_declaration_list, &mut port_items); }
+            for it in port_items {
+                let pname = it.identifier.identifier_token.to_string();
+                let PortDeclarationItemGroup::PortTypeConcrete(pt) = &*it.port_declaration_item_group else {
+                    return Err(format!("function '{}': interface ports are not supported", name));
+                };
+                let t = toks(|c| c.array_type(&pt.port_type_concrete.array_type));
+                let ty = self.parse_type(sc, &t)?;
+                let id = self.declare(&mut fsc, &pname, &ty);
+                params.push(id);
             }
         }
-        Ok(sc)
+        let ret = if let Some(o) = &f.function_declaration_opt1 {
+            let t = toks(|c| c.scalar_type(&o.scalar_type));
+            let ty = self.parse_type(sc, &t)?;
+            Some(self.declare(&mut fsc, "$ret", &ty))
+        } else { None };
+        let body = self.lower_block(&mut fsc, &f.statement_block, &Cx { reset: None })?;
+        self.sim.funcs.insert(name, FuncDef { params, ret, body });
+        Ok(())
+    }
+
+    fn gen_for(&mut self, sc: &mut Scope, g: &'a GenerateForDeclaration, cx: &Cx) -> R<()> {
+        if g.generate_for_declaration_opt.is_some() { return Err("`for ... in rev` generate is not supported".into()); }
+        if g.generate_for_declaration_opt0.is_some() { return Err("generate `step` is not supported".into()); }
+        let var = g.identifier.identifier_token.to_string();
+        let from = Self::const_eval(&self.parse_in(sc, &toks(|k| k.expression(&g.range.expression)))?);
+        let o = g.range.range_opt.as_ref().ok_or("generate for needs `a..b`")?;
+        let to = Self::const_eval(&self.parse_in(sc, &toks(|k| k.expression(&o.expression)))?);
+        let incl = toks(|k| k.range_operator(&o.range_operator)).join("") == "..=";
+        let mut items = vec![];
+        collect_gen_items(&g.generate_named_block, &mut items);
+        let n_before = self.sim.sigs.len();
+        let mut i = from.v;
+        loop {
+            let hit_end = if incl { i > to.v } else { i >= to.v };
+            if hit_end { break; }
+            let mut inner = Scope { prefix: sc.prefix.clone(), sigs: sc.sigs.clone(), params: sc.params.clone(), ports: vec![], imports: sc.imports.clone() };
+            inner.params.insert(var.clone(), Val::new(32, i));
+            for it in &items { self.pass1(&mut inner, it)?; }
+            for it in &items { self.pass2(&mut inner, it, cx)?; }
+            // merge any newly declared signals back
+            for (k, v) in &inner.sigs { sc.sigs.entry(k.clone()).or_insert(*v); }
+            i += 1;
+        }
+        let _ = n_before;
+        Ok(())
+    }
+
+    /// `if C : label { .. } else if .. else { .. }` with constant conditions
+    fn gen_if(&mut self, sc: &mut Scope, g: &'a GenerateIfDeclaration, cx: &Cx) -> R<()> {
+        let truth = |s: &Self, e: &Expression| -> R<bool> {
+            Ok(Self::const_eval(&s.parse_in(sc, &toks(|k| k.expression(e)))?).v != 0)
+        };
+        let mut items = vec![];
+        if truth(self, &g.expression)? {
+            collect_gen_items(&g.generate_named_block, &mut items);
+        } else if let Some(e) = g.generate_if_declaration_list.iter().find_map(|e| match truth(self, &e.expression) {
+            Ok(true) => Some(Ok(e)),
+            Ok(false) => None,
+            Err(m) => Some(Err(m)),
+        }) {
+            for l in &e?.generate_optional_named_block.generate_optional_named_block_list { gen_group(&l.generate_group, &mut items); }
+        } else if let Some(o) = &g.generate_if_declaration_opt {
+            for l in &o.generate_optional_named_block.generate_optional_named_block_list { gen_group(&l.generate_group, &mut items); }
+        }
+        self.gen_items(sc, &items, cx)
+    }
+
+    /// elaborate generate-block items in a child scope; new signals stay visible
+    fn gen_items(&mut self, sc: &mut Scope, items: &[&'a GenerateItem], cx: &Cx) -> R<()> {
+        let mut inner = Scope { prefix: sc.prefix.clone(), sigs: sc.sigs.clone(), params: sc.params.clone(), ports: vec![], imports: sc.imports.clone() };
+        for it in items { self.pass1(&mut inner, it)?; }
+        for it in items { self.pass2(&mut inner, it, cx)?; }
+        for (k, v) in &inner.sigs { sc.sigs.entry(k.clone()).or_insert(*v); }
+        Ok(())
     }
 
     fn decl_var(&mut self, sc: &mut Scope, v: &VarDeclaration) -> R<()> {
@@ -493,7 +907,7 @@ impl<'a> Elab<'a> {
                     self.declare(sc, &name, &ty);
                 } else {
                     let w = self.sim.eval(&e, 0).w;
-                    self.declare(sc, &name, &TypeInfo { w, signed: false, kind: Kind::Normal, two_state: false });
+                    self.declare(sc, &name, &TypeInfo::scalar(w));
                 }
                 out.push(Stmt::Assign(LValue { sig: sc.sigs[&name], sel: Sel::All }, e));
                 Ok(())
@@ -582,7 +996,7 @@ impl<'a> Elab<'a> {
                 let f = &x.for_statement;
                 if f.for_statement_opt.is_some() { return Err("`for ... in rev` is not supported".into()); }
                 let name = f.identifier.identifier_token.to_string();
-                let id = self.declare(sc, &name, &TypeInfo { w: 32, signed: false, kind: Kind::Normal, two_state: true });
+                let id = self.declare(sc, &name, &TypeInfo { two_state: true, ..TypeInfo::scalar(32) });
                 let from = self.parse_in(sc, &toks(|k| k.expression(&f.range.expression)))?;
                 let o = f.range.range_opt.as_ref().ok_or("for range needs `a..b`")?;
                 let to = self.parse_in(sc, &toks(|k| k.expression(&o.expression)))?;
@@ -591,7 +1005,13 @@ impl<'a> Elab<'a> {
                 out.push(Stmt::For { var: id, from, to, incl, body });
                 Ok(())
             }
-            _ => Err("unsupported statement (return/break)".into()),
+            Statement::ReturnStatement(x) => {
+                let r = &x.return_statement;
+                let e = self.parse_in(sc, &toks(|k| k.expression(&r.expression)))?;
+                out.push(Stmt::Return(e));
+                Ok(())
+            }
+            _ => Err("unsupported statement (break)".into()),
         }
     }
 
@@ -629,7 +1049,7 @@ impl<'a> Elab<'a> {
                         "assert" => {
                             let clk = match args.first() {
                                 Some(t) => *sc.sigs.get(&t[0]).ok_or("rst.assert(clk): unknown clock")?,
-                                None => return Err("rst.assert(clk) needs a clock".into()),
+                                None => *self.tb_clk.get(&inst).ok_or("rst.assert() needs a clock (use `$tb::reset_gen(clk)` or `rst.assert(clk)`)")?,
                             };
                             let lv = LValue { sig: inst, sel: Sel::All };
                             out.push(Stmt::Assign(lv.clone(), Expr::Num(Val::new(1, 0))));
@@ -640,7 +1060,15 @@ impl<'a> Elab<'a> {
                         _ => {}
                     }
                 }
-                Err(format!("unsupported call `{}` (user functions are not supported)", lhs.join("")))
+                // user function called as a statement (return value discarded)
+                let joined = lhs.join("");
+                if self.sim.funcs.contains_key(&joined) {
+                    let mut a = vec![];
+                    for t in &args { a.push(self.parse_in(sc, t)?); }
+                    out.push(Stmt::Call(joined, a));
+                    return Ok(());
+                }
+                Err(format!("unsupported call `{}`", lhs.join("")))
             }
             IdentifierStatementGroup::Assignment(a) => {
                 let a = &a.assignment;
