@@ -1434,10 +1434,20 @@ impl<'l, 'a> Synth<'l, 'a> {
             let arms: Vec<(Bit, &Vec<Bit>)> = envs.iter().zip(&vals).filter(|(_, v)| !dont_care(&k) || **v != base).map(|((h, _), v)| (*h, v)).collect();
             if dont_care(&k) && arms.len() == 1 { env.insert(k, arms[0].1.clone()); continue; }
             let w = vals.iter().map(|v| v.len()).max().unwrap_or(0);
+            // arms with the same value share one select; a signal most arms leave alone
+            // (a register held in other states) becomes a 2-way mux: changed ? new : old
+            let mut groups: Vec<(Vec<Bit>, &Vec<Bit>)> = vec![];
+            for (h, v) in &arms {
+                match groups.iter_mut().find(|g| g.1 == *v) { Some(g) => g.0.push(*h), None => groups.push((vec![*h], *v)) }
+            }
+            let hold = groups.iter().position(|g| *g.1 == base);
+            let sel: Vec<(Bit, &Vec<Bit>)> = groups.iter().enumerate().filter(|(i, _)| Some(*i) != hold).map(|(_, g)| (self.b.reduce_or(&g.0), g.1)).collect();
+            let changed = if hold.is_some() { Some(self.b.reduce_or(&sel.iter().map(|x| x.0).collect::<Vec<_>>())) } else { None };
             let mut out = vec![];
             for i in 0..w {
-                let terms: Vec<Bit> = arms.iter().map(|(h, v)| self.b.and(*h, at(v, i))).collect();
-                out.push(self.b.reduce_or(&terms));
+                let terms: Vec<Bit> = sel.iter().map(|(h, v)| if sel.len() == 1 && changed.is_some() { at(v, i) } else { self.b.and(*h, at(v, i)) }).collect();
+                let new = self.b.reduce_or(&terms);
+                out.push(match changed { Some(c) => self.b.mux(c, at(&base, i), new), None => new });
             }
             env.insert(k, out);
         }

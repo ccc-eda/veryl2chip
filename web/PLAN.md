@@ -38,5 +38,7 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M18 | 程式放在 block RAM：`MEM_SLOT`、`bram::set_mem_init`、`--program`、`pnr::patch_ram`（只改寫 `.ram_data`）；wasm `board_program` 換程式不重新合成 | 改寫後的位元流 = 帶程式佈局繞線的位元流，在虛擬板上跑完 ISA 測試 |
 | M19 | C 編譯器（`src/rv/cc.rs`，C 子集 → RV32I 組合語言）、組譯器、指令集模擬器、執行期函式庫（printf…）；CLI `--cc`；IDE：`.c` 檔、C / 組合語言上色、即時錯誤、組合語言分頁、ISS 執行 | 測試程式與主機 C 編譯器輸出相同；C 程式在閘級 RvBoard 上的序列埠輸出與 ISS 相同 |
 | M20 | C 程式範例（Hello、跑馬燈、猜數字、七段、蜂鳴器、開關、VGA）、VGA 文字模式 `VgaText` / `RvVgaBoard`（40 × 30 字元，字型由程式載入 block RAM）、虛擬板的 CPU 模式（ISS 驅動同樣的腳位與周邊，即時速度）、講義第二部分 | npm test：所有 C 範例、網表 / 位元流 / CPU 三種模式的問候、回聲與換程式、VGA 畫面；cargo test：閘級 RvVgaBoard 的 VGA 畫面與 CPU 模式逐像素相同 |
+| M21 | `RvCore` 擴充成 RV32IMA + Zicsr：M（反覆式乘除法）、A（LR/SC、AMO）、CSR、machine mode 陷阱（中斷、ecall、ebreak、非法指令、沒對齊）、`mret`、`wfi`；SoC 加 CLINT（mtime、mtimecmp、msip）、UART 收到位元組的外部中斷；組譯器、ISS 跟上；合成：case 的 one-hot 把同值分支合併（暫存器保持只要一個 2 選 1）、LUT 映射加面積回收；RvBoard 3960 LUT、約 12.8 MHz | `rv32ima_test.S` 與 spike 相同（veryl test、veryl-sim、三種閘級模擬、ISS） |
+| M22 | C 的多執行緒：編譯器產生 M 指令、`asm(...)`、naked 函式、函式位址；epilogue 不再讀 sp 以下（中斷會蓋掉）；執行期函式庫的中斷 / CSR / 原子操作；範例 `threads.c`（計時器搶佔、ecall yield / sleep、amoswap 互斥鎖）；講義 C8 | `cargo test threads_on_rvsoc`：閘級 RvBoard 與 ISS 逐週期相同的輸出與 LED；npm test 跑所有 C 範例 |
 
 每個 M 完成就 commit。

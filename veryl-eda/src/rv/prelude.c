@@ -7,7 +7,10 @@
 #define SWITCHES    ((*(volatile unsigned *)0x10000004 >> 8) & 255) // the 8 switches on PMOD1B
 #define UART_DATA   (*(volatile unsigned *)0x10000008)  // write: send a byte; read: the received byte
 #define UART_STATUS (*(volatile unsigned *)0x1000000c)  // bit 0 = sending, bit 1 = a byte was received
-#define TIMER       (*(volatile unsigned *)0x10000010)  // clock cycles since reset (12 MHz)
+#define TIMER       (*(volatile unsigned *)0x10000010)  // clock cycles since reset (12 MHz) = mtime
+#define MTIME       (*(volatile unsigned *)0x10000010)
+#define MTIMECMP    (*(volatile unsigned *)0x10000018)  // timer interrupt when MTIME >= MTIMECMP
+#define MSIP        (*(volatile unsigned *)0x10000020)  // 1: software interrupt
 #define CLOCK_HZ    12000000
 // VGA text mode (RvVgaBoard, examples/src/rvvga.veryl): 40 x 30 characters
 #define VGA_TEXT    ((volatile unsigned *)0x10002000)       // character of cell row * 40 + column
@@ -24,7 +27,7 @@
 #define va_arg(ap, type) ((type)*(ap)++)
 #define va_end(ap)
 
-// ---- RV32I has no multiply / divide instructions: these do it in software ----
+// ---- RV32I without M: multiply / divide in software (RvCore has M: the compiler uses mul / div) ----
 unsigned __mulsi3(unsigned a, unsigned b) {
     unsigned r = 0;
     while (b) {
@@ -329,3 +332,41 @@ int vga_printf(char *fmt, ...) {
     vga_puts(buf);
     return 0;
 }
+
+// ---- machine mode (RvCore: RV32IMA + Zicsr): interrupts, CSRs, atomics ----
+// Functions with only asm in them are "naked": the assembly is the whole function.
+#define MIE_MSIE 0x8      // software interrupt   (mcause 0x80000003)
+#define MIE_MTIE 0x80     // timer interrupt      (mcause 0x80000007)
+#define MIE_MEIE 0x800    // external: a received byte (mcause 0x8000000b)
+
+void interrupts_on(void) { asm("csrsi mstatus, 8\n ret"); }
+void interrupts_off(void) { asm("csrci mstatus, 8\n ret"); }
+// interrupts off; the old state for irq_restore
+unsigned irq_save(void) { asm("csrrci a0, mstatus, 8\n andi a0, a0, 8\n ret"); }
+void irq_restore(unsigned s) { asm("csrs mstatus, a0\n ret"); }
+void wfi(void) { asm("wfi\n ret"); }
+void set_mtvec(void *handler) { asm("csrw mtvec, a0\n ret"); }
+void set_mie(unsigned bits) { asm("csrw mie, a0\n ret"); }
+unsigned read_mcause(void) { asm("csrr a0, mcause\n ret"); }
+unsigned read_mepc(void) { asm("csrr a0, mepc\n ret"); }
+void write_mepc(unsigned v) { asm("csrw mepc, a0\n ret"); }
+unsigned read_mstatus(void) { asm("csrr a0, mstatus\n ret"); }
+unsigned read_mip(void) { asm("csrr a0, mip\n ret"); }
+unsigned read_minstret(void) { asm("csrr a0, minstret\n ret"); }
+unsigned read_mscratch(void) { asm("csrr a0, mscratch\n ret"); }
+void write_mscratch(unsigned v) { asm("csrw mscratch, a0\n ret"); }
+
+// atomic read-modify-write (A extension): each returns the old value
+int atomic_swap(volatile int *p, int v) { asm("amoswap.w a0, a1, (a0)\n ret"); }
+int atomic_add(volatile int *p, int v) { asm("amoadd.w a0, a1, (a0)\n ret"); }
+int atomic_and(volatile int *p, int v) { asm("amoand.w a0, a1, (a0)\n ret"); }
+int atomic_or(volatile int *p, int v) { asm("amoor.w a0, a1, (a0)\n ret"); }
+int atomic_xor(volatile int *p, int v) { asm("amoxor.w a0, a1, (a0)\n ret"); }
+// compare and swap with LR / SC: *p = desired if *p == expected; the old value
+int atomic_cas(volatile int *p, int expected, int desired) {
+    asm("__cas_retry:\n lr.w t0, (a0)\n bne t0, a1, __cas_done\n sc.w t1, a2, (a0)\n bnez t1, __cas_retry\n__cas_done:\n mv a0, t0\n ret");
+}
+
+// a spinlock: 0 = free
+void spin_lock(volatile int *l) { while (atomic_swap(l, 1)) ; }
+void spin_unlock(volatile int *l) { atomic_swap(l, 0); }

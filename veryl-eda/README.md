@@ -59,14 +59,22 @@ the bitstream therefore only proves the instructions this program uses.
 | simulation of the **routed bitstream** (converted back to Verilog by `icebox_vlog`) | LED = 55 at cycle 70 |
 
 ## A RISC-V SoC with C programs (`examples/src/rvsoc.veryl`, `src/rv/`)
-`RvCore` is a **multi-cycle** RV32I (Decode → Exec, plus Mem for loads; 2 cycles per instruction, 3 per load) whose register file
+`RvCore` is a **multi-cycle** RV32IMA + Zicsr (Decode → Exec, plus Mem for loads / LR / AMOs; 2 cycles per instruction, 3 per load, 35 per
+multiply / divide (iterative), machine-mode traps: timer / software / external interrupts, ecall, ebreak, illegal instructions, misaligned
+addresses, `mret`, `wfi`; enough for a preemptive multithreaded kernel) whose register file
 (two `SyncRam` copies for two read ports) and memory are synchronous-read RAMs, so they become `SB_RAM40_4K`. `RvSoc` adds an 8 KB
-memory of four byte lanes (`RvMem`), memory-mapped peripherals (LEDs 0x1000_0000, buttons + switches 0x…04, UART data / status 0x…08 / 0x…0C, a cycle timer 0x…10)
-and a loader port for testbenches; `RvBoard` is the iCEBreaker top (`examples/rvsoc.pcf`): 1844 LUTs + 20 block RAMs, Fmax 13.3 MHz.
+memory of four byte lanes (`RvMem`), memory-mapped peripherals (LEDs 0x1000_0000, buttons + switches 0x…04, UART data / status 0x…08 / 0x…0C, a CLINT: `mtime` 0x…10, `mtimecmp` 0x…18, `msip` 0x…20)
+and a loader port for testbenches; `RvBoard` is the iCEBreaker top (`examples/rvsoc.pcf`): 3960 LUTs + 20 block RAMs, Fmax about 12.8 MHz (nextpnr; the clock is 12 MHz).
 `VgaText` (`examples/src/rvvga.veryl`) adds a 40 × 30 character VGA screen on the SoC's external write bus (characters and font in block RAM, a two-cycle pipeline);
-`RvVgaBoard` = 1961 LUTs + 26 block RAMs. Block RAM inference accepts memories whose unused data bits were already removed.
+`RvVgaBoard` = 4072 LUTs + 26 block RAMs, about 13 MHz. Block RAM inference accepts memories whose unused data bits were already removed.
 `TestRvSoc` loads `rv32i_test.S` (data at 0x300, `examples/src/rvsoc_rom.veryl` from `examples/sw/build.sh`), runs it and checks its 41 results;
+`TestRvSocIma` (`examples/src/rvsoc_ima_test.veryl`, also from `build.sh`) runs `rv32ima_test.S` (M, A, Zicsr, traps) and checks it against spike;
 `veryl-eda/examples/rvsoc_small.veryl` (a 64-byte memory) is proven equivalent to `veryl build` by `test.sh`.
+The C compiler emits `mul` / `div` / `rem`, takes `asm("...")` statements and top-level `asm(...)` (a function whose body is only `asm` is emitted
+without prologue: a naked function), and a function's name is its address; the runtime has `interrupts_on/off`, `irq_save/restore`, `set_mtvec`,
+`set_mie`, CSR reads, `wfi`, `atomic_swap/add/and/or/xor/cas` (AMOs, LR/SC) and spinlocks. `examples/c/threads.c` is a small preemptive kernel:
+a 10 ms timer interrupt saves the registers on the thread's stack and switches threads round robin, `ecall` gives yield / sleep / exit, a mutex
+uses `amoswap`; `cargo test threads_on_rvsoc` runs it (with a shorter time slice) on the gate-level RvBoard and on the ISS: the same output and LEDs.
 
 **Programs in block RAM.** Each `SB_RAM40_4K` that holds a memory carries `MEM_SLOT` = `NAME:BLOCK` (a yosys attribute in the JSON);
 `bram::set_mem_init` gives a memory initial contents after mapping, `--program PROG.bin` fills the byte lanes `*.b0.mem … *.b3.mem` from address 0,

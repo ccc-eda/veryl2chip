@@ -5,7 +5,7 @@ use veryl_parser::Parser;
 
 fn usage() -> ! {
     eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
-    eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc)");
+    eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc; PROG.s: assemble)");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
     eprintln!("                 [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]");
@@ -41,6 +41,14 @@ fn cc_main(args: &[String]) -> ! {
     let Some(path) = src else { usage() };
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| { eprintln!("{}: {}", path, e); std::process::exit(1) });
     let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().to_string();
+    // an assembly file: just the assembler
+    if name.ends_with(".s") || name.ends_with(".S") {
+        let p = rv::asm::assemble(&text).unwrap_or_else(|es| { for e in es { eprintln!("{}:{}: error: {}", name, e.line, e.msg); } std::process::exit(1) });
+        if let Some(o) = &out { std::fs::write(o, &p.bytes).unwrap(); }
+        if let Some(l) = &lst { std::fs::write(l, rv::asm::listing_text(&p)).unwrap(); }
+        eprintln!("{}: {} bytes", name, p.bytes.len());
+        std::process::exit(0);
+    }
     let o = match rv::cc::compile(&name, &text, &rv::cc::Options { mem_size: mem }) {
         Ok(o) => o,
         Err(es) => { for e in es { eprintln!("{}:{}: error: {}", e.file, e.line, e.msg); } std::process::exit(1) }

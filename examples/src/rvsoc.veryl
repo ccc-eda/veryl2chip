@@ -8,6 +8,9 @@
 //   Exec   → 運算、寫回、算下一個 pc 並且立刻送出它的讀取位址（store 同時寫入）
 //   Mem    → load：記憶體讀出資料，寫回，送出 pc 的讀取位址
 // 一般指令 2 拍、load 3 拍。暫存器檔與記憶體都是同步讀取（下一拍才有資料），
+// RV32IMA + Zicsr：乘除法（反覆式，35 拍）、原子指令（LR / SC、AMO 3 拍）、
+// machine mode 的陷阱（中斷、ecall、ebreak、非法指令、位址沒對齊；陷入多 1 拍）、mret、wfi；
+// 這些足夠跑搶佔式的多執行緒作業系統（計時器中斷切換執行緒）。
 // 合成到 FPGA 時變成 SB_RAM40_4K。需要 rv32i.veryl（RiscvTypes、Alu）、
 // sync_ram.veryl（SyncRam）與 uart.veryl（UartTx、UartRx）。
 //
@@ -17,31 +20,40 @@
 //   0x1000_0004  BTN      讀：bit 2..0 = BTN3..BTN1，bit 15..8 = PMOD1B 的 8 個開關
 //   0x1000_0008  UART     寫：送出一個位元組；讀：收到的位元組（讀了就清掉 RXV）
 //   0x1000_000C  UART_ST  讀：bit 0 = TX 忙碌，bit 1 = RXV（有收到的位元組）
-//   0x1000_0010  TIMER    讀：重設後經過的時脈數
+//   0x1000_0010  MTIME    讀寫：重設後經過的時脈數（32 bit，12 MHz 下約 357 秒繞一圈；0x14 高位元讀 0）
+//   0x1000_0018  MTIMECMP 讀寫：mtime ≥ mtimecmp 時計時器中斷（重設後是全 1；0x1C 高位元讀 0）
+//   0x1000_0020  MSIP     讀寫：bit 0 = 軟體中斷
+//   中斷：計時器 → mip.MTIP，MSIP → mip.MSIP，UART 收到位元組（RXV）→ mip.MEIP
 //   0x1000_2000 以上     寫到外部匯流排 o_x*（例如 VgaText：0x1000_2000 字元、0x1000_4000 字型、0x1000_6000 顏色）
 
 module RvCore (
-    i_clk  : input  clock    ,
-    i_rst  : input  reset    ,
-    i_run  : input  logic    , // 0：停在 pc = 0（載入程式時）
-    o_raddr: output logic<32>, // 讀取位址（取指令或 load），下一拍 i_rdata 才有資料
-    o_re   : output logic    ,
-    i_rdata: input  logic<32>,
-    o_waddr: output logic<32>, // 寫入位址（store）
-    o_wstrb: output logic<4> , // 要寫的位元組；0 = 不寫
-    o_wdata: output logic<32>,
+    i_clk      : input  clock    ,
+    i_rst      : input  reset    ,
+    i_run      : input  logic    , // 0：停在 pc = 0（載入程式時）
+    o_raddr    : output logic<32>, // 讀取位址（取指令或 load），下一拍 i_rdata 才有資料
+    o_re       : output logic    ,
+    i_rdata    : input  logic<32>,
+    o_waddr    : output logic<32>, // 寫入位址（store）
+    o_wstrb    : output logic<4> , // 要寫的位元組；0 = 不寫
+    o_wdata    : output logic<32>,
+    i_irq_timer: input  logic    , // mtime ≥ mtimecmp（mip.MTIP）
+    i_irq_soft : input  logic    , // msip（mip.MSIP）
+    i_irq_ext  : input  logic    , // 外部（UART 收到位元組，mip.MEIP）
+    i_mtime    : input  logic<64>, // time CSR
 ) {
     import RiscvTypes::*;
 
-    const FETCH : logic<2> = 2'd0;
-    const DECODE: logic<2> = 2'd1;
-    const EXEC  : logic<2> = 2'd2;
-    const MEM   : logic<2> = 2'd3;
+    const FETCH : logic<3> = 3'd0;
+    const DECODE: logic<3> = 3'd1;
+    const EXEC  : logic<3> = 3'd2;
+    const MEM   : logic<3> = 3'd3;
+    const MULDIV: logic<3> = 3'd4;
+    const WFI   : logic<3> = 3'd5;
 
-    var state : logic<2> ;
+    var state : logic<3> ;
     var pc    : logic<32>;
     var ir    : logic<32>; // 執行中的指令
-    var lsaddr: logic<32>; // load 的位址（Mem 用來取出 byte / halfword）
+    var lsaddr: logic<32>; // load / AMO 的位址（Mem 用）
 
     // Decode 那一拍指令還在 i_rdata 上，之後在 ir
     let cur: logic<32> = if state == DECODE ? i_rdata : ir;
@@ -50,8 +62,8 @@ module RvCore (
     let rd_idx : logic<5> = ir[11:7];
     let funct3 : logic<3> = ir[14:12];
     let rs1_idx: logic<5> = ir[19:15];
-    let rs2_idx: logic<5> = ir[24:20];
     let funct7 : logic<7> = ir[31:25];
+    let funct5 : logic<5> = ir[31:27];
 
     // --- 暫存器檔：兩份相同的同步讀取 RAM（兩個讀取埠），一起寫入 ---
     var rf_we  : logic    ;
@@ -78,28 +90,47 @@ module RvCore (
         o_rdata: rs2_raw    ,
     );
 
-    // x0 永遠是 0（RAM 裡的 x0 從來不寫，但模擬時一開始是 x）
-    let rs1_data: logic<32> = if rs1_idx == 5'd0 ? 32'd0 : rs1_raw;
-    let rs2_data: logic<32> = if rs2_idx == 5'd0 ? 32'd0 : rs2_raw;
+    // x0 永遠是 0（RAM 裡的 x0 從來不寫，但模擬時一開始是 x）；是不是 x0 在 Decode 就先判斷
+    var rs1_zero: logic;
+    var rs2_zero: logic;
+    let rs1_data: logic<32> = if rs1_zero ? 32'd0 : rs1_raw;
+    let rs2_data: logic<32> = if rs2_zero ? 32'd0 : rs2_raw;
 
-    // --- 立即數 ---
-    var imm: logic<32>;
+    // --- 指令分類 ---
+    let op_load  : logic = opcode == Opcode::Load;
+    let op_store : logic = opcode == Opcode::Store;
+    let op_system: logic = opcode == 7'b1110011;
+    let op_amo   : logic = opcode == 7'b0101111;
+    let muldiv   : logic = opcode == Opcode::RType && funct7 == 7'b0000001;
+    let is_lr    : logic = op_amo && funct5 == 5'b00010;
+    let is_sc    : logic = op_amo && funct5 == 5'b00011;
+    let is_amo   : logic = op_amo && !is_lr && !is_sc; // 讀、改、寫
+    let is_ecall : logic = ir == 32'h0000_0073;
+    let is_ebreak: logic = ir == 32'h0010_0073;
+    let is_mret  : logic = ir == 32'h3020_0073;
+    let is_wfi   : logic = ir == 32'h1050_0073;
+    let is_csr   : logic = op_system && funct3 != 3'd0 && funct3 != 3'd4;
+
+    // --- 立即數：Decode 那一拍從讀出的指令解出來，存進 imm（Exec 不用再解碼）---
+    let c_op : logic<7> = cur[6:0];
+    var imm_d: logic<32>;
     always_comb {
-        case opcode {
+        case c_op {
             Opcode::IType, Opcode::Load, Opcode::Jalr:
-                imm = {ir[31] repeat 20, ir[31:20]};
+                imm_d = {cur[31] repeat 20, cur[31:20]};
             Opcode::Store:
-                imm = {ir[31] repeat 20, ir[31:25], ir[11:7]};
+                imm_d = {cur[31] repeat 20, cur[31:25], cur[11:7]};
             Opcode::Branch:
-                imm = {ir[31] repeat 20, ir[7], ir[30:25], ir[11:8], 1'b0};
+                imm_d = {cur[31] repeat 20, cur[7], cur[30:25], cur[11:8], 1'b0};
             Opcode::Jal:
-                imm = {ir[31] repeat 12, ir[19:12], ir[20], ir[30:21], 1'b0};
+                imm_d = {cur[31] repeat 12, cur[19:12], cur[20], cur[30:21], 1'b0};
             Opcode::Lui, Opcode::Auipc:
-                imm = {ir[31:12], 12'd0};
+                imm_d = {cur[31:12], 12'd0};
             default:
-                imm = 32'd0;
+                imm_d = 32'd0; // AMO / LR / SC：位址就是 rs1
         }
     }
+    var imm: logic<32>;
 
     // --- ALU 運算 ---
     let alt: logic = funct7[5] && (opcode == Opcode::RType || funct3 == 3'b101);
@@ -155,6 +186,185 @@ module RvCore (
             default       : next_pc = pc_plus_4;
         }
     }
+    // 跳到不是 4 的倍數的位址（沒有 C 擴充）：例外。jal / jalr 不用等比較器；
+    // 分支的目標是 pc + imm，所以只看 imm[1]，再和 take 合起來（分支不寫暫存器和記憶體）
+    // 位址的低兩位元：rs1 + imm 的 2 位元加法（不用等 32 位元的 ALU）
+    let addr_lo   : logic<2> = rs1_data[1:0] + imm[1:0];
+    let bad_jal   : logic = (opcode == Opcode::Jal && imm[1]) || (opcode == Opcode::Jalr && addr_lo[1]);
+    let bad_branch: logic = opcode == Opcode::Branch && imm[1] && take;
+
+    // --- 控制與狀態暫存器（CSR，machine mode）---
+    var st_mie  : logic    ; // mstatus.MIE：全域中斷致能
+    var st_mpie : logic    ; // mstatus.MPIE：進入陷阱前的 MIE
+    var ie_msie : logic    ; // mie.MSIE / MTIE / MEIE
+    var ie_mtie : logic    ;
+    var ie_meie : logic    ;
+    var mtvec   : logic<32>;
+    var mscratch: logic<32>;
+    var mepc    : logic<32>;
+    var mcause  : logic<5> ; // {interrupt, code}：只有這些原因
+    var minstret: logic<32>;
+
+    let csr_addr: logic<12> = ir[31:20];
+    // 先把位址換成編號（小的比較器），再用編號選值（窄的多工器）
+    var csr_idx : logic<4> ;
+    var csr_ok  : logic    ;
+    always_comb {
+        csr_ok = 1'b1;
+        case csr_addr {
+            12'h300                  : csr_idx = 4'd0; // mstatus（MPP 永遠是 M）
+            12'h301                  : csr_idx = 4'd1; // misa
+            12'h304                  : csr_idx = 4'd2; // mie
+            12'h305                  : csr_idx = 4'd3; // mtvec
+            12'h340                  : csr_idx = 4'd4; // mscratch
+            12'h341                  : csr_idx = 4'd5; // mepc
+            12'h342                  : csr_idx = 4'd6; // mcause
+            12'h343                  : csr_idx = 4'd7; // mtval
+            12'h344                  : csr_idx = 4'd8; // mip
+            12'hB00, 12'hC00, 12'hC01: csr_idx = 4'd9; // mcycle / cycle / time：都是 SoC 的 mtime（寫入忽略）
+            12'hB80, 12'hC80, 12'hC81: csr_idx = 4'd10;
+            12'hB02, 12'hC02         : csr_idx = 4'd11; // minstret / instret（32 bit，寫入忽略）
+            12'hB82, 12'hC82, 12'hF11, 12'hF12, 12'hF13, 12'hF14: csr_idx = 4'd12; // 0
+            default: {
+                csr_idx = 4'd12;
+                csr_ok  = 1'b0;
+            }
+        }
+    }
+    var csr_old: logic<32>;
+    always_comb {
+        case csr_idx {
+            4'd0   : csr_old = {19'd0, 2'b11, 3'd0, st_mpie, 3'd0, st_mie, 3'd0};
+            4'd1   : csr_old = 32'h4000_1101; // RV32 I M A
+            4'd2   : csr_old = {20'd0, ie_meie, 3'd0, ie_mtie, 3'd0, ie_msie, 3'd0};
+            4'd3   : csr_old = mtvec;
+            4'd4   : csr_old = mscratch;
+            4'd5   : csr_old = mepc;
+            4'd6   : csr_old = {mcause[4], 27'd0, mcause[3:0]};
+            4'd7   : csr_old = 32'd0; // mtval：唯讀 0（規格允許）
+            4'd8   : csr_old = {20'd0, i_irq_ext, 3'd0, i_irq_timer, 3'd0, i_irq_soft, 3'd0};
+            4'd9   : csr_old = i_mtime[31:0];
+            4'd10  : csr_old = i_mtime[63:32];
+            4'd11  : csr_old = minstret;
+            default: csr_old = 32'd0;
+        }
+    }
+    // csrrw(i) 一定寫入；csrrs(i) / csrrc(i) 在 rs1 / zimm 不是 0 時才寫
+    let csr_writes: logic     = funct3[1:0] == 2'b01 || rs1_idx != 5'd0;
+    let csr_bad   : logic     = !csr_ok || (csr_addr[11:10] == 2'b11 && csr_writes);
+    let csr_src   : logic<32> = if funct3[2] ? {27'd0, rs1_idx} : rs1_data;
+    var csr_new   : logic<32>;
+    always_comb {
+        case funct3[1:0] {
+            2'b01  : csr_new = csr_src;
+            2'b10  : csr_new = csr_old | csr_src;
+            default: csr_new = csr_old & ~csr_src;
+        }
+    }
+
+    // --- 合法的指令（其他都是 illegal instruction 例外）：Decode 那一拍判斷，存進 legal_r；
+    //     CSR 位址合不合法在 Exec 看（csr_bad）---
+    let c_f3 : logic<3> = cur[14:12];
+    let c_f7 : logic<7> = cur[31:25];
+    let c_f5 : logic<5> = cur[31:27];
+    var legal_d: logic;
+    always_comb {
+        case c_op {
+            Opcode::Lui, Opcode::Auipc, Opcode::Jal: legal_d = 1'b1;
+            Opcode::Jalr                           : legal_d = c_f3 == 3'd0;
+            Opcode::Branch                         : legal_d = c_f3 != 3'd2 && c_f3 != 3'd3;
+            Opcode::Load                           : legal_d = c_f3 != 3'd3 && c_f3 != 3'd6 && c_f3 != 3'd7;
+            Opcode::Store                          : legal_d = c_f3 <: 3'd3;
+            Opcode::IType                          : legal_d = if c_f3 == 3'd1 ? c_f7 == 7'd0 : if c_f3 == 3'd5 ? (c_f7 == 7'd0 || c_f7 == 7'h20) : 1'b1;
+            Opcode::RType                          : legal_d = c_f7 == 7'd0 || c_f7 == 7'd1 || (c_f7 == 7'h20 && (c_f3 == 3'd0 || c_f3 == 3'd5));
+            default: {
+                if c_op == 7'b0001111 {
+                    legal_d = c_f3 <: 3'd2;
+                } else if c_op == 7'b1110011 {
+                    legal_d = if c_f3 == 3'd0 ? (cur == 32'h0000_0073 || cur == 32'h0010_0073 || cur == 32'h3020_0073 || cur == 32'h1050_0073) : c_f3 != 3'd4;
+                } else if c_op == 7'b0101111 {
+                    legal_d = c_f3 == 3'd2 && (c_f5 == 5'b00010 || c_f5 == 5'b00011 || c_f5 == 5'b00001 || c_f5 == 5'b00000 || c_f5 == 5'b00100 || c_f5 == 5'b01100 || c_f5 == 5'b01000 || c_f5 == 5'b10000 || c_f5 == 5'b10100 || c_f5 == 5'b11000 || c_f5 == 5'b11100);
+                } else {
+                    legal_d = 1'b0;
+                }
+            }
+        }
+    }
+    var legal_r: logic;
+    let legal  : logic = legal_r && !(is_csr && csr_bad);
+
+    // --- 中斷：外部 > 軟體 > 計時器 ---
+    let pend_ext  : logic = i_irq_ext && ie_meie;
+    let pend_soft : logic = i_irq_soft && ie_msie;
+    let pend_timer: logic = i_irq_timer && ie_mtie;
+    let pending   : logic = pend_ext || pend_soft || pend_timer;
+    let irq       : logic = st_mie && pending;
+
+    // --- 位址沒對齊 ---
+    let mis_load : logic = (op_load && ((funct3[1:0] == 2'b10 && addr_lo != 2'd0) || (funct3[1:0] == 2'b01 && addr_lo[0]))) || (is_lr && addr_lo != 2'd0);
+    let mis_store: logic = (op_store && ((funct3 == 3'd2 && addr_lo != 2'd0) || (funct3 == 3'd1 && addr_lo[0]))) || ((is_sc || is_amo) && addr_lo != 2'd0);
+
+    // --- 陷阱（在 Exec 決定；陷入的指令不產生任何效果）---
+    // trap_fast：不用等分支比較器的陷阱（決定暫存器、記憶體、CSR 寫不寫）；
+    // trap = 再加上分支目標沒對齊（只決定下一個 pc）
+    var trap_fast : logic   ;
+    var trap_cause: logic<5>; // {interrupt, code}
+    always_comb {
+        trap_fast  = 1'b1;
+        trap_cause = 5'd0;
+        if irq {
+            trap_cause = {1'b1, if pend_ext ? 4'd11 : if pend_soft ? 4'd3 : 4'd7};
+        } else if !legal {
+            trap_cause = 5'd2;
+        } else if is_ecall {
+            trap_cause = 5'd11;
+        } else if is_ebreak {
+            trap_cause = 5'd3;
+        } else if mis_load {
+            trap_cause = 5'd4;
+        } else if mis_store {
+            trap_cause = 5'd6;
+        } else if bad_jal {
+            trap_cause = 5'd0;
+        } else {
+            trap_fast = 1'b0;
+        }
+    }
+    let trap: logic = trap_fast || bad_branch;
+
+    // --- 乘除法（反覆式，33 拍：32 次移位加 / 移位減，最後一拍修正正負號）---
+    var md_p  : logic<64>; // 乘：{部分積, 乘數}；除：{餘數, 商}
+    var md_b  : logic<32>; // |被乘數| 或 |除數|
+    var md_cnt: logic<6> ;
+    var md_f3 : logic<3> ;
+    var md_neg: logic    ;
+    var md_bz : logic    ;
+
+    let md_sa  : logic     = (funct3 == 3'd1 || funct3 == 3'd2 || funct3 == 3'd4 || funct3 == 3'd6) && rs1_data[31];
+    let md_sb  : logic     = (funct3 == 3'd1 || funct3 == 3'd4 || funct3 == 3'd6) && rs2_data[31];
+    let md_absa: logic<32> = if md_sa ? 32'd0 - rs1_data : rs1_data;
+    let md_absb: logic<32> = if md_sb ? 32'd0 - rs2_data : rs2_data;
+
+    // 一個 33 位元加減法器：乘法加 md_b（乘數這位是 1 時），除法從左移後的餘數減 md_b
+    let md_sh  : logic<64> = {md_p[62:0], 1'b0};
+    let md_div : logic     = md_f3[2];
+    let md_x   : logic<33> = {1'b0, if md_div ? md_sh[63:32] : md_p[63:32]};
+    let md_y   : logic<33> = if md_div ? ~{1'b0, md_b} : if md_p[0] ? {1'b0, md_b} : 33'd0;
+    let md_sum : logic<33> = md_x + md_y + {32'd0, md_div}; // 減法 = 加上反相再加一
+    let md_diff: logic<33> = md_sum;
+    // 結果：先選低半或高半，再一起取負（乘積的高半取負 = ~高半 + (低半 == 0)）
+    let md_hi  : logic     = md_f3 == 3'd1 || md_f3 == 3'd2 || md_f3 == 3'd3 || md_f3 == 3'd6 || md_f3 == 3'd7;
+    let md_sel : logic<32> = if md_hi ? md_p[63:32] : md_p[31:0];
+    let md_cin : logic     = if md_f3[2] ? 1'b1 : md_f3 == 3'd0 || md_p[31:0] == 32'd0;
+    let md_sgn : logic<32> = if md_neg ? ~md_sel + {31'd0, md_cin} : md_sel;
+    var md_res : logic<32>;
+    always_comb {
+        if md_bz && md_f3[2:1] == 2'b10 {
+            md_res = 32'hffff_ffff; // 除以 0：商 = -1（餘數自然就是被除數）
+        } else {
+            md_res = md_sgn;
+        }
+    }
 
     // --- 寫回 ---
     var wb_data: logic<32>;
@@ -163,10 +373,10 @@ module RvCore (
             Opcode::Jal, Opcode::Jalr: wb_data = pc_plus_4;
             Opcode::Lui              : wb_data = imm;
             Opcode::Auipc            : wb_data = branch_tgt;
-            default                  : wb_data = alu_out;
+            default                  : wb_data = if is_csr ? csr_old : alu_out;
         }
     }
-    let writes: logic = opcode == Opcode::RType || opcode == Opcode::IType || opcode == Opcode::Jal || opcode == Opcode::Jalr || opcode == Opcode::Lui || opcode == Opcode::Auipc;
+    let writes: logic = (opcode == Opcode::RType && !muldiv) || opcode == Opcode::IType || opcode == Opcode::Jal || opcode == Opcode::Jalr || opcode == Opcode::Lui || opcode == Opcode::Auipc || is_csr;
 
     // --- load：從讀出的字取出 byte / halfword ---
     let load_word: logic<32> = i_rdata >> {lsaddr[1:0], 3'b000};
@@ -181,6 +391,23 @@ module RvCore (
         }
     }
 
+    // --- AMO：讀出的舊值和 rs2 算出新值（Mem 那一拍寫回）---
+    // min / max：一個比較器（有號時把最高位元反相），funct5[2] = max，funct5[3] = 無號
+    let amo_x  : logic<32> = {i_rdata[31] ^ !funct5[3], i_rdata[30:0]};
+    let amo_y  : logic<32> = {rs2_data[31] ^ !funct5[3], rs2_data[30:0]};
+    let amo_old: logic     = (amo_x <: amo_y) ^ funct5[2]; // 選舊值
+    var amo_new: logic<32>;
+    always_comb {
+        case funct5 {
+            5'b00001: amo_new = rs2_data; // swap
+            5'b00000: amo_new = i_rdata + rs2_data;
+            5'b00100: amo_new = i_rdata ^ rs2_data;
+            5'b01100: amo_new = i_rdata & rs2_data;
+            5'b01000: amo_new = i_rdata | rs2_data;
+            default : amo_new = if amo_old ? i_rdata : rs2_data; // min / max / minu / maxu
+        }
+    }
+
     // --- store：資料複製到每個位元組位置，加上 byte strobe ---
     var store_data: logic<32>;
     var store_strb: logic<4> ;
@@ -188,11 +415,11 @@ module RvCore (
         case funct3 {
             3'b000: {
                 store_data = {rs2_data[7:0] repeat 4};
-                store_strb = 4'b0001 << alu_out[1:0];
+                store_strb = 4'b0001 << addr_lo;
             }
             3'b001: {
                 store_data = {rs2_data[15:0] repeat 2};
-                store_strb = 4'b0011 << alu_out[1:0];
+                store_strb = 4'b0011 << addr_lo;
             }
             default: {
                 store_data = rs2_data;
@@ -201,10 +428,28 @@ module RvCore (
         }
     }
 
-    // --- 狀態機與記憶體埠 ---
-    let load : logic = opcode == Opcode::Load;
-    let store: logic = opcode == Opcode::Store;
+    // --- LR / SC 的保留 ---
+    var resv_v : logic    ;
+    var resv_a : logic<32>;
+    let sc_ok  : logic     = resv_v && resv_a == rs1_data; // A 擴充的位址就是 rs1（不經過 ALU，路徑短）
 
+    // Exec 之後的 pc：陷阱 → mtvec，mret → mepc
+    let reads_mem: logic     = op_load || is_lr || is_amo;
+    // Exec 送出的下一個讀取位址：不等陷阱（陷入時改走 Fetch，從 mtvec 重新取指令）；
+    // 分支條件 take 只進最後一個多工器（其他的選擇先做好）
+    let taken    : logic     = opcode == Opcode::Branch && take;
+    var other_pc : logic<32>;
+    always_comb {
+        case opcode {
+            Opcode::Jal : other_pc = branch_tgt;
+            Opcode::Jalr: other_pc = {alu_out[31:1], 1'b0};
+            default     : other_pc = if is_mret ? mepc : pc_plus_4;
+        }
+    }
+    let exec_pc  : logic<32> = if taken ? branch_tgt : other_pc;
+    let exec_rd  : logic<32> = if reads_mem ? alu_out : other_pc; // 不是分支時的讀取位址
+
+    // --- 狀態機與記憶體埠 ---
     always_comb {
         o_re    = 1'b0;
         o_raddr = pc;
@@ -217,27 +462,69 @@ module RvCore (
             case state {
                 FETCH: o_re = 1'b1;
                 EXEC : {
-                    o_re    = 1'b1;
-                    o_raddr = if load ? alu_out : next_pc;
-                    o_wstrb = if store ? store_strb : 4'd0;
-                    rf_we   = writes && rd_idx != 5'd0;
+                    // 陷入的 load 不讀（周邊的讀取有副作用）
+                    o_raddr = if taken ? branch_tgt : exec_rd;
+                    if reads_mem {
+                        o_re = !trap_fast;
+                    } else if !muldiv && !(is_wfi && !pending) {
+                        o_re = 1'b1;
+                    }
+                    if !trap_fast {
+                        o_wstrb = if op_store || (is_sc && sc_ok) ? store_strb : 4'd0;
+                        rf_we   = (writes || is_sc) && rd_idx != 5'd0;
+                        rf_wd   = if is_sc ? {31'd0, !sc_ok} : wb_data;
+                    }
                 }
                 MEM: {
+                    o_re    = 1'b1;
+                    rf_we   = rd_idx != 5'd0;
+                    rf_wd   = load_data; // LR / AMO 的 funct3 是 2：整個字
+                    o_waddr = lsaddr;
+                    o_wdata = amo_new;
+                    o_wstrb = if is_amo ? 4'b1111 : 4'd0;
+                }
+                MULDIV: if md_cnt == 6'd32 {
                     o_re  = 1'b1;
                     rf_we = rd_idx != 5'd0;
-                    rf_wd = load_data;
+                    rf_wd = md_res;
                 }
+                WFI    : o_re = pending;
                 default: {}
             }
         }
     }
 
+    let exec   : logic = i_run && state == EXEC;
+    let csr_we : logic = exec && !trap_fast && is_csr && csr_writes;
+    let retired: logic = exec && !trap;
+
     always_ff {
         if_reset {
-            state  = FETCH;
-            pc     = 32'd0;
-            ir     = 32'd0;
-            lsaddr = 32'd0;
+            state    = FETCH;
+            pc       = 32'd0;
+            ir       = 32'd0;
+            imm      = 32'd0;
+            legal_r  = 1'b0;
+            rs1_zero = 1'b1;
+            rs2_zero = 1'b1;
+            lsaddr   = 32'd0;
+            st_mie   = 1'b0;
+            st_mpie  = 1'b0;
+            ie_msie  = 1'b0;
+            ie_mtie  = 1'b0;
+            ie_meie  = 1'b0;
+            mtvec    = 32'd0;
+            mscratch = 32'd0;
+            mepc     = 32'd0;
+            mcause   = 5'd0;
+            md_p     = 64'd0;
+            md_b     = 32'd0;
+            md_cnt   = 6'd0;
+            md_f3    = 3'd0;
+            md_neg   = 1'b0;
+            md_bz    = 1'b0;
+            resv_v   = 1'b0;
+            resv_a   = 32'd0;
         } else if !i_run {
             state = FETCH;
             pc    = 32'd0;
@@ -245,16 +532,100 @@ module RvCore (
             case state {
                 FETCH : state = DECODE;
                 DECODE: {
-                    ir    = i_rdata;
-                    state = EXEC;
+                    ir      = i_rdata;
+                    imm      = imm_d;
+                    legal_r  = legal_d;
+                    rs1_zero = cur[19:15] == 5'd0;
+                    rs2_zero = cur[24:20] == 5'd0;
+                    state   = EXEC;
                 }
                 EXEC: {
-                    pc     = next_pc;
                     lsaddr = alu_out;
-                    state  = if load ? MEM : DECODE;
+                    pc     = exec_pc;
+                    if trap {
+                        mepc    = pc;
+                        mcause  = if trap_fast ? trap_cause : 5'd0;
+                        st_mpie = st_mie;
+                        st_mie  = 1'b0;
+                        resv_v  = 1'b0;
+                        pc      = {mtvec[31:2], 2'b00};
+                        state   = FETCH;
+                    } else {
+                        if is_mret {
+                            st_mie  = st_mpie;
+                            st_mpie = 1'b1;
+                        }
+                        if is_sc {
+                            resv_v = 1'b0;
+                        }
+                        if csr_we {
+                            case csr_idx {
+                                4'd0: {
+                                    st_mie  = csr_new[3];
+                                    st_mpie = csr_new[7];
+                                }
+                                4'd2: {
+                                    ie_msie = csr_new[3];
+                                    ie_mtie = csr_new[7];
+                                    ie_meie = csr_new[11];
+                                }
+                                4'd3   : mtvec    = {csr_new[31:2], 2'b00};
+                                4'd4   : mscratch = csr_new;
+                                4'd5   : mepc     = {csr_new[31:2], 2'b00};
+                                4'd6   : mcause   = {csr_new[31], csr_new[3:0]};
+                                default: {}
+                            }
+                        }
+                        if muldiv {
+                            md_p   = {32'd0, if funct3[2] ? md_absa : md_absb};
+                            md_b   = if funct3[2] ? md_absb : md_absa;
+                            md_cnt = 6'd0;
+                            md_f3  = funct3;
+                            md_neg = if funct3 == 3'd6 ? md_sa : md_sa ^ md_sb;
+                            md_bz  = rs2_data == 32'd0;
+                            state  = MULDIV;
+                        } else if reads_mem {
+                            state = MEM;
+                        } else if is_wfi && !pending {
+                            state = WFI;
+                        } else {
+                            state = DECODE;
+                        }
+                    }
                 }
-                default: state = DECODE; // MEM：下一個指令的讀取已經送出
+                MEM: {
+                    if is_lr {
+                        resv_v = 1'b1;
+                        resv_a = lsaddr;
+                    }
+                    state = DECODE; // 下一個指令的讀取已經送出
+                }
+                MULDIV: {
+                    if md_cnt == 6'd32 {
+                        state = DECODE;
+                    } else {
+                        md_cnt = md_cnt + 6'd1;
+                        if md_f3[2] {
+                            md_p = if md_diff[32] ? md_sh : {md_diff[31:0], md_sh[31:1], 1'b1};
+                        } else {
+                            md_p = {md_sum, md_p[31:1]};
+                        }
+                    }
+                }
+                WFI: if pending {
+                    state = DECODE;
+                }
+                default: state = FETCH;
             }
+        }
+    }
+
+    // minstret：每個完成的指令加一（mcycle / time 讀的是 SoC 的 mtime）
+    always_ff {
+        if_reset {
+            minstret = 32'd0;
+        } else if retired {
+            minstret = minstret + 32'd1;
         }
     }
 }
@@ -305,16 +676,25 @@ module RvSoc #(
     var wstrb: logic<4> ;
     var wdata: logic<32>;
 
+    var mtime   : logic<32>;
+    var mtimecmp: logic<32>;
+    var msip    : logic    ;
+    var rx_full : logic    ;
+
     inst u_cpu: RvCore (
-        i_clk  : i_clk,
-        i_rst  : i_rst,
-        i_run  : !i_ld,
-        o_raddr: raddr,
-        o_re   : re   ,
-        i_rdata: rdata,
-        o_waddr: waddr,
-        o_wstrb: wstrb,
-        o_wdata: wdata,
+        i_clk      : i_clk              ,
+        i_rst      : i_rst              ,
+        i_run      : !i_ld              ,
+        o_raddr    : raddr              ,
+        o_re       : re                 ,
+        i_rdata    : rdata              ,
+        o_waddr    : waddr              ,
+        o_wstrb    : wstrb              ,
+        o_wdata    : wdata              ,
+        i_irq_timer: mtime >= mtimecmp  ,
+        i_irq_soft : msip               ,
+        i_irq_ext  : rx_full            ,
+        i_mtime    : {32'd0, mtime}     ,
     );
 
     // --- 記憶體（載入埠優先）---
@@ -334,12 +714,10 @@ module RvSoc #(
 
     // --- 周邊 ---
     var led    : logic<8> ;
-    var timer  : logic<32>;
     var btn_s  : logic<3> ;
     var sw_s   : logic<8> ;
     var rx_s   : logic<2> ;
     var rx_byte: logic<8> ;
-    var rx_full: logic    ;
     var tx_go  : logic    ;
     var tx_byte: logic<8> ;
     var tx_rdy : logic    ;
@@ -373,8 +751,10 @@ module RvSoc #(
 
     always_ff {
         if_reset {
-            led     = 0;
-            timer   = 0;
+            led      = 0;
+            mtime    = 0;
+            mtimecmp = 32'hffff_ffff;
+            msip     = 0;
             btn_s   = 0;
             sw_s    = 0;
             rx_s    = 2'b11;
@@ -385,35 +765,40 @@ module RvSoc #(
             io_sel  = 0;
             io_data = 0;
         } else {
-            timer = timer + 32'd1;
+            mtime = mtime + 32'd1;
             btn_s = i_btn;
             sw_s  = i_sw;
             rx_s  = {rx_s[0], i_rx};
             tx_go = 0;
             if wr_io {
-                case waddr[4:2] {
-                    3'd0: led = wdata[7:0];
-                    3'd2: {
+                case waddr[5:2] {
+                    4'd0: led = wdata[7:0];
+                    4'd2: {
                         tx_go   = 1;
                         tx_byte = wdata[7:0];
                     }
+                    4'd4   : mtime    = wdata;
+                    4'd6   : mtimecmp = wdata;
+                    4'd8   : msip     = wdata[0];
                     default: {}
                 }
             }
             if rx_v {
                 rx_byte = rx_d;
                 rx_full = 1;
-            } else if rd_io && raddr[4:2] == 3'd2 {
+            } else if rd_io && raddr[5:2] == 4'd2 {
                 rx_full = 0;
             }
             io_sel = rd_io;
             if rd_io {
-                case raddr[4:2] {
-                    3'd0   : io_data = {24'd0, led};
-                    3'd1   : io_data = {16'd0, sw_s, 5'd0, btn_s};
-                    3'd2   : io_data = {24'd0, rx_byte};
-                    3'd3   : io_data = {30'd0, rx_full, !tx_rdy || tx_go};
-                    3'd4   : io_data = timer;
+                case raddr[5:2] {
+                    4'd0   : io_data = {24'd0, led};
+                    4'd1   : io_data = {16'd0, sw_s, 5'd0, btn_s};
+                    4'd2   : io_data = {24'd0, rx_byte};
+                    4'd3   : io_data = {30'd0, rx_full, !tx_rdy || tx_go};
+                    4'd4   : io_data = mtime;
+                    4'd6   : io_data = mtimecmp;
+                    4'd8   : io_data = {31'd0, msip};
                     default: io_data = 32'd0;
                 }
             }

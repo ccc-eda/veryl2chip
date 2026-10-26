@@ -182,7 +182,11 @@ impl Pre<'_> {
             self.errs.extend(e);
             // a macro call can continue on the next lines: keep its tokens together
             let x = self.expand(toks, &mut vec![]);
-            out.extend(x);
+            for t in x {
+                // adjacent strings join, also across lines
+                if let (Tok::Str(v), Some(Token { t: Tok::Str(prev), .. })) = (&t.t, out.last_mut()) { prev.extend(v.iter().copied()); continue; }
+                out.push(t);
+            }
         }
         if !cond.is_empty() { self.errs.push(Diag { file: self.files[file].clone(), line: lines.len(), msg: "missing #endif".into() }); }
     }
@@ -703,12 +707,23 @@ impl Parser<'_> {
         }
     }
 
-    fn unit(&mut self) -> (Vec<Func>, Vec<Decl>, Vec<(String, Ty, usize, usize)>) {
-        let (mut funcs, mut globals, mut protos) = (vec![], vec![], vec![]);
+    fn unit(&mut self) -> (Vec<Func>, Vec<Decl>, Vec<(String, Ty, usize, usize)>, Vec<String>) {
+        let (mut funcs, mut globals, mut protos, mut asms) = (vec![], vec![], vec![], vec![]);
         while self.peek().is_some() {
             let st = self.p;
             let r = (|| -> PR<()> {
                 if self.eat(";") { return Ok(()); }
+                if self.is_id("asm") || self.is_id("__asm__") {
+                    // top-level assembly (labels, data, ...)
+                    self.p += 1;
+                    self.expect("(")?;
+                    let Some(Tok::Str(t)) = self.peek().cloned() else { return self.err("asm takes one string of assembly".into()) };
+                    self.p += 1;
+                    self.expect(")")?;
+                    self.expect(";")?;
+                    asms.push(String::from_utf8_lossy(&t).to_string());
+                    return Ok(());
+                }
                 let at = self.here();
                 let base = self.base_type()?;
                 let (name, ty, f) = self.declarator(base.clone(), false)?;
@@ -734,8 +749,13 @@ impl Parser<'_> {
             })();
             if r.is_err() { if self.p == st { self.p += 1; } self.recover(); }
         }
-        (funcs, globals, protos)
+        (funcs, globals, protos, asms)
     }
+}
+
+/// identifiers in assembly text (functions / globals it refers to stay in the program)
+fn asm_names(text: &str) -> Vec<String> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).filter(|w| w.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')).map(|w| w.to_string()).collect()
 }
 
 fn const_eval(e: &E) -> Option<i64> {
@@ -1006,7 +1026,14 @@ impl Gen<'_> {
             EK::Num(v, t) => { self.emit(format!("li a0, {}", *v as i32)); t.clone() }
             EK::Str(_) => self.addr(e).decay(),
             EK::Id(n) => {
-                if self.lookup(n).is_none() && !self.globals.contains_key(n) && self.funcs.contains_key(n) { self.error(e, format!("function {} used as a value (call it with ())", n)); return Ty::Int(true); }
+                if self.lookup(n).is_none() && !self.globals.contains_key(n) {
+                    if let Some(t) = self.funcs.get(n).cloned() {
+                        // a function's name is its address (for mtvec, a thread's entry, ...)
+                        self.refs.insert(n.clone());
+                        self.emit(format!("la a0, {}", n));
+                        return Ty::Ptr(Box::new(t));
+                    }
+                }
                 if let Some(l) = self.lookup(n) {
                     if l.ty.is_scalar() && (-2048..2048).contains(&l.off) {
                         let op = match &l.ty { Ty::Char(true) => "lb", Ty::Char(false) => "lbu", Ty::Short(true) => "lh", Ty::Short(false) => "lhu", _ => "lw" };
@@ -1198,11 +1225,8 @@ impl Gen<'_> {
             "*" | "/" | "%" => {
                 if ta.is_ptr() || tb.is_ptr() { self.error(e, format!("{} on a pointer", op)); }
                 let t = arith(ta, tb);
-                let f = match (op, t.unsigned()) { ("*", _) => "__mulsi3", ("/", false) => "__divsi3", ("/", true) => "__udivsi3", (_, false) => "__modsi3", _ => "__umodsi3" };
-                self.refs.insert(f.into());
-                self.emit("mv a0, t0");
-                self.emit("mv a1, t1");
-                self.emit(format!("call {}", f));
+                let i = match (op, t.unsigned()) { ("*", _) => "mul", ("/", false) => "div", ("/", true) => "divu", (_, false) => "rem", _ => "remu" };
+                self.emit(format!("{} a0, t0, t1", i));
                 t
             }
             "<<" | ">>" => {
@@ -1232,26 +1256,25 @@ impl Gen<'_> {
         if size <= 1 { return; }
         if size.is_power_of_two() { self.emit(format!("slli {}, {}, {}", r, r, size.trailing_zeros())); return; }
         self.emit(format!("li t2, {}", size));
-        self.emit(format!("mv a0, {}", r));
-        self.emit("mv a1, t2");
-        self.emit("addi sp, sp, -8");
-        self.emit(format!("sw {}, 4(sp)", if r == "t0" { "t1" } else { "t0" }));
-        self.refs.insert("__mulsi3".into());
-        self.emit("call __mulsi3");
-        self.emit(format!("lw {}, 4(sp)", if r == "t0" { "t1" } else { "t0" }));
-        self.emit("addi sp, sp, 8");
-        self.emit(format!("mv {}, a0", r));
+        self.emit(format!("mul {}, {}, t2", r, r));
     }
     /// a0 /= size (pointer difference)
     fn scale_down(&mut self, size: usize) {
         if size <= 1 { return; }
         if size.is_power_of_two() { self.emit(format!("srai a0, a0, {}", size.trailing_zeros())); return; }
-        self.refs.insert("__divsi3".into());
         self.emit(format!("li a1, {}", size));
-        self.emit("call __divsi3");
+        self.emit("div a0, a0, a1");
     }
 
     fn call(&mut self, e: &E, name: &str, args: &[E]) -> Ty {
+        if name == "asm" || name == "__asm__" {
+            match args { [E { k: EK::Str(text), .. }] => {
+                let text = String::from_utf8_lossy(text).to_string();
+                for n in asm_names(&text) { if self.funcs.contains_key(&n) || self.globals.contains_key(&n) { self.refs.insert(n); } }
+                for l in text.lines() { if !l.trim().is_empty() { self.emit(l.trim()); } }
+            } _ => self.error(e, "asm takes one string of assembly".into()) }
+            return Ty::Void;
+        }
         let Some(Ty::Func(ret, params, variadic)) = self.funcs.get(name).cloned() else {
             if self.lookup(name).is_some() || self.globals.contains_key(name) { self.error(e, format!("{} is not a function", name)); }
             else { self.error(e, format!("function {} is not declared", name)); }
@@ -1441,6 +1464,17 @@ impl Gen<'_> {
         let Ty::Func(ret, ptys, variadic) = &f.ty else { unreachable!() };
         self.out.clear();
         self.refs.clear();
+        // a body of asm statements only: naked (no prologue / epilogue: the assembly returns itself)
+        if let S::Block(v) = &f.body {
+            let is_asm = |s: &S| matches!(s, S::Expr(E { k: EK::Call(n, _), .. }) if n == "asm" || n == "__asm__");
+            if !v.is_empty() && v.iter().all(|s| is_asm(s) || matches!(s, S::Empty)) {
+                self.scopes = vec![HashMap::new()];
+                for s in v { self.stmt(s); }
+                let mut out = vec![format!("{}:", f.name)];
+                out.extend(std::mem::take(&mut self.out));
+                return (out, std::mem::take(&mut self.refs));
+            }
+        }
         self.frame = 0;
         self.max_frame = 0;
         self.ret_ty = (**ret).clone();
@@ -1478,9 +1512,11 @@ impl Gen<'_> {
         // falling off the end returns 0 (main) / whatever is in a0
         if f.name == "main" { v.push("    li a0, 0".into()); }
         v.push(format!("{}:", self.ret_lab));
-        v.push("    mv sp, s0".into());
-        v.push("    lw ra, -4(sp)".into());
-        v.push("    lw s0, -8(sp)".into());
+        // never read below sp: an interrupt pushes its frame there
+        v.push("    addi sp, s0, -8".into());
+        v.push("    lw ra, 4(sp)".into());
+        v.push("    lw s0, 0(sp)".into());
+        v.push("    addi sp, sp, 8".into());
         v.push("    ret".into());
         (v, std::mem::take(&mut self.refs))
     }
@@ -1571,7 +1607,7 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     pre.run(1, src, &mut toks);
     let mut errs = std::mem::take(&mut pre.errs);
     let mut p = Parser { t: toks, p: 0, errs: vec![], files: &files };
-    let (funcs, globals, protos) = p.unit();
+    let (funcs, globals, protos, asms) = p.unit();
     errs.extend(p.errs);
 
     let mut g = Gen {
@@ -1626,6 +1662,10 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     // reachability
     let mut keep: Vec<String> = vec![];
     let mut todo = vec!["main".to_string()];
+    // what top-level assembly refers to
+    for a in &asms { for n in asm_names(a) { if code.contains_key(&n) || data.contains_key(&n) { todo.push(n); } } }
+    // labels defined by top-level assembly
+    let asm_labels: HashSet<String> = asms.iter().flat_map(|a| a.lines().filter_map(|l| l.trim().strip_suffix(':').map(|w| w.to_string())).collect::<Vec<_>>()).collect();
     let mut seen = HashSet::new();
     while let Some(n) = todo.pop() {
         if !seen.insert(n.clone()) { continue; }
@@ -1636,7 +1676,7 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
             None if n.starts_with(".LS") => {}
             None => {
                 let (f, l) = funcs.iter().find(|f| code.get(&f.name).is_some_and(|c| c.1.contains(&n))).map(|f| (1usize.min(f.file), f.line)).unwrap_or((1, 1));
-                if g.funcs.contains_key(&n) { errs.push(Diag { file: files[f].clone(), line: l, msg: format!("function {} is declared but never defined", n) }); }
+                if g.funcs.contains_key(&n) && !asm_labels.contains(&n) { errs.push(Diag { file: files[f].clone(), line: l, msg: format!("function {} is declared but never defined", n) }); }
             }
         }
     }
@@ -1645,13 +1685,14 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     let mut s = String::new();
     s += &format!("# compiled by veryl-eda's C compiler ({} bytes of RAM)\n    .text\n_start:\n    li sp, {}\n", opts.mem_size, opts.mem_size);
     s += "    la t0, __bss_start\n    la t1, __bss_end\n.Lbss:\n    bgeu t0, t1, .Lmain\n    sw zero, 0(t0)\n    addi t0, t0, 4\n    j .Lbss\n.Lmain:\n    call main\n_halt:\n    j _halt\n";
-    // functions in source order (runtime first)
+    // functions in source order (runtime first), then top-level assembly
     for f in &funcs {
         if keep.contains(&f.name) {
             s += "\n";
             for l in &code[&f.name].0 { s += l; s.push('\n'); }
         }
     }
+    for a in &asms { s += "\n    .text\n"; s += a; s.push('\n'); }
     let strs: Vec<(usize, &Vec<u8>)> = g.strings.iter().enumerate().filter(|(i, _)| keep.contains(&format!(".LS{}", i))).collect();
     if !strs.is_empty() {
         s += "\n    .rodata\n";

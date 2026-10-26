@@ -56,14 +56,21 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 | **繞線後位元流**模擬（`icebox_vlog` 轉回 Verilog） | 第 70 個 cycle LED = 55 |
 
 ## RISC-V SoC 與 C 程式（`examples/src/rvsoc.veryl`、`src/rv/`）
-`RvCore` 是**多週期**的 RV32I（Decode → Exec，load 多一個 Mem；一般指令 2 拍、load 3 拍），暫存器檔（兩份 `SyncRam` 當兩個讀取埠）
+`RvCore` 是**多週期**的 RV32IMA + Zicsr（Decode → Exec，load / LR / AMO 多一個 Mem；一般指令 2 拍、load 3 拍、乘除法 35 拍（反覆式），
+machine mode 的陷阱：計時器 / 軟體 / 外部中斷、ecall、ebreak、非法指令、位址沒對齊，`mret`、`wfi`；足夠跑搶佔式多執行緒核心），暫存器檔（兩份 `SyncRam` 當兩個讀取埠）
 與記憶體都是同步讀取的 RAM，所以會變成 `SB_RAM40_4K`。`RvSoc` 加上 8 KB、四個位元組通道的記憶體（`RvMem`）、記憶體映射的周邊
-（LED 0x1000_0000、按鈕 + 開關 0x…04、UART 資料 / 狀態 0x…08 / 0x…0C、時脈計數器 0x…10）和給 testbench 用的載入埠；
-`RvBoard` 是 iCEBreaker 的頂層（`examples/rvsoc.pcf`）：1844 LUT + 20 個 block RAM，Fmax 13.3 MHz。
+（LED 0x1000_0000、按鈕 + 開關 0x…04、UART 資料 / 狀態 0x…08 / 0x…0C、CLINT：`mtime` 0x…10、`mtimecmp` 0x…18、`msip` 0x…20）和給 testbench 用的載入埠；
+`RvBoard` 是 iCEBreaker 的頂層（`examples/rvsoc.pcf`）：3960 LUT + 20 個 block RAM，Fmax 約 12.8 MHz（nextpnr；板上時脈 12 MHz）。
 `VgaText`（`examples/src/rvvga.veryl`）在 SoC 的外部寫入匯流排上加一個 40 × 30 字元的 VGA 畫面（字元與字型在 block RAM，兩拍管線）；
-`RvVgaBoard` = 1961 LUT + 26 個 block RAM。Block RAM 推論也接受有些資料位元沒被讀、已經被刪掉的記憶體。
+`RvVgaBoard` = 4072 LUT + 26 個 block RAM，約 13 MHz。Block RAM 推論也接受有些資料位元沒被讀、已經被刪掉的記憶體。
 `TestRvSoc` 載入 `rv32i_test.S`（資料在 0x300，`examples/sw/build.sh` 產生的 `examples/src/rvsoc_rom.veryl`），執行後檢查 41 個結果；
+`TestRvSocIma`（`examples/src/rvsoc_ima_test.veryl`，也由 `build.sh` 產生）跑 `rv32ima_test.S`（M、A、Zicsr、陷阱），結果與 spike 比對；
 `veryl-eda/examples/rvsoc_small.veryl`（64 位元組記憶體）由 `test.sh` 證明與 `veryl build` 等價。
+C 編譯器會產生 `mul` / `div` / `rem`，接受 `asm("...")` 敘述與最外層的 `asm(...)`（函式本體只有 `asm` 時不加 prologue：naked 函式），
+函式名稱就是它的位址；執行期函式庫有 `interrupts_on/off`、`irq_save/restore`、`set_mtvec`、`set_mie`、讀 CSR、`wfi`、
+`atomic_swap/add/and/or/xor/cas`（AMO、LR/SC）與 spinlock。`examples/c/threads.c` 是一個小小的搶佔式核心：每 10 ms 的計時器中斷把暫存器
+存到執行緒自己的堆疊、輪流切換執行緒，`ecall` 提供 yield / sleep / exit，互斥鎖用 `amoswap`；`cargo test threads_on_rvsoc` 讓它（時間片縮短）
+同時跑在閘級 RvBoard 與 ISS 上：輸出與 LED 相同。
 
 **程式放在 block RAM。** 每個存放記憶體的 `SB_RAM40_4K` 帶有 `MEM_SLOT` = `名稱:區塊`（JSON 裡是 yosys attribute）；
 `bram::set_mem_init` 在映射後給記憶體初值，`--program PROG.bin` 從位址 0 填入位元組通道 `*.b0.mem … *.b3.mem`，

@@ -1070,6 +1070,37 @@ fn cc_on_rvsoc() {
     assert_eq!(u.framing_errors, 0);
 }
 
+/// the threads example (timer interrupts, ecall, amoswap, mul / rem) with a short time slice and
+/// sleeps: the gate-level RvBoard and the ISS agree cycle by cycle (same output, same LEDs)
+#[test]
+fn threads_on_rvsoc() {
+    let src = std::fs::read_to_string(format!("{}/../examples/c/threads.c", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        .replace("#define SLICE    120000", "#define SLICE    3000").replace("frame[10] * 12000", "frame[10] * 150").replace("count % 200 == 0", "count % 20 == 0");
+    let bytes = crate::rv::cc::compile("threads.c", &src, &Default::default()).unwrap_or_else(|e| panic!("{:?}", e)).program.bytes;
+    const CYCLES: u64 = 600_000;
+    let mut s = crate::rv::iss::Iss::new(&bytes, 8192);
+    s.tx_cycles = 1040;
+    while s.cycles < CYCLES { s.step_until(CYCLES).unwrap(); }
+    let want = String::from_utf8_lossy(&s.tx).to_string();
+    assert!(want.contains("A: 16") && want.contains("B: 8") && want.contains("primes: #40 "), "{}", want);
+    let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
+    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &bytes).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
+    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    b.attach_uart(9, 6, 104.0);
+    b.set_pin(10, false);
+    b.run(3);
+    b.set_pin(10, true);
+    b.run(CYCLES);
+    let u = b.uart.as_ref().unwrap();
+    let got = String::from_utf8_lossy(&u.received).to_string();
+    // the last bytes are still on the wire
+    assert!(want.starts_with(&got) && want.len() - got.len() <= 2, "gates:\n{}\niss:\n{}", got, want);
+    assert_eq!(u.framing_errors, 0);
+    let led = [4, 2, 47, 45, 3, 48, 46, 44].iter().enumerate().fold(0, |a, (i, p)| a | (b.pin(*p).unwrap() as u32) << i);
+    assert_eq!(led, s.led & 255);
+}
+
 /// a C example (examples/c) compiled
 fn c_example(name: &str) -> Vec<u8> {
     let src = std::fs::read_to_string(format!("{}/../examples/c/{}.c", env!("CARGO_MANIFEST_DIR"), name)).unwrap();
@@ -1150,4 +1181,28 @@ fn vga_text_on_board() {
     assert!(hw.iter().filter(|p| **p == 0xff0).count() > 2000 && hw.iter().filter(|p| **p == 0x00a).count() > 200_000);
     let diff = hw.iter().zip(&sw).filter(|(a, b)| a != b).count();
     assert_eq!(diff, 0, "{} pixels differ", diff);
+}
+
+/// the instruction-set simulator runs rv32ima_test.S (M, A, Zicsr, traps) with spike's results
+#[test]
+fn iss_rv32ima_matches_spike() {
+    let src = std::fs::read_to_string(format!("{}/../examples/src/rvsoc_ima_test.veryl", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut bytes = vec![0u8; 1024];
+    let mut exp = vec![];
+    for l in src.lines() {
+        let l = l.trim();
+        if let Some((a, rest)) = l.strip_prefix("10'h").and_then(|r| r.split_once(" : o_inst = 32'h")) {
+            let a = usize::from_str_radix(a, 16).unwrap();
+            bytes[a..a + 4].copy_from_slice(&u32::from_str_radix(&rest[..8], 16).unwrap().to_le_bytes());
+        } else if let Some((_, r)) = l.split_once("ld_rdata == 32'h") {
+            exp.push(u32::from_str_radix(&r[..8], 16).unwrap());
+        }
+    }
+    assert_eq!(exp.len(), 59);
+    let mut s = crate::rv::iss::Iss::new(&bytes, 2048);
+    assert!(s.run(10_000).unwrap(), "halts");
+    for (i, v) in exp.iter().enumerate() {
+        let a = 0x400 + 4 * i;
+        assert_eq!(u32::from_le_bytes(s.mem[a..a + 4].try_into().unwrap()), *v, "word {}", i);
+    }
 }

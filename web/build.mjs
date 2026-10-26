@@ -87,6 +87,7 @@ const EX = [
     ['c_sevenseg', 'sevenseg', 'C：七段顯示器', '00–99 顯示在七段模組（PMOD1A），用軟體多工掃描；BTN1 歸零', { uart: false, pmod1a: 'seg7', pmod1b: '' }],
     ['c_music', 'music', 'C：蜂鳴器音樂', 'PMOD1A 腳 1 的方波（蜂鳴器模組）：小星星', { uart: true, pmod1a: 'buzzer', pmod1b: '' }],
     ['c_switches', 'switches', 'C：開關', 'PMOD1B 的 8 個開關顯示在 PMOD1A 的 8 顆 LED，並在終端機印出二進位 / 十六進位', { uart: true, pmod1a: 'led8', pmod1b: 'sw8' }],
+    ['c_threads', 'threads', 'C：多執行緒（搶佔式核心）', '計時器中斷每 10 ms 切換執行緒（mtvec、mepc、mret）；ecall 做 yield / sleep，amoswap 做互斥鎖。LED 0、1 是兩個閃爍的執行緒，LED 7 是不讓出 CPU 的質數計算', { uart: true, pmod1a: 'led8', pmod1b: '' }],
   ].map(([id, f, title, note, b], i) => ({
     id, group: 'C 程式', title, note, synth: 'RvBoard', pcf: 'examples/rvsoc.pcf', board: { baud: 115200, mode: 'cpu', ...b },
     files: ['examples/c/' + f + '.c', 'examples/src/rvsoc.veryl', 'examples/src/rv32i.veryl', 'examples/src/sync_ram.veryl', 'examples/src/uart.veryl', 'examples/src/rvsoc_rom.veryl', 'examples/src/rv32i_rom.veryl'],

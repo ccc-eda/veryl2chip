@@ -34,6 +34,17 @@ pub struct Error { pub line: usize, pub msg: String }
 
 const SECTIONS: [&str; 4] = [".text", ".rodata", ".data", ".bss"];
 
+/// CSR numbers by name (machine mode, counters)
+pub fn csr(s: &str) -> Option<u32> {
+    Some(match s {
+        "mstatus" => 0x300, "misa" => 0x301, "mie" => 0x304, "mtvec" => 0x305, "mscratch" => 0x340, "mepc" => 0x341,
+        "mcause" => 0x342, "mtval" => 0x343, "mip" => 0x344, "mcycle" => 0xb00, "minstret" => 0xb02, "mcycleh" => 0xb80,
+        "minstreth" => 0xb82, "cycle" => 0xc00, "time" => 0xc01, "instret" => 0xc02, "cycleh" => 0xc80, "timeh" => 0xc81,
+        "instreth" => 0xc82, "mvendorid" => 0xf11, "marchid" => 0xf12, "mimpid" => 0xf13, "mhartid" => 0xf14,
+        _ => return None,
+    })
+}
+
 pub fn reg(s: &str) -> Option<u32> {
     let abi = ["zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
         "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"];
@@ -138,6 +149,20 @@ fn operands(s: &str) -> Vec<String> {
     v
 }
 
+/// split at `;` outside quotes
+fn split_statements(l: &str) -> Vec<&str> {
+    let mut out = vec![];
+    let (mut q, mut esc, mut start) = (None::<char>, false, 0);
+    for (i, c) in l.char_indices() {
+        if let Some(qc) = q {
+            if esc { esc = false; } else if c == '\\' { esc = true; } else if c == qc { q = None; }
+        } else if c == '"' || c == '\'' { q = Some(c); }
+        else if c == ';' { out.push(&l[start..i]); start = i + 1; }
+    }
+    out.push(&l[start..]);
+    out
+}
+
 /// strip a comment (`#` or `//`, not inside quotes)
 fn strip_comment(l: &str) -> &str {
     let mut q = None::<char>;
@@ -187,7 +212,9 @@ pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
     for (ln, raw) in src.lines().enumerate() {
         let ln = ln + 1;
         if !raw.trim().is_empty() { at.push((ln, sec, off[sec], raw.trim_end().to_string())); }
-        let mut l = strip_comment(raw).trim();
+        // several statements on a line, separated by `;`
+        for part in split_statements(strip_comment(raw)) {
+        let mut l = part.trim();
         // labels (several allowed)
         loop {
             let Some(p) = l.find(':') else { break };
@@ -254,6 +281,7 @@ pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
         if sec == 3 { errs.push(Error { line: ln, msg: "instructions in .bss".into() }); continue; }
         let size = inst_size(&op, &args);
         push(Item::Inst { op, args }, size, sec, &mut off);
+        }
     }
     // section bases: text, rodata, data, bss (each word aligned)
     let mut base = [0u32; 4];
@@ -320,6 +348,14 @@ fn j_type(off: i64, rd: u32) -> u32 {
     ((i >> 20) & 1) << 31 | ((i >> 1) & 0x3ff) << 21 | ((i >> 11) & 1) << 20 | ((i >> 12) & 0xff) << 12 | rd << 7 | 0x6f
 }
 
+/// a CSR operand: a name or a number
+fn csr_num(s: &str, ev: &dyn Fn(&str) -> Result<i64, String>) -> Result<u32, String> {
+    if let Some(n) = csr(s.trim()) { return Ok(n); }
+    let v = ev(s)?;
+    if !(0..4096).contains(&v) { return Err(format!("CSR number {} out of range", v)); }
+    Ok(v as u32)
+}
+
 fn encode(op: &str, a: &[String], pc: u32, ev: &dyn Fn(&str) -> Result<i64, String>) -> Result<Vec<u32>, String> {
     let n = |k: usize| -> Result<(), String> { if a.len() == k { Ok(()) } else { Err(format!("{} takes {} operand{}", op, k, if k == 1 { "" } else { "s" })) } };
     let r = |i: usize| -> Result<u32, String> { let s = a.get(i).ok_or_else(|| format!("{}: missing operand", op))?; reg(s).ok_or_else(|| format!("{}: {} is not a register", op, s)) };
@@ -341,6 +377,18 @@ fn encode(op: &str, a: &[String], pc: u32, ev: &dyn Fn(&str) -> Result<i64, Stri
             Ok((if o.is_empty() { 0 } else { ev(o)? }, base))
         } else { Ok((ev(s)?, 0)) }
     };
+    // ---- A: lr.w / sc.w / amo*.w (with optional .aq / .rl / .aqrl) ----
+    let (base, ord) = match op.strip_suffix(".aqrl") { Some(b) => (b, 3), None => match op.strip_suffix(".aq") { Some(b) => (b, 2), None => match op.strip_suffix(".rl") { Some(b) => (b, 1), None => (op, 0) } } };
+    let amo = ["amoadd.w", "amoswap.w", "lr.w", "sc.w", "amoxor.w", "", "", "", "amoor.w", "", "", "", "amoand.w", "", "", "", "amomin.w", "", "", "", "amomax.w", "", "", "", "amominu.w", "", "", "", "amomaxu.w"];
+    if let Some(f5) = amo.iter().position(|x| !x.is_empty() && *x == base) {
+        let addr = |i: usize| -> Result<u32, String> {
+            let s = a.get(i).ok_or_else(|| format!("{}: missing (rs1)", op))?;
+            let inner = s.trim().strip_prefix('(').and_then(|x| x.strip_suffix(')')).ok_or_else(|| format!("{}: the address is written (rs1)", op))?;
+            reg(inner.trim()).ok_or_else(|| format!("{}: {} is not a register", op, inner))
+        };
+        let (rs2, rs1) = if base == "lr.w" { n(2)?; (0, addr(1)?) } else { n(3)?; (r(1)?, addr(2)?) };
+        return Ok(vec![(f5 as u32) << 27 | ord << 25 | rs2 << 20 | rs1 << 15 | 2 << 12 | r(0)? << 7 | 0x2f]);
+    }
     let alu_i = ["addi", "slti", "sltiu", "xori", "ori", "andi"];
     let alu_r = ["add", "sub", "sll", "slt", "sltu", "xor", "srl", "sra", "or", "and"];
     let br = ["beq", "bne", "blt", "bge", "bltu", "bgeu"];
@@ -392,7 +440,40 @@ fn encode(op: &str, a: &[String], pc: u32, ev: &dyn Fn(&str) -> Result<i64, Stri
         }
         "ecall" => { n(0)?; vec![0x73] }
         "ebreak" => { n(0)?; vec![0x0010_0073] }
+        "mret" => { n(0)?; vec![0x3020_0073] }
+        "wfi" => { n(0)?; vec![0x1050_0073] }
         "fence" => vec![0x0ff0_000f],
+        "fence.i" => { n(0)?; vec![0x0000_100f] }
+        // ---- M ----
+        "mul" | "mulh" | "mulhsu" | "mulhu" | "div" | "divu" | "rem" | "remu" => {
+            n(3)?;
+            let f3 = ["mul", "mulh", "mulhsu", "mulhu", "div", "divu", "rem", "remu"].iter().position(|x| *x == op).unwrap() as u32;
+            vec![r_type(1, r(2)?, r(1)?, f3, r(0)?, 0x33)]
+        }
+        // ---- Zicsr ----
+        "csrrw" | "csrrs" | "csrrc" | "csrrwi" | "csrrsi" | "csrrci" => {
+            n(3)?;
+            let f3 = match op { "csrrw" => 1, "csrrs" => 2, "csrrc" => 3, "csrrwi" => 5, "csrrsi" => 6, _ => 7 };
+            let src = if f3 >= 5 { let v = ev(&a[2])?; if !(0..32).contains(&v) { return Err(format!("{}: immediate {} out of range (0..31)", op, v)); } v as u32 } else { r(2)? };
+            vec![csr_num(&a[1], ev)? << 20 | src << 15 | f3 << 12 | r(0)? << 7 | 0x73]
+        }
+        "csrr" => { n(2)?; vec![csr_num(&a[1], ev)? << 20 | 2 << 12 | r(0)? << 7 | 0x73] }
+        "csrw" | "csrs" | "csrc" => {
+            n(2)?;
+            let f3 = match op { "csrw" => 1, "csrs" => 2, _ => 3 };
+            vec![csr_num(&a[0], ev)? << 20 | r(1)? << 15 | f3 << 12 | 0x73]
+        }
+        "csrwi" | "csrsi" | "csrci" => {
+            n(2)?;
+            let f3 = match op { "csrwi" => 5, "csrsi" => 6, _ => 7 };
+            let v = ev(&a[1])?;
+            if !(0..32).contains(&v) { return Err(format!("{}: immediate {} out of range (0..31)", op, v)); }
+            vec![csr_num(&a[0], ev)? << 20 | (v as u32) << 15 | f3 << 12 | 0x73]
+        }
+        "rdcycle" | "rdcycleh" | "rdtime" | "rdtimeh" | "rdinstret" | "rdinstreth" => {
+            n(1)?;
+            vec![csr(&op[2..]).unwrap() << 20 | 2 << 12 | r(0)? << 7 | 0x73]
+        }
         // ---- pseudo-instructions ----
         "nop" => { n(0)?; vec![0x13] }
         "li" => {

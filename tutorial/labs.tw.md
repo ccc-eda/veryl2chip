@@ -25,6 +25,7 @@
 | 7 | UART | 教學 → 第 3 課 | USB 終端機 | 序列通訊、移位暫存器 |
 | 8 | VGA | 周邊 → VGA | VGA 螢幕 | 視訊時序、計數器比較 |
 | C1–C7 | C 程式（第二部分） | C 程式 → … | 終端機、LED、按鈕、開關、七段、蜂鳴器、VGA | 在自己做的 RISC-V 上跑 C |
+| C8 | 多執行緒 | C 程式 → 多執行緒 | 終端機、8 顆 LED | 中斷、陷阱、context switch、原子指令 |
 
 每個實驗都照同樣的四步走，**順序不能跳**：
 
@@ -239,6 +240,28 @@ CPU 用 `vga_init()` 把字型載進去，之後 `vga_goto(欄, 列)`、`vga_put
 **思考題**：VgaText 讀字元 RAM、再讀字型 RAM，各要一拍，所以 HSYNC、VSYNC 也要延遲兩拍（看 `rvvga.veryl` 的 `hs1`、`hs2`）。如果不延遲，畫面會怎樣？
 
 **進階**：打開 **C：檢視組合語言**，找出 `printf` 被呼叫的地方，數數看一個 `for` 迴圈編成了幾道指令。再把 RvSoc 的硬體改一改（例如加一個暫存器），用 ⚡ 位元流模式確認程式還是能跑。
+
+## C8：多執行緒（搶佔式核心）
+
+開啟：[C：多執行緒](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_threads&board=1)
+
+RvCore 不只是 RV32I：它還有乘除法（M）、原子指令（A）、CSR 與 machine mode 的**陷阱**。`threads.c` 用這些做出一個小小的作業系統核心：
+
+- `os_start()` 設定 `mtvec`（陷阱入口 `trap_entry`）、`MTIMECMP = MTIME + 10 ms`，打開計時器中斷。
+- 計時器到了，CPU 自動跳到 `trap_entry`（`mepc` = 被打斷的指令）：組合語言把 31 個暫存器存到**目前執行緒自己的堆疊**，呼叫 C 的 `kernel_trap`，
+  它選下一個醒著的執行緒、傳回它的堆疊指標；`trap_entry` 從那裡把暫存器載回來，`mret` 就回到**另一個**執行緒中斷的地方。這就是 context switch。
+- `yield()`、`sleep_ms()` 用 `ecall` 主動進入核心；`lock()` 用 `amoswap`（原子的讀出並寫入）做互斥鎖，保護 `printf` 不被兩個執行緒交錯；
+  `led_toggle` 用 `irq_save` / `irq_restore` 暫時關中斷。
+
+**檢查點**：LED 0 與 LED 1 以不同速度閃（執行緒 A、B，各自 `sleep_ms`）；LED 7 是質數執行緒，它從不讓出 CPU，但 A、B 照樣在跑；
+終端機的訊息一行一行完整，`switches` 一直增加。
+
+**動手改**：加第四個執行緒（記得把 `NTHREADS` 改成 5，給它一個堆疊），讓它每秒在終端機印出開機秒數。把 `SLICE` 改成 1 ms 和 100 ms，質數執行緒的速度變了嗎？LED 呢？
+
+**思考題**：把 `lock()` 裡的 `atomic_swap` 換成普通的「先讀、是 0 才寫 1」，什麼時候會出錯？為什麼 `led_toggle` 要關中斷，`leds ^= bit` 不是一行嗎？
+（提示：它會變成 load、xor、store 三道指令。）
+
+**進階**：C 編譯器的函式結尾原本是 `mv sp, s0` 之後才從 `-4(sp)` 讀回 `ra`——這在沒有中斷時沒問題，有了中斷就會壞掉。想想為什麼（中斷的暫存器框推在哪裡？）。
 
 ---
 

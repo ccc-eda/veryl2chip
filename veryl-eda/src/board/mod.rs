@@ -524,7 +524,8 @@ impl Board {
             }
             let c0 = c.iss.cycles;
             if c.error.is_none() {
-                if let Err(e) = c.iss.step() { c.error = Some(e); }
+                // asleep in wfi: until an interrupt, or the end of this window (a byte may arrive)
+                if let Err(e) = c.iss.step_until(c0 + left) { c.error = Some(e); }
             }
             if c.error.is_some() { c.iss.cycles += 2; }
             let d = (c.iss.cycles - c0).min(left);

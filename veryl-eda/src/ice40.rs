@@ -1,5 +1,6 @@
 //! Technology mapping for Lattice iCE40: the generic gate netlist becomes
-//! `SB_LUT4` cells (cut-based 4-input LUT covering, depth then area flow),
+//! `SB_LUT4` cells (cut-based 4-input LUT covering: depth first, then area
+//! recovery under the depth's required times),
 //! `SB_CARRY` for ripple-carry adder/comparator chains, and the `SB_DFF*`
 //! flip-flop family, i.e. what nextpnr-ice40 expects.
 
@@ -116,13 +117,64 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
             for c in cand {
                 if !kept.iter().any(|k| k.leaves.iter().all(|x| c.leaves.contains(x))) { kept.push(c); }
             }
+            // the shallowest cuts, and the ones with the least area flow (for the area recovery)
             kept.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.flow.partial_cmp(&b.flow).unwrap()).then(a.leaves.len().cmp(&b.leaves.len())));
-            kept.truncate(CUTS);
+            if kept.len() > CUTS {
+                let mut by_flow: Vec<Cut> = kept[CUTS / 2..].to_vec();
+                by_flow.sort_by(|a, b| a.flow.partial_cmp(&b.flow).unwrap().then(a.depth.cmp(&b.depth)));
+                kept.truncate(CUTS / 2);
+                kept.extend(by_flow.into_iter().take(CUTS / 2));
+            }
             if kept.is_empty() { return Err(format!("no cut for net {}", n)); }
             best.insert(n, kept[0].clone());
             cuts.insert(n, kept);
         }
         // re-estimate fanouts from the current cover for the second pass
+        let (used, used_carry) = cover(&roots, &node, &best, &carry);
+        refs.clear();
+        for n in &used { for l in &best[n].leaves { *refs.entry(*l).or_default() += 1; } }
+        for n in &used_carry { let (x, y, c) = carry[n]; for b in [x, y, c] { if let Bit::W(w) = b { *refs.entry(w).or_default() += 1; } } }
+        for b in &roots { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } }
+    }
+
+    // Area recovery: the depth-first choice copies shared logic into every cone that
+    // needs it fast. Keep the depth (required times from the cover), and elsewhere pick
+    // the cut with the least area flow among those that still arrive in time.
+    let arrival = |l: &u32, best: &HashMap<u32, Cut>| best.get(l).map(|b| b.depth).unwrap_or(0);
+    let dmax = roots.iter().filter_map(|b| if let Bit::W(w) = b { Some(arrival(w, &best)) } else { None }).max().unwrap_or(0);
+    for _round in 0..2 {
+        let (used, used_carry) = cover(&roots, &node, &best, &carry);
+        let mut req: HashMap<u32, u32> = HashMap::new();
+        for b in &roots { if let Bit::W(w) = b { req.insert(*w, dmax); } }
+        for n in &used_carry { let (x, y, c) = carry[n]; for b in [x, y, c] { if let Bit::W(w) = b { req.entry(w).or_insert(dmax); } } }
+        for c in gates.iter().rev() {
+            let Bit::W(n) = c.out() else { continue };
+            if !used.contains(&n) { continue; }
+            let r = req.get(&n).copied().unwrap_or(dmax);
+            for l in &best[&n].leaves {
+                let e = req.entry(*l).or_insert(u32::MAX);
+                *e = (*e).min(r.saturating_sub(1));
+            }
+        }
+        for c in &gates {
+            let Bit::W(n) = c.out() else { continue };
+            let Some(cs) = cuts.get_mut(&n) else { continue };
+            let r = req.get(&n).copied().unwrap_or(u32::MAX);
+            for cut in cs.iter_mut() {
+                let (mut depth, mut flow) = (0, 1.0f32);
+                for l in &cut.leaves {
+                    if let Some(b) = best.get(l) {
+                        depth = depth.max(b.depth);
+                        flow += b.flow / (*refs.get(l).unwrap_or(&1)).max(1) as f32;
+                    }
+                }
+                cut.depth = depth + 1;
+                cut.flow = flow;
+            }
+            let pick = cs.iter().filter(|c| c.depth <= r).min_by(|a, b| a.flow.partial_cmp(&b.flow).unwrap().then(a.depth.cmp(&b.depth)))
+                .or_else(|| cs.iter().min_by_key(|c| c.depth)).unwrap().clone();
+            best.insert(n, pick);
+        }
         let (used, used_carry) = cover(&roots, &node, &best, &carry);
         refs.clear();
         for n in &used { for l in &best[n].leaves { *refs.entry(*l).or_default() += 1; } }

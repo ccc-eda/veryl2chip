@@ -52,7 +52,7 @@ echo "== gate-level simulation: the RTL testbenches on the synthesized netlists"
 # top:files (the module replaced by its netlist; its file's #[test] modules run)
 GATESIM="Adder:adder Max3:max3 AluUnit:alu_pkg GrayConv:gen_rev Seq101:seq101 PktReg:pkt_reg Ram:ram SyncRam:sync_ram
 Top:features BramMix:sync_ram+bram_tests HsTop:lang RiscvCore:rv32i+rv32i_rom Fifo:fifo UartLoop:uart VgaTiming:vga SevenSeg:sevenseg Gates:gates ButtonCounter:button_counter TrafficLight:traffic
-RvSoc:rv32i+rv32i_rom+sync_ram+uart+rvsoc_rom+rvsoc VgaText:vga+sync_ram+rvvga"
+RvSoc:rv32i+rv32i_rom+sync_ram+uart+rvsoc_rom+rvsoc+rvsoc_ima_test VgaText:vga+sync_ram+rvvga"
 for d in $GATESIM; do
     IFS=: read -r m f <<< "$d"
     files=""
