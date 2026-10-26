@@ -183,6 +183,14 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
     查表，斜率沿路径传递，setup / hold 来自触发器的限制表，导线加上 Elmore RC。
   - `--verilog` / `--def` 写出单元库的单元、引脚、site、层（met1–met4、li1 引脚）与 via 名称；Verilog 最后接着由 Liberty
     函数产生的行为模型。`--map-only` 只做对应。
+- 设计规则（v1.6）：`src/asic/layout.rs` 把结果变成矩形（导线、tech LEF 的 via 定义、引脚短线、IO 引脚、电源轨、电源条、
+  via 堆栈），`src/asic/drc.rs` 连同每个单元自己的引脚与 OBS 形状一起检查：短路、间距（cut 层：任两个 cut 之间）、
+  单独 via 垫片的最小面积、断路。详细布线遵守 SKY130 的规则：met3 / met4 隔一条轨道（它们的轨距是格点的两倍）、
+  电源轨下的轨道不走 met1、met1-met2 via 在棋盘格上且不紧邻别的网络的引脚 via、met2 / met3 / met4 的线端与 via 垫片
+  和别的网络隔一个格点、避开触发器内部的 met1（set / reset 引脚在那层 met1 上接）、引脚接点离单元的接点与边界够远、
+  电源网格周围净空。via 只放在路径换层的地方。密集的设计绕不干净时，流程会换更大的裸片再试。
+  `--asic --pdk sky130` 打印 DRC 摘要（`-v`：例子）；`cargo test` 要求 Ram 与 RiscvSoc 都是 0
+  （RiscvSoc：利用率 32 % 时短路 / 间距 / 面积 / 断路都是 0）。
 - `--gatesim sky130` 在 SKY130 网表上跑 testbench；`test.sh` 用 yosys 从 PDK 自己的 Liberty 档创建的单元模型（`read_liberty`），
   证明每个设计的 SKY130 网表与 `veryl build` 的输出等价。`cargo test` 把 DEF 读回来对照 LEF 检查（单元在列与 site 上、
   不重叠、每个 site 都有东西、tap 距离）。

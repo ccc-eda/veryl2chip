@@ -278,6 +278,10 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
             assert_eq!(def.comps.len(), o.mapped.cells.len() + def.comps.iter().filter(|c| c.name.starts_with("fill") || c.name.starts_with("tap")).count());
             assert!(!o.pdn.taps.is_empty() && o.pdn.tap_viol == 0, "{}: {} taps, {} sites too far from one", top, o.pdn.taps.len(), o.pdn.tap_viol);
             assert!(def.nets.iter().any(|n| n.routes.iter().any(|r| matches!(r, crate::pdk::def::Route::Via { via, .. } if via == "L1M1_PR"))));
+            // the layout with the cells' own shapes: design rules from the tech LEF
+            let l = crate::asic::layout::build(&o).unwrap();
+            let d = crate::asic::drc::check(&l, &o.mapped);
+            assert_eq!((d.shorts, d.spacing, d.area, d.opens), (0, 0, 0, 0), "{}: DRC {:?}", top, d.details);
         }
         let pl = &o.placement;
         let mut occ = vec![vec![false; pl.sites as usize]; pl.rows as usize];

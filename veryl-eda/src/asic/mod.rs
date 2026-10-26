@@ -4,6 +4,8 @@
 
 pub mod cts;
 pub mod detail;
+pub mod drc;
+pub mod layout;
 pub mod lib;
 pub mod map;
 pub mod pdn;
@@ -41,13 +43,47 @@ pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> { flow_with(opt,
 pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, String> {
     let t = |what: &str, t0: f64| if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("{}: {:.2}s", what, now() - t0) };
     let t0 = now();
-    let mut mapped = map::map(opt)?;
+    let mapped0 = map::map(opt)?;
     t("map", t0);
-    let t0 = now();
     // utilization: start at 65 %; a design whose global routing overflows or
     // fills its gcell edges more than half on average gets a bigger die (the
-    // track-level router needs the room for pins and vias)
-    let mut util = 0.65;
+    // track-level router needs the room for pins and vias). A library technology
+    // starts lower (its met1 / met3 / met4 carry fewer tracks) and, should the
+    // detailed routing not come out clean, tries again on a bigger die.
+    let lib_tech = !crate::pdk::tech().is_vlib();
+    let mut util = if lib_tech { 0.55 } else { 0.65 };
+    let mut attempt = 0;
+    let (mapped, placement, mut routing, fmax_wl, fmax_ideal, cts, hold_bufs, pdn, detail) = loop {
+        let r = physical(&mapped0, seed, util, extra_hold)?;
+        attempt += 1;
+        if !lib_tech || (r.8.conflicts == 0 && r.8.opens == 0) || attempt >= 3 || r.9 < 0.3 { break (r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8); }
+        util = r.9 * 0.85;
+    };
+    let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
+    for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
+    let timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
+    // power at Fmax, from a random-input simulation of the final netlist
+    let t0 = now();
+    let cycles = (2_000_000 / mapped.cells.len().max(1)).clamp(100, 1000);
+    let act = crate::power::activity(&mapped, cycles, 1);
+    let power = power::estimate(&mapped, &placement, &dlen, &pdn, &act, timing.fmax);
+    t("power", t0);
+    let area = mapped.cells.iter().map(lib::cell_area).sum();
+    let mut m: std::collections::BTreeMap<String, usize> = Default::default();
+    for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
+    let mut counts: Vec<(String, usize)> = m.into_iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail, pdn, power })
+}
+
+/// placement, global routing, timing-driven refinement, clock tree, hold
+/// fixing, taps and power grid, detailed routing at utilization `util`
+#[allow(clippy::type_complexity)]
+fn physical(mapped: &Netlist, seed: u64, util: f64, extra_hold: f64) -> Result<(Netlist, place::RowPlacement, route::Routing, f64, f64, cts::Cts, usize, pdn::Pdn, detail::Detail, f64), String> {
+    let t = |what: &str, t0: f64| if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("{}: {:.2}s", what, now() - t0) };
+    let t0 = now();
+    let mut util = util;
+    let mut mapped = mapped.clone();
     let (mut placement, mut routing);
     loop {
         placement = place::place(&mapped, seed, util, &Default::default(), None);
@@ -103,21 +139,7 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     let pdn = pdn::build(&mapped, &placement, &taps);
     let detail = detail::route(&mapped, &placement, &routing, &pdn);
     t("detail route", t0);
-    let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
-    for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
-    let timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
-    // power at Fmax, from a random-input simulation of the final netlist
-    let t0 = now();
-    let cycles = (2_000_000 / mapped.cells.len().max(1)).clamp(100, 1000);
-    let act = crate::power::activity(&mapped, cycles, 1);
-    let power = power::estimate(&mapped, &placement, &dlen, &pdn, &act, timing.fmax);
-    t("power", t0);
-    let area = mapped.cells.iter().map(lib::cell_area).sum();
-    let mut m: std::collections::BTreeMap<String, usize> = Default::default();
-    for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
-    let mut counts: Vec<(String, usize)> = m.into_iter().collect();
-    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail, pdn, power })
+    Ok((mapped, placement, routing, fmax_wl, fmax_ideal, cts, hold_bufs, pdn, detail, util))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -190,6 +212,7 @@ pub fn def(o: &Output) -> String {
             if sv != vdd { continue; }
             if vlib { parts.push(format!("M1 0 ( {} {} ) VIA1_5", u(x as f64 * sw), u(y as f64 * tk))); continue; }
             // the stack from the rail up to the strap
+            // the stack stands on the rail's centre line
             let (px, py) = (u(x as f64 * sw + tech.track_x0), u((y / detail::TRACKS) as f64 * rh));
             for l in 0..3 { parts.push(format!("{} 0 ( {} {} ) {}", tech.layers[l], px, py, tech.vias[l])); }
         }
@@ -224,6 +247,8 @@ pub fn def(o: &Output) -> String {
         for &(l, x, y) in &n.vias {
             if l == 255 {
                 let off = stub.get(&(x, y)).copied().unwrap_or(0.0);
+                // a pin reached on its own met1: no pin via
+                if off.is_nan() { continue; }
                 let px = ux(x) + u(off);
                 if px != ux(x) { parts.push(format!("{} ( {} {} ) ( {} {} )", tech.layers[0], ux(x), uy(y), px, uy(y))); }
                 parts.push(format!("{} ( {} {} ) {}", tech.pin_layer, px, uy(y), tech.pin_via));

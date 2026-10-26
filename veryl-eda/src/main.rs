@@ -217,6 +217,16 @@ fn main() {
         let pd = &o.pdn;
         println!("asic: power grid {} rails, {} straps, {} via stacks; {} filler cells", pd.rails, pd.straps.len(), pd.vias.len(), pd.fillers.len());
         let d = &o.detail;
+        if !tech.is_vlib() {
+            match asic::layout::build(o) {
+                Ok(l) => {
+                    let r = asic::drc::check(&l, &o.mapped);
+                    println!("asic: DRC {} shapes: {} shorts, {} spacing, {} min-area, {} opens; {} taps ({} sites too far)", r.shapes, r.shorts, r.spacing, r.area, r.opens, o.pdn.taps.len(), o.pdn.tap_viol);
+                    if verbose { for e in &r.details { println!("  {}", e); } }
+                }
+                Err(e) => println!("asic: layout: {}", e),
+            }
+        }
         let per: Vec<String> = (0..4).map(|l| format!("{} {:.0}", tech.layers[l], d.per_layer[l])).collect();
         println!("asic: detailed routing {:.0} µm ({}), {} vias, {} conflicts, {} opens after {} iterations",
             d.wirelength, per.join(" / "), d.vias, d.conflicts, d.opens, d.iters.len());

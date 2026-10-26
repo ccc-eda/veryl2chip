@@ -43,11 +43,23 @@ pub const TAP_MAX: f64 = 14.0;
 impl Pdn {
     /// grid nodes (layer, x, y) the signal router must not use
     pub fn blocked(&self, ny: u32) -> Vec<(usize, u32, u32)> {
+        let lib = !crate::pdk::tech().is_vlib();
         let mut v = vec![];
         for &(x, _) in &self.straps {
-            for dx in 0..STRAP_W { for y in 0..ny { v.push((LAYERS - 1, x + dx, y)); } }
+            // a library's wide straps keep the neighbouring met4 tracks clear too
+            let (a, b) = if lib { (x.saturating_sub(2), x + STRAP_W + 2) } else { (x, x + STRAP_W) };
+            for xx in a..b { for y in 0..ny { v.push((LAYERS - 1, xx, y)); } }
         }
-        for &(x, y, _) in &self.vias { for l in 0..LAYERS - 1 { v.push((l, x, y)); } }
+        for &(x, y, _) in &self.vias {
+            for l in 0..LAYERS - 1 { v.push((l, x, y)); }
+            if lib {
+                // the stack's met2 / met3 pads reach the next nodes along those tracks
+                for (l, dx, dy) in [(1usize, 0i64, -1i64), (1, 0, 1), (2, -1, 0), (2, 1, 0), (2, -2, 0), (2, 2, 0), (2, 0, -2), (2, -1, -2), (2, 1, -2)] {
+                    let (xx, yy) = (x as i64 + dx, y as i64 + dy);
+                    if xx >= 0 && yy >= 0 { v.push((l, xx as u32, yy as u32)); }
+                }
+            }
+        }
         v
     }
 }
@@ -124,7 +136,9 @@ pub fn build(nl: &Netlist, pl: &RowPlacement, taps: &[(u32, u32)]) -> Pdn {
     let nx = pl.sites + 1;
     // IO pins sit on M5 at the die edge: keep straps off their columns
     let io_cols: Vec<u32> = pl.pins.iter().map(|p| (p.x / site_w()).round() as u32).collect();
-    let clear = |x: u32| (0..STRAP_W * 2 + 2).all(|d| !io_cols.contains(&(x + d)));
+    // (a library's straps keep two more columns clear on both sides)
+    let side = if crate::pdk::tech().is_vlib() { 0 } else { 3 };
+    let clear = |x: u32| (0..STRAP_W * 2 + 2 + 2 * side).all(|d| !io_cols.contains(&(x + d).wrapping_sub(side)));
     let mut straps = vec![];
     let pairs = (nx / STRAP_PITCH).max(1);
     for k in 0..pairs {
@@ -135,11 +149,12 @@ pub fn build(nl: &Netlist, pl: &RowPlacement, taps: &[(u32, u32)]) -> Pdn {
         straps.push((x, true));
         straps.push((x + STRAP_W + 2, false));
     }
+    let lib = !crate::pdk::tech().is_vlib();
     let mut vias = vec![];
     for r in 0..=pl.rows {
         let vdd = r % 2 == 1;
         for &(x, sv) in &straps {
-            if sv == vdd { for dx in 0..STRAP_W { vias.push((x + dx, r * TRACKS, vdd)); } }
+            if sv == vdd { for dx in 0..STRAP_W { if lib && (x + dx) % 2 == 1 { continue; } vias.push((x + dx, r * TRACKS, vdd)); } }
         }
     }
     // fillers in every free run of sites

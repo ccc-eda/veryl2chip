@@ -189,6 +189,16 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
     Elmore RC on the wires.
   - `--verilog` / `--def` write the library's cell, pin, site, layer (met1–met4, li1 pins) and via names; the Verilog ends with
     behavioural models made from the Liberty functions. `--map-only` stops after the mapping.
+- design rules (v1.6): `src/asic/layout.rs` turns the result into rectangles (wires, the tech LEF's via definitions, pin
+  stubs, IO pins, rails, straps, via stacks) and `src/asic/drc.rs` checks them together with every cell's own pin and
+  obstruction shapes: shorts, spacing (cut layers: between any two cuts), minimum area of lone via pads, and opens.
+  The detailed router keeps SKY130's rules: met3 / met4 on every other track (their pitch is twice the grid's), no met1 on
+  the tracks under the rails, met1-met2 vias on a checkerboard and never beside another net's pin via, the line ends and
+  via pads of met2 / met3 / met4 one node away from other nets, the flip-flops' own met1 avoided (their set / reset pins are
+  reached on that met1), pin contacts clear of the cell's contacts and edges, and the power grid's surroundings kept free.
+  Vias are only where a path changes layer. Should a dense design not route clean, the flow tries again on a bigger die.
+  `--asic --pdk sky130` prints the DRC summary (`-v`: examples); `cargo test` requires 0 for Ram and RiscvSoc
+  (RiscvSoc: 0 shorts / spacing / area / opens at 32 % utilization).
 - `--gatesim sky130` runs the testbenches on the SKY130 netlist; `test.sh` proves every design's SKY130 netlist equivalent to
   `veryl build`'s output with the cell models yosys builds from the PDK's own Liberty file (`read_liberty`). The `cargo test`
   checks read the DEF back against the LEF (cells on the rows and sites, no overlaps, every site covered, tap distances).

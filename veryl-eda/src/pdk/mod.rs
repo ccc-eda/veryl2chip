@@ -231,12 +231,33 @@ pub fn check_binding(lc: &liberty::Cell, pins: &[(&str, &str)], kind: &Kind) -> 
 pub fn access_points(m: &lef::Macro, pins: &[(&'static str, String)], layer: &str, site_w: f64, track_x0: f64, row_h: f64, tracks: u32, track_y0: f64, margin: f64) -> Result<Vec<(&'static str, u32, u32, f64)>, String> {
     let pitch_y = row_h / tracks as f64;
     let width = (m.w / site_w).round() as u32;
-    let mut used: Vec<(u32, u32)> = vec![];
+    // keep-outs (cell coordinates): the cell's own met1 and contacts the pin via and its stub must clear
+    let met1: Vec<&lef::Rect> = m.obs.iter().filter(|q| q.layer == "met1").collect();
+    // (the pins' own contacts too: a set / reset pin brings its own met1 and contact)
+    let mcon: Vec<&lef::Rect> = m.obs.iter().chain(m.pins.iter().flat_map(|q| q.shapes.iter())).filter(|q| q.layer == "mcon").collect();
+    let hits = |rs: &[&lef::Rect], x0: f64, y0: f64, x1: f64, y1: f64| rs.iter().any(|q| x0 < q.x1 && q.x0 < x1 && y0 < q.y1 && q.y0 < y1);
+    // (column, track, via x) of the pins done
+    let mut used: Vec<(u32, u32, f64)> = vec![];
     let mut out = vec![];
     for (lp, pp) in pins {
         let pin = m.pin(pp).ok_or_else(|| format!("{}: no pin {} in the LEF", m.name, pp))?;
         let mut cands: Vec<(f64, u32, u32, f64)> = vec![];
-        for r in pin.shapes.iter().filter(|r| r.layer == layer) {
+        // a pin with its own met1 (set / reset) is reached on that met1, at a node inside it (offset NaN: no pin via)
+        let on_met1 = pin.shapes.iter().any(|r| r.layer == "met1");
+        if on_met1 {
+            for r in pin.shapes.iter().filter(|r| r.layer == "met1") {
+                for dx in 0..width {
+                    let x = track_x0 + dx as f64 * site_w;
+                    if x < r.x0 || x > r.x1 { continue; }
+                    for ty in 1..tracks - 1 {
+                        let y = track_y0 + ty as f64 * pitch_y;
+                        if y < r.y0 || y > r.y1 { continue; }
+                        cands.push(((y - (r.y0 + r.y1) / 2.0).abs(), dx, ty, f64::NAN));
+                    }
+                }
+            }
+        }
+        for r in pin.shapes.iter().filter(|r| r.layer == layer && !on_met1) {
             if r.x1 - r.x0 < 2.0 * margin - 1e-6 { continue; }
             for dx in 0..width {
                 let x = track_x0 + dx as f64 * site_w;
@@ -250,11 +271,30 @@ pub fn access_points(m: &lef::Macro, pins: &[(&'static str, String)], layer: &st
             }
         }
         cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        let Some(&(_, dx, ty, off)) = cands.iter().find(|c| !used.contains(&(c.1, c.2))) else {
+        // the other pins' met1 shapes are keep-outs as well
+        let other_met1: Vec<&lef::Rect> = m.pins.iter().filter(|q| q.name != *pp && q.usage != "POWER" && q.usage != "GROUND").flat_map(|q| q.shapes.iter()).filter(|q| q.layer == "met1").collect();
+        let keep: Vec<&lef::Rect> = met1.iter().copied().chain(other_met1).collect();
+        // clear of them: the via's met1 pad, the stub and the met1-met2 via pad at the node (+ met1 spacing),
+        // its contact (+ contact spacing), and far enough from the cell's edges that a neighbour's contact is too
+        let clear = |c: &(f64, u32, u32, f64)| {
+            let x = track_x0 + c.1 as f64 * site_w;
+            let y = track_y0 + c.2 as f64 * pitch_y;
+            // on the pin's met1: only the met1-met2 via pad must clear the rest
+            if c.3.is_nan() { return !hits(&keep, x - 0.16 - 0.14, y - 0.13 - 0.14, x + 0.16 + 0.14, y + 0.13 + 0.14); }
+            let px = x + c.3;
+            px >= 0.18 && px <= m.w - 0.18
+                && !hits(&keep, x.min(px) - 0.16 - 0.14, y - 0.13 - 0.14, x.max(px) + 0.16 + 0.14, y + 0.13 + 0.14)
+                && !hits(&mcon, px - 0.085 - 0.19, y - 0.085 - 0.19, px + 0.085 + 0.19, y + 0.085 + 0.19)
+        };
+        // a node of its own, not right above / below another pin's, and its contact clear of the others'
+        let free = |c: &&(f64, u32, u32, f64)| !used.iter().any(|u| (u.0 == c.1 && u.1.abs_diff(c.2) <= 1)
+            || (u.1 == c.2 && !c.3.is_nan() && !u.2.is_nan() && (u.2 - (track_x0 + c.1 as f64 * site_w + c.3)).abs() < 0.36));
+        // a different node, and not right above / below another pin's (their via pads would be too close)
+        let Some(&(_, dx, ty, off)) = cands.iter().filter(|c| clear(c)).find(free).or_else(|| cands.iter().find(free)) else {
             return Err(format!("{}: no access point for pin {}", m.name, pp));
         };
-        used.push((dx, ty));
-        out.push((*lp, dx, ty, (off * 1000.0).round() / 1000.0));
+        used.push((dx, ty, track_x0 + dx as f64 * site_w + off));
+        out.push((*lp, dx, ty, if off.is_nan() { off } else { (off * 1000.0).round() / 1000.0 }));
     }
     Ok(out)
 }
@@ -433,6 +473,7 @@ mod tests {
         for b in t.cells.values() { assert_eq!(b.access.len(), b.pins.len(), "{}", b.cell); }
         let m1 = lef.layer("met1").unwrap();
         assert!(m1.horizontal && (m1.pitch.1 - 0.34).abs() < 1e-9 && m1.rpersq > 0.0);
-        assert!(lef.via("M1M2_PR").is_some());
+        let v = lef.via("M1M2_PR").unwrap();
+        assert_eq!(v.rects.iter().map(|r| r.layer.as_str()).collect::<Vec<_>>(), ["via", "met1", "met2"]);
     }
 }

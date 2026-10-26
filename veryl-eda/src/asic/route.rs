@@ -51,7 +51,7 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
     let (gw, gh) = (super::detail::TRACKS as f64 * tech.site_w, tech.row_h);
     // tracks per gcell edge and direction (80 % of what the layers hold): vlib CAP;
     // SKY130 horizontal met1 (6 free of 8) + met3 (4), vertical met2 (8) + met4 (4)
-    let (cap_h, cap_v) = if tech.is_vlib() { (CAP, CAP) } else { (8u16, 10u16) };
+    let (cap_h, cap_v) = if tech.is_vlib() { (CAP, CAP) } else { (6u16, 8u16) };
     let gx = ((pl.w / gw).ceil() as u32).max(1);
     let gy = pl.rows.max(1);
     let id = |x: u32, y: u32| y * gx + x;

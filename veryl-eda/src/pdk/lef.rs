@@ -202,9 +202,9 @@ pub fn parse(src: &str) -> Result<Lef, String> {
             }
             "VIA" => {
                 let name = p.next();
-                // VIA name [DEFAULT] ;
-                while !p.done() && p.peek() != ";" { p.i += 1; }
-                p.i += 1;
+                // VIA name [DEFAULT] (no ';')
+                if p.peek() == "DEFAULT" { p.i += 1; }
+                if p.peek() == ";" { p.i += 1; }
                 let rects = p.shapes(Some(&name));
                 lef.vias.push(Via { name, rects });
             }

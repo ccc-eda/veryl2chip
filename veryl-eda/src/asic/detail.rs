@@ -82,6 +82,12 @@ pub fn pin_point(nl: &Netlist, pl: &RowPlacement, i: usize, k: usize) -> (u32, u
     (x.min(s + w - 1), y)
 }
 
+/// x offset (µm) of the pin via of connection `k` of cell `i` from its grid node (0: on the node, NaN: no pin via)
+pub fn pin_offset(nl: &Netlist, i: usize, k: usize) -> f64 {
+    let c = &nl.cells[i];
+    crate::pdk::tech().binding(&c.typ).and_then(|b| b.access.iter().find(|a| a.0 == c.conns[k].0)).map(|a| a.3).unwrap_or(0.0)
+}
+
 /// `pdn`: power straps and via stacks, off limits for signals
 pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pdn) -> Detail {
     let nx = pl.sites + 1;
@@ -101,6 +107,20 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         }
     }
     for (l, x, y) in pdn.blocked(ny) { if x < nx && y < ny { blocked[id(l, x, y) as usize] = true; } }
+    // a library technology's rules (SKY130): met3 / met4 on every other track; no met1 on the two
+    // tracks under the power rails; nothing beyond the core (the last column and track)
+    let tech = crate::pdk::tech();
+    let lib_rules = !tech.is_vlib();
+    if lib_rules {
+        for y in 0..ny {
+            for x in 0..nx {
+                if y % 2 == 1 { blocked[id(2, x, y) as usize] = true; }
+                if x % 2 == 1 { blocked[id(3, x, y) as usize] = true; }
+                if matches!(y % TRACKS, 0 | 7) { blocked[id(0, x, y) as usize] = true; }
+                if x == nx - 1 || y == ny - 1 { for l in 0..LAYERS { blocked[id(l, x, y) as usize] = true; } }
+            }
+        }
+    }
     // terminals of each net
     let pn = nets(nl, &pl.pins);
     let corridor_of: HashMap<Bit, &Vec<(u32, u32, u32, u32)>> = rt.nets.iter().map(|n| (n.bit, &n.segs)).collect();
@@ -133,6 +153,108 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         for q in &t { pin_owner[id(q.0, q.1, q.2) as usize] = ni as u32; }
         terms.push((p.bit, t, gc));
     }
+    // the cells' own met1 (flip-flop wiring, set / reset pins): off limits, except the pins' access nodes;
+    // vias from met1 up only on (x + y) even nodes, and not next to another net's pin via
+    let mut via_owner = vec![u32::MAX; plane];
+    let mut no_via = vec![false; plane];
+    let net_index: HashMap<Bit, u32> = terms.iter().enumerate().map(|(i, t)| (t.0, i as u32)).collect();
+    if lib_rules {
+        let lef = tech.lef.as_ref();
+        let (sw, rh) = (site_w(), row_h());
+        let tk = rh / TRACKS as f64;
+        // a wire (half width 0.07) or a met1-met2 via pad (0.16 × 0.13) plus met1 spacing
+        // (exactly the minimum spacing is legal)
+        let keep = 0.07 + 0.14 - 1e-6;
+        let (keep_vx, keep_vy) = (0.16 + 0.14 - 1e-6, 0.13 + 0.14 - 1e-6);
+        for (i, c) in nl.cells.iter().enumerate() {
+            let (Some(lef), Some(b)) = (lef, tech.binding(&c.typ)) else { continue };
+            let Some(m) = lef.macro_(&b.cell) else { continue };
+            let (r, s) = pl.pos[i];
+            // obstructions (no owner) and the signal pins' met1 (their net's: other nets keep away)
+            let mut rects: Vec<(&crate::pdk::lef::Rect, Option<u32>)> = m.obs.iter().filter(|q| q.layer == "met1").map(|q| (q, None)).collect();
+            for p in m.pins.iter().filter(|p| p.usage != "POWER" && p.usage != "GROUND") {
+                let owner = b.pins.iter().find(|x| x.1 == p.name).and_then(|x| c.port(x.0)).and_then(|bit| net_index.get(&bit).copied());
+                rects.extend(p.shapes.iter().filter(|q| q.layer == "met1").map(|q| (q, owner)));
+            }
+            for (q, owner) in rects {
+                let (y0, y1) = if r % 2 == 1 { (rh - q.y1, rh - q.y0) } else { (q.y0, q.y1) };
+                let (ax0, ax1) = (s as f64 * sw + q.x0 - keep, s as f64 * sw + q.x1 + keep);
+                let (ay0, ay1) = (r as f64 * rh + y0 - keep, r as f64 * rh + y1 + keep);
+                let xs = (((ax0 - tech.track_x0) / sw).ceil().max(0.0) as u32)..=(((ax1 - tech.track_x0) / sw).floor().max(0.0) as u32);
+                for x in xs {
+                    for y in (((ay0 - tech.track_y0) / tk).ceil().max(0.0) as u32)..=(((ay1 - tech.track_y0) / tk).floor().max(0.0) as u32) {
+                        if x >= nx || y >= ny { continue; }
+                        let n = id(0, x, y) as usize;
+                        match owner {
+                            Some(o) if pin_owner[n] == u32::MAX || pin_owner[n] == o => pin_owner[n] = o,
+                            _ => if pin_owner[n] == u32::MAX || owner.is_some() { blocked[n] = true; },
+                        }
+                    }
+                }
+                // no via pads there either (but the pin's own net may land on its met1)
+                let (bx0, bx1) = (s as f64 * sw + q.x0 - keep_vx, s as f64 * sw + q.x1 + keep_vx);
+                let (by0, by1) = (r as f64 * rh + y0 - keep_vy, r as f64 * rh + y1 + keep_vy);
+                for x in (((bx0 - tech.track_x0) / sw).ceil().max(0.0) as u32)..=(((bx1 - tech.track_x0) / sw).floor().max(0.0) as u32) {
+                    for y in (((by0 - tech.track_y0) / tk).ceil().max(0.0) as u32)..=(((by1 - tech.track_y0) / tk).floor().max(0.0) as u32) {
+                        if x >= nx || y >= ny { continue; }
+                        let k = (y * nx + x) as usize;
+                        match owner {
+                            Some(o) if via_owner[k] == u32::MAX || via_owner[k] == o => via_owner[k] = o,
+                            _ => no_via[k] = true,
+                        }
+                    }
+                }
+            }
+        }
+        for (ni, t) in terms.iter().enumerate() {
+            for q in t.1.iter().filter(|q| q.0 == 0) {
+                for (dx, dy) in [(0i64, -1i64), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                    let (xx, yy) = (q.1 as i64 + dx, q.2 as i64 + dy);
+                    if xx < 0 || yy < 0 || xx >= nx as i64 || yy >= ny as i64 { continue; }
+                    let k = (yy as u32 * nx + xx as u32) as usize;
+                    via_owner[k] = if via_owner[k] == u32::MAX || via_owner[k] == ni as u32 { ni as u32 } else { u32::MAX - 1 };
+                }
+            }
+        }
+        // a pin via off its node towards a neighbour: that neighbour is the pin's too
+        for (c, cell) in nl.cells.iter().enumerate() {
+            for k in 0..cell.conns.len() {
+                let off = pin_offset(nl, c, k);
+                if off.is_nan() || off.abs() < 0.015 { continue; }
+                let (x, y) = pin_point(nl, pl, c, k);
+                let xx = if off > 0.0 { x + 1 } else { x.wrapping_sub(1) };
+                if xx >= nx { continue; }
+                let o = pin_owner[id(0, x, y) as usize];
+                let n = id(0, xx, y) as usize;
+                if pin_owner[n] == u32::MAX { pin_owner[n] = o; } else if pin_owner[n] != o { blocked[n] = true; }
+            }
+        }
+    }
+    // along-track neighbours that another net may not use (met2 / met3 / met4 line ends and via pads)
+    let halo = |n: u32| -> [u32; 2] {
+        let (l, x, y) = decode(n);
+        if !lib_rules || l <= 1 { return [u32::MAX; 2]; }
+        if horizontal(l) { [if x > 0 { id(l, x - 1, y) } else { u32::MAX }, if x + 1 < nx { id(l, x + 1, y) } else { u32::MAX }] }
+        else { [if y > 0 { id(l, x, y - 1) } else { u32::MAX }, if y + 1 < ny { id(l, x, y + 1) } else { u32::MAX }] }
+    };
+    let mut near = vec![0u16; if lib_rules { total } else { 0 }];
+    // how much of a node's `near` comes from its own net (its halo neighbours, its vias' pads)
+    let own_near = |n: u32, own: &HashSet<u32>, own_v: &HashSet<u32>| -> usize {
+        let (l, x, y) = decode(n);
+        let mut k = halo(n).iter().filter(|h| own.contains(h)).count();
+        if l == 1 {
+            for yy in [y.wrapping_sub(1), y + 1] {
+                if yy < ny { for lo in 0..2 { if own_v.contains(&id(lo, x, yy)) { k += 1; } } }
+            }
+        }
+        k
+    };
+    // met2 nodes beside a via that lands on met2 (its pad reaches them): (node below of the via) -> the two met2 neighbours
+    let pad_halo = |v: u32| -> [u32; 2] {
+        let (l, x, y) = decode(v);
+        if !lib_rules || l > 1 { return [u32::MAX; 2]; }
+        [if y > 0 { id(1, x, y - 1) } else { u32::MAX }, if y + 1 < ny { id(1, x, y + 1) } else { u32::MAX }]
+    };
     let gx = nx.div_ceil(TRACKS);
     let gy = ny.div_ceil(TRACKS);
     // the current net's corridor, stamped per gcell
@@ -156,6 +278,8 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
     let mut gen = 0u32;
     let mut in_tree = vec![u32::MAX; total];
     let mut paths: Vec<Vec<u32>> = vec![vec![]; terms.len()];
+    // the vias each net's paths actually take: (the node below)
+    let mut pvias: Vec<Vec<u32>> = vec![vec![]; terms.len()];
     let mut iters = vec![];
     let mut pres = 0.5f32;
     let mut order: Vec<usize> = (0..terms.len()).collect();
@@ -167,7 +291,10 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         let hard = it >= NEGOTIATE;
         for &ni in &order {
             if terms[ni].1.len() < 2 { continue; }
-            let conflicted = paths[ni].iter().any(|&n| occ[n as usize] > 1);
+            let own: HashSet<u32> = if lib_rules { paths[ni].iter().copied().collect() } else { HashSet::new() };
+            let own_v: HashSet<u32> = if lib_rules { pvias[ni].iter().copied().collect() } else { HashSet::new() };
+            let conflicted = paths[ni].iter().any(|&n| occ[n as usize] > 1
+                || (lib_rules && near[n as usize] as usize > own_near(n, &own, &own_v)));
             if it > 0 && !conflicted && opens[ni] == 0 { continue; }
             // still stuck after a few rounds: give it more room
             if !hard && ((it >= 4 && it % 4 == 0) || (it >= 16 && it % 2 == 0)) { widen(&mut terms[ni].2); }
@@ -175,10 +302,12 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
             let cmark = (it * terms.len() + ni) as u32;
             if hard { gc_mark.iter_mut().for_each(|g| *g = cmark); } else { for g in gc { gc_mark[*g as usize] = cmark; } }
             let old = std::mem::take(&mut paths[ni]);
-            for &n in &old { occ[n as usize] -= 1; }
+            for &n in &old { occ[n as usize] -= 1; if lib_rules { for h in halo(n) { if h != u32::MAX { near[h as usize] -= 1; } } } }
+            if lib_rules { for &v in &pvias[ni] { for h in pad_halo(v) { if h != u32::MAX { near[h as usize] -= 1; } } } }
             let old_opens = opens[ni];
             opens[ni] = 0;
             let mark = (it * terms.len() + ni) as u32;
+            let mut vias_now: Vec<u32> = vec![];
             // Prim order of the terminals
             let md = |a: (usize, u32, u32), b: (usize, u32, u32)| a.1.abs_diff(b.1) + a.2.abs_diff(b.2);
             let mut done = vec![false; t.len()];
@@ -219,13 +348,26 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                     if l + 1 < LAYERS { nb[3] = (id(l + 1, x, y), VIA_COST); }
                     for (v, step) in nb {
                         if v == u32::MAX || blocked[v as usize] { continue; }
-                        let (_, vx, vy) = decode(v);
+                        let (vl, vx, vy) = decode(v);
+                        // met1-met2 vias: checkerboard nodes, and not beside another net's pin via
+                        if lib_rules && vl != l && vl.min(l) == 0 {
+                            // (a pin's own node may always go up: no other net's via can be beside it)
+                            if (vx + vy) % 2 == 1 && pin_owner[id(0, vx, vy) as usize] != ni as u32 { continue; }
+                            let o = via_owner[(vy * nx + vx) as usize];
+                            if o != u32::MAX && o != ni as u32 { continue; }
+                            if no_via[(vy * nx + vx) as usize] { continue; }
+                        }
+                        let mut nv = if lib_rules { near[v as usize] } else { 0 };
+                        // a via landing on met2: other nets on the met2 nodes beside it
+                        if lib_rules && vl != l && vl.min(l) <= 1 {
+                            for h in pad_halo(if l < vl { u } else { v }) { if h != u32::MAX { nv += occ[h as usize]; } }
+                        }
                         if gc_mark[((vy / TRACKS) * gx + vx / TRACKS) as usize] != cmark { continue; }
                         // another net's pin access point is off limits
                         let o = pin_owner[v as usize];
                         if o != u32::MAX && o != ni as u32 { continue; }
-                        if hard && occ[v as usize] > 0 { continue; }
-                        let c = step * (1.0 + hist[v as usize]) * (1.0 + pres * occ[v as usize] as f32);
+                        if hard && (occ[v as usize] > 0 || nv > 0) { continue; }
+                        let c = step * (1.0 + hist[v as usize]) * (1.0 + pres * (occ[v as usize] + nv) as f32);
                         let nd = du + c;
                         if seen[v as usize] != gen || nd < dist[v as usize] {
                             seen[v as usize] = gen;
@@ -235,11 +377,12 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                         }
                     }
                 }
-                if goal == u32::MAX { opens[ni] += 1; continue; }
+                if goal == u32::MAX { opens[ni] += 1; if hard && std::env::var("DBG_OPEN").is_ok() { eprintln!("open: net {} terminal {:?} of {:?}", ni, t[j], t); } continue; }
                 // walk back from where the tree was reached to the terminal
                 let mut v = goal;
                 while v != u32::MAX && v != src {
                     let p = prev[v as usize];
+                    if p != u32::MAX && decode(p).0 != decode(v).0 { vias_now.push(p.min(v)); }
                     if in_tree[p as usize] != mark { in_tree[p as usize] = mark; nodes.push(p); }
                     v = p;
                 }
@@ -247,11 +390,21 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                 if !nodes.contains(&src) { nodes.push(src); }
             }
             // a strict reroute that cannot connect everything keeps the old route
-            let nodes = if hard && opens[ni] > 0 { opens[ni] = old_opens; old } else { nodes };
-            for &n in &nodes { occ[n as usize] += 1; }
+            let nodes = if hard && opens[ni] > 0 { opens[ni] = old_opens; old } else { pvias[ni] = vias_now; nodes };
+            for &n in &nodes { occ[n as usize] += 1; if lib_rules { for h in halo(n) { if h != u32::MAX { near[h as usize] += 1; } } } }
+            if lib_rules { for &v in &pvias[ni] { for h in pad_halo(v) { if h != u32::MAX { near[h as usize] += 1; } } } }
             paths[ni] = nodes;
         }
-        let conflicts = occ.iter().filter(|o| **o > 1).count();
+        let mut conflicts = occ.iter().filter(|o| **o > 1).count();
+        if lib_rules {
+            // nodes another net's halo reaches
+            for (p, pv) in paths.iter().zip(&pvias) {
+                let own: HashSet<u32> = p.iter().copied().collect();
+                let own_v: HashSet<u32> = pv.iter().copied().collect();
+                for &n in p { if near[n as usize] as usize > own_near(n, &own, &own_v) { conflicts += 1; } }
+            }
+            for (n, o) in near.iter().enumerate() { if *o > 0 && occ[n] > 0 { hist[n] += 0.1; } }
+        }
         iters.push(conflicts);
         if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("  detail iteration {}: {} conflicts, {} opens", it + 1, conflicts, opens.iter().sum::<usize>()); }
         if conflicts == 0 && opens.iter().all(|o| *o == 0) { break; }
@@ -281,8 +434,11 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                 }
                 if (ex, ey) != (x, y) { segs.push((l as u8, x, y, ex, ey)); }
             }
-            if l + 1 < LAYERS && set.contains(&id(l + 1, x, y)) { vias.push((l as u8, x, y)); }
         }
+        let mut pv = pvias[ni].clone();
+        pv.sort();
+        pv.dedup();
+        for n in pv { let (l, x, y) = decode(n); vias.push((l as u8, x, y)); }
         for q in t { if q.0 == 0 { vias.push((255, q.1, q.2)); } }
         let len: f64 = segs.iter().map(|s| (s.3 - s.1 + s.4 - s.2) as f64 * site_w()).sum();
         for s in &segs { per_layer[s.0 as usize] += (s.3 - s.1 + s.4 - s.2) as f64 * site_w(); }

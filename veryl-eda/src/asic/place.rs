@@ -124,14 +124,18 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
     // on the routing grid (columns of a site, rows of a track), every pin on its own node:
     // a taken node moves the pin along its edge
     let (px, py) = (site_w, row_h / super::detail::TRACKS as f64);
-    let (gx, gy) = (sites, rows * super::detail::TRACKS);
+    // a library technology's top layer (met4) uses every other column, and pins on a side edge every other track
+    let lib = !crate::pdk::tech().is_vlib();
+    let (gx, gy) = if lib { ((sites - 1) & !1, (rows * super::detail::TRACKS - 1) & !1) } else { (sites, rows * super::detail::TRACKS) };
     let mut taken = std::collections::HashSet::new();
     // (vlib's grid is square and its pins already far enough apart: they stay where they are)
     for p in pins.iter_mut().filter(|_| !crate::pdk::tech().is_vlib()) {
-        let (mut x, mut y) = ((p.x / px).round() as i64, (p.y / py).round() as i64);
-        let vertical_edge = x == 0 || x == gx as i64;
+        let (mut x, mut y) = (((p.x / px).round() as i64).min(gx as i64), ((p.y / py).round() as i64).min(gy as i64));
+        let vertical_edge = x == 0 || x >= gx as i64;
+        if lib { x &= !1; y &= !1; }
+        let step = if lib { 2 } else { 1 };
         for k in 0..(gx + gy) as i64 * 2 {
-            let d = if k % 2 == 0 { k / 2 } else { -(k + 1) / 2 };
+            let d = step * if k % 2 == 0 { k / 2 } else { -(k + 1) / 2 };
             let (tx, ty) = if vertical_edge { (x, (y + d).clamp(0, gy as i64)) } else { ((x + d).clamp(0, gx as i64), y) };
             if !taken.contains(&(tx, ty)) { x = tx; y = ty; break; }
         }
