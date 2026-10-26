@@ -1,0 +1,116 @@
+// 實驗 5：紅綠燈（狀態機）
+// 綠 5 秒 → 黃 1 秒 → 紅 4 秒 → 綠 …；綠燈時按下行人按鈕（BTN1），綠燈最多再亮 1 秒就換黃燈。
+// 三顆 LED 接在 PMOD1A 的腳 1–3（麵包板上，各串一個電阻到 GND）。
+module TrafficLight #(
+    param SEC  : u32 = 12_000_000, // 一秒有幾個時脈
+    param SEC_W: u32 = 24        ,
+) (
+    i_clk   : input  clock,
+    i_rst   : input  reset,
+    i_btn   : input  logic, // 行人按鈕
+    o_red   : output logic,
+    o_yellow: output logic,
+    o_green : output logic,
+) {
+    // 狀態編碼
+    const GREEN : logic<2> = 2'd0;
+    const YELLOW: logic<2> = 2'd1;
+    const RED   : logic<2> = 2'd2;
+
+    var state: logic<2>    ;
+    var tick : logic<SEC_W>; // 一秒內的時脈數
+    var secs : logic<3>    ; // 這個狀態已經亮了幾秒
+    var btn_s: logic<2>    ;
+    var walk : logic       ; // 有人按過按鈕
+
+    // 這個狀態要亮幾秒
+    var limit: logic<3>;
+    always_comb {
+        case state {
+            GREEN  : limit = if walk ? 3'd1 : 3'd5;
+            YELLOW : limit = 3'd1;
+            default: limit = 3'd4;
+        }
+    }
+
+    always_ff {
+        if_reset {
+            state = GREEN;
+            tick  = 0;
+            secs  = 0;
+            btn_s = 0;
+            walk  = 0;
+        } else {
+            btn_s = {btn_s[0], i_btn};
+            if btn_s[1] && state == GREEN && !walk {
+                // 從現在起再一秒
+                walk = 1;
+                secs = 0;
+                tick = 0;
+            } else if tick == SEC - 1 {
+                tick = 0;
+                if secs + 1 >= limit {
+                    secs = 0;
+                    case state {
+                        GREEN  : state = YELLOW;
+                        YELLOW : state = RED;
+                        default: state = GREEN;
+                    }
+                    walk = 0;
+                } else {
+                    secs = secs + 1;
+                }
+            } else {
+                tick = tick + 1;
+            }
+        }
+    }
+
+    assign o_green  = state == GREEN;
+    assign o_yellow = state == YELLOW;
+    assign o_red    = state == RED;
+}
+
+// 測試：一秒 = 4 拍
+#[test(test_traffic)]
+module TestTrafficLight {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var btn: logic;
+    var r  : logic;
+    var y  : logic;
+    var g  : logic;
+
+    inst dut: TrafficLight #(
+        SEC  : 4,
+        SEC_W: 3,
+    ) (
+        i_clk   : clk,
+        i_rst   : rst,
+        i_btn   : btn,
+        o_red   : r  ,
+        o_yellow: y  ,
+        o_green : g  ,
+    );
+
+    initial {
+        btn = 0;
+        rst.assert();
+        $assert(g == 1 && y == 0 && r == 0, "green first");
+        clk.next(4 * 5);
+        $assert(y == 1, "yellow after 5 s");
+        clk.next(4 * 1);
+        $assert(r == 1, "red after 1 s");
+        clk.next(4 * 4);
+        $assert(g == 1, "green again after 4 s");
+        // 行人按鈕：綠燈 1 秒後就換黃燈
+        clk.next(4);
+        btn = 1;
+        clk.next(2);
+        btn = 0;
+        clk.next(4 * 1 + 2);
+        $assert(y == 1, "the button shortens green");
+        $finish();
+    }
+}

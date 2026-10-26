@@ -3,6 +3,7 @@
 // Generated tables, kept to the characters the interface uses.
 
 export const HANS_PHRASES: Record<string, string> = {
+  '模組': '模块',
   '檔案總管': '资源管理器',
   '檔案': '文件',
   '檔名': '文件名',
@@ -109,6 +110,7 @@ export const HANS_PHRASES: Record<string, string> = {
 };
 
 export const HANS_CHARS: Record<string, string> = {
+  '燈': '灯',
   '極': '极', '製': '制', '複': '复', '貼': '贴', '麵': '面',
   '嗎': '吗', '聲': '声', '螢': '萤', '見': '见', '鮑': '鲍', '鳴': '鸣', '麼': '么',
   '學': '学', '擊': '击', '繼': '继', '虛': '虚', '鈕': '钮', '鎖': '锁',

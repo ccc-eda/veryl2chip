@@ -1,0 +1,7 @@
+# TrafficLight on an iCEBreaker breadboard lab: red / yellow / green LEDs on PMOD1A pins 1-3, BTN1 = pedestrian button
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn i_btn    20
+set_io -nowarn o_red    4
+set_io -nowarn o_yellow 2
+set_io -nowarn o_green  47

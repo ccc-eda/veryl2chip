@@ -234,8 +234,23 @@ for (const ex of ctx.VERYL_EXAMPLES) {
       if (got !== want) problems.push(`VGA pixel x ${x}: ${got} != ${want}`);
     }
   }
+  // M16 labs: one press adds one (BTN1 = 20, BTN2 = 19 clears); the traffic light's pedestrian button
+  b = ex('lab_counter');
+  core.call({ cmd: 'board_load', files: b.files, top: 'ButtonCounter', pcf: b.pcf });
+  for (let i = 0; i < 3; i++) { core.call({ cmd: 'board_run', cycles: 1000, inputs: [[20, 1]] }); core.call({ cmd: 'board_run', cycles: 1000, inputs: [[20, 0]] }); }
+  const presses = led();
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[19, 1]] });
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[19, 0]] });
+  if (presses !== 3 || led() !== 0) problems.push(`button counter ${presses}, cleared ${led()}`);
+  b = ex('lab_traffic');
+  core.call({ cmd: 'board_load', files: b.files, top: 'TrafficLight', pcf: b.pcf });
+  const rgy = () => { const x = duty(core.call({ cmd: 'board_run', cycles: 0, inputs: [] })); return [4, 2, 47].map((p) => x[p]).join(''); };
+  const green = rgy();
+  core.call({ cmd: 'board_run', cycles: 1000, inputs: [[20, 1]] });
+  core.call({ cmd: 'board_run', cycles: 12_000_000, inputs: [[20, 0]] });
+  if (green !== '001' || rgy() !== '010') problems.push(`traffic light ${green} -> ${rgy()} (want 001 -> 010)`);
   if (problems.length) bad++;
-  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    terminal (Hi!, echo), 7-segment 12, VGA color bars; bitstream: Blinky (Fmax ${fl.fmax?.toFixed(1)} MHz) and its uploaded .bin, KnightRider + BTN1; netlist: Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    terminal (Hi!, echo), 7-segment 12, VGA color bars, labs (button counter, traffic light); bitstream: Blinky (Fmax ${fl.fmax?.toFixed(1)} MHz) and its uploaded .bin, KnightRider + BTN1; netlist: Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
 }
 
 // project export: the .zip (stored, CRC-32) must unpack, and with the
@@ -306,8 +321,15 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   // a button pulls input 38 up only while it is held
   const btn = [P(1, 'wire', 'vcc', 'h:8:a'), P(2, 'btn', 'h:8:b', 'h:10:b'), P(3, 'wire', 'h:10:a', 'p:38'), P(4, 'res', 'h:10:e', 'gnd')];
   if (solve(btn, new Map(), new Set([38]), new Set()).inputs.get(38) !== 0 || solve(btn, new Map(), new Set([38]), new Set([2])).inputs.get(38) !== 1) problems.push('button');
+  // the lab examples come wired without warnings; the traffic light's yellow LED follows pin 2
+  for (const id of ['lab_gates', 'lab_traffic']) {
+    const e = ctx.VERYL_EXAMPLES.find((x) => x.id === id);
+    r = solve(e.board.bb, new Map([[4, 0], [2, 1], [47, 0], [45, 0]]), new Set([43, 38]), new Set());
+    if (r.warnings.length) problems.push(`${id}: ${r.warnings}`);
+    if (id === 'lab_traffic' && [4, 8, 12].map((k) => r.led.get(k)).join() !== '0,1,0') problems.push('traffic LEDs ' + [...r.led]);
+  }
   if (problems.length) bad++;
-  console.log(`${problems.length ? 'FAIL' : 'ok  '} bb       LED + resistor, missing resistor, pull-down switch, floating input, short, button${problems.length ? ': ' + problems.join(' | ') : ''}`);
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} bb       LED + resistor, missing resistor, pull-down switch, floating input, short, button, lab wiring${problems.length ? ': ' + problems.join(' | ') : ''}`);
 }
 
 // IDE highlighter: lossless (tags removed = source) on every example, and

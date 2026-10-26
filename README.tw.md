@@ -3,7 +3,7 @@
 
 **線上直接使用**（免安裝）：[展示頁](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html)
 
-**從零開始的教學**（課程教材）：[寫 Veryl → 模擬 → 看波形 → 合成 → 燒進 iCEBreaker](tutorial/README.tw.md)
+**從零開始的教學**（課程教材）：[寫 Veryl → 模擬 → 看波形 → 合成 → 燒進 iCEBreaker](tutorial/README.tw.md)；**虛擬實驗課**（不用買板子）：[虛擬 iCEBreaker 上的 8 個實驗](tutorial/labs.tw.md)
 
 Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一路到位元流）與 ASIC 流程
 （標準元件、佈局、繞線、時序分析），全部用 Rust 寫成。

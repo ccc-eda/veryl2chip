@@ -1,0 +1,73 @@
+// 實驗 4：按一下加一
+// BTN1 每按一下，計數器加一，以二進位顯示在 PMOD1A 的 8 顆 LED；BTN2 歸零。
+// 重點：按鈕要先同步，再抓「剛按下」那一拍（上升緣），否則按住的每一拍都會加一。
+module ButtonCounter (
+    i_clk: input  clock   ,
+    i_rst: input  reset   ,
+    i_btn: input  logic   , // BTN1：加一
+    i_clr: input  logic   , // BTN2：歸零
+    o_led: output logic<8>,
+) {
+    var btn_s: logic<3>; // 兩級同步器 + 上一拍
+    var clr_s: logic<2>;
+    var cnt  : logic<8>;
+
+    // 這一拍是 1、上一拍是 0：剛按下
+    let pressed: logic = btn_s[1] && !btn_s[2];
+
+    always_ff {
+        if_reset {
+            btn_s = 0;
+            clr_s = 0;
+            cnt   = 0;
+        } else {
+            btn_s = {btn_s[1:0], i_btn};
+            clr_s = {clr_s[0], i_clr};
+            if clr_s[1] {
+                cnt = 0;
+            } else if pressed {
+                cnt = cnt + 1;
+            }
+        }
+    }
+
+    assign o_led = cnt;
+}
+
+#[test(test_button_counter)]
+module TestButtonCounter {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var btn: logic   ;
+    var clr: logic   ;
+    var led: logic<8>;
+
+    inst dut: ButtonCounter (
+        i_clk: clk,
+        i_rst: rst,
+        i_btn: btn,
+        i_clr: clr,
+        o_led: led,
+    );
+
+    initial {
+        btn = 0;
+        clr = 0;
+        rst.assert();
+        // 按三下，每次按住 10 拍：只加三
+        for _i in 0..3 {
+            btn = 1;
+            clk.next(10);
+            btn = 0;
+            clk.next(10);
+        }
+        $assert(led == 8'd3, "three presses");
+        clr = 1;
+        clk.next(4);
+        clr = 0;
+        clk.next(2);
+        $assert(led == 8'd0, "cleared");
+        $finish();
+    }
+}

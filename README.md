@@ -3,7 +3,7 @@
 
 **Try it online** (no install): [demo page](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html)
 
-**Tutorial from scratch** (Traditional Chinese, course material): [write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker](tutorial/README.tw.md)
+**Tutorial from scratch** (Traditional Chinese, course material): [write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker](tutorial/README.tw.md); **virtual lab course** (no board needed): [8 labs on the virtual iCEBreaker](tutorial/labs.tw.md)
 
 An EDA for Veryl HDL: simulation, logic synthesis, an FPGA flow (iCE40UP5K, down to a
 bitstream) and an ASIC flow (standard cells, placement, routing, timing), all written in Rust.

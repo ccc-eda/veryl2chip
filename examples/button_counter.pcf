@@ -1,0 +1,13 @@
+# ButtonCounter on an iCEBreaker: BTN1 counts, BTN2 clears, the count on the 8-LED module in PMOD1A
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn i_btn    20
+set_io -nowarn i_clr    19
+set_io -nowarn o_led[0] 4
+set_io -nowarn o_led[1] 2
+set_io -nowarn o_led[2] 47
+set_io -nowarn o_led[3] 45
+set_io -nowarn o_led[4] 3
+set_io -nowarn o_led[5] 48
+set_io -nowarn o_led[6] 46
+set_io -nowarn o_led[7] 44
