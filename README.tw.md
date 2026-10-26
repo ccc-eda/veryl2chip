@@ -51,6 +51,12 @@ Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一
 
 `ide.html#ex=fifo&stage=place` 會開啟某個範例並跳到某個階段；加上 `&run=1` / `&verify=1` 會直接開始測試。
 
+從 crates.io 安裝命令列工具（`veryl-sim`、`veryl-eda`）：
+
+```sh
+cargo install veryl2chip-sim veryl2chip-eda
+```
+
 重新建置（需要 Rust + wasm32 target、Node.js）：
 
 ```sh

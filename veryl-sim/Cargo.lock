@@ -1356,7 +1356,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "veryl-sim"
+name = "veryl2chip-sim"
 version = "0.1.0"
 dependencies = [
  "veryl-parser",

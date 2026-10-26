@@ -1,8 +1,22 @@
 [package]
-name = "veryl-sim"
+name = "veryl2chip-sim"
 version = "0.1.0"
 edition = "2021"
-description = "A small Icarus-Verilog-like event-driven simulator for Veryl, built on veryl-parser"
+description = "Event-driven simulator for Veryl HDL testbenches ($tb::clock_gen, $assert, VCD), part of veryl2chip"
+license = "MIT"
+repository = "https://github.com/ccc-eda/veryl2chip"
+homepage = "https://ccc-eda.github.io/veryl2chip/web/dist/ide.html"
+readme = "README.md"
+keywords = ["veryl", "hdl", "simulator", "fpga", "vcd"]
+categories = ["simulation", "development-tools", "command-line-utilities"]
+
+# the library and the command keep their short names: `use veryl_sim`, `veryl-sim a.veryl`
+[lib]
+name = "veryl_sim"
+
+[[bin]]
+name = "veryl-sim"
+path = "src/main.rs"
 
 [dependencies]
 veryl-parser = "0.22"

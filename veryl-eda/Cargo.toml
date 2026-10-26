@@ -1,9 +1,23 @@
 [package]
-name = "veryl-eda"
+name = "veryl2chip-eda"
 version = "0.1.0"
 edition = "2021"
-description = "Veryl synthesis: Veryl -> gate-level netlist -> yosys JSON (yosys/nextpnr compatible)"
+description = "Veryl HDL to chip: synthesis, iCE40 FPGA place & route and bitstream, ASIC standard-cell flow; part of veryl2chip"
+license = "MIT"
+repository = "https://github.com/ccc-eda/veryl2chip"
+homepage = "https://ccc-eda.github.io/veryl2chip/web/dist/ide.html"
+readme = "README.md"
+keywords = ["veryl", "eda", "synthesis", "fpga", "asic"]
+categories = ["development-tools", "command-line-utilities", "simulation"]
+
+# the library and the command keep their short names: `use veryl_eda`, `veryl-eda a.veryl`
+[lib]
+name = "veryl_eda"
+
+[[bin]]
+name = "veryl-eda"
+path = "src/main.rs"
 
 [dependencies]
 veryl-parser = "0.22"
-veryl-sim = { path = "../veryl-sim" }
+veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "0.1.0" }

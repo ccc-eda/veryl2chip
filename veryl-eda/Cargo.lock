@@ -1337,14 +1337,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
-name = "veryl-eda"
-version = "0.1.0"
-dependencies = [
- "veryl-parser",
- "veryl-sim",
-]
-
-[[package]]
 name = "veryl-parser"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1364,7 +1356,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "veryl-sim"
+name = "veryl2chip-eda"
+version = "0.1.0"
+dependencies = [
+ "veryl-parser",
+ "veryl2chip-sim",
+]
+
+[[package]]
+name = "veryl2chip-sim"
 version = "0.1.0"
 dependencies = [
  "veryl-parser",

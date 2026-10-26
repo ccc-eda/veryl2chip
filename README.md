@@ -51,6 +51,12 @@ The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&targe
 
 `ide.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests.
 
+Install the command-line tools from crates.io (`veryl-sim`, `veryl-eda`):
+
+```sh
+cargo install veryl2chip-sim veryl2chip-eda
+```
+
 Rebuild (Rust + wasm32 target, Node.js):
 
 ```sh
