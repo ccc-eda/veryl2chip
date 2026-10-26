@@ -5,6 +5,8 @@
 pub mod asic;
 pub mod board;
 pub mod bram;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod elab;
 pub mod expr;
 pub mod gatesim;

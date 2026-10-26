@@ -18,6 +18,11 @@ name = "veryl_eda"
 name = "veryl-eda"
 path = "src/main.rs"
 
+# one command for everything, git style: v2c sim / synth / fpga / asic / gatesim / cc / pdk
+[[bin]]
+name = "v2c"
+path = "src/bin/v2c.rs"
+
 [dependencies]
 veryl-parser = "0.22"
 veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "2.0.0" }

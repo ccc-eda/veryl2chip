@@ -63,7 +63,7 @@ Build and test everything from the repository root:
 ./test.sh --full    # + veryl-eda/test.sh: formal equivalence with yosys, FPGA flows (needs OSS CAD Suite)
 ```
 
-Install the command-line tools from crates.io (`veryl-sim`, `veryl-eda`):
+Install the command-line tools from crates.io (`v2c`, `veryl-sim`, `veryl-eda`):
 
 ```sh
 cargo install veryl2chip-sim veryl2chip-eda
@@ -79,5 +79,28 @@ npm test
 ```
 
 `npm run build` rebuilds `web/dist`. `npm test` runs every example through the built `dist/`: simulation, synthesis, FPGA P&R (`.asc` equals the CLI's, `.bin` equals icepack's) and the ASIC flow (results equal the CLI's), gate-level simulation of every example, and a project `.zip` unpacked and checked with `veryl test`, and the interface translations.
+
+## Command line: `v2c`
+One command for everything, git style (`v2c help`, `v2c help <subcommand>` or `v2c <subcommand> -h` for the options):
+
+| | |
+|---|---|
+| `v2c sim [--top M] [--vcd F] FILE...` | run the `#[test]` testbenches (exit code 1 on a failed `$assert`) |
+| `v2c list FILE...` | the modules, and which are testbenches |
+| `v2c synth [-o OUT.json] [--verilog OUT.v] FILE...` | gate netlist (yosys JSON, Verilog) and its statistics |
+| `v2c fpga [--pcf P] [--asc A] [--bin B] [--pnr veryl] FILE...` | iCE40UP5K: LUT mapping, place & route, bitstream |
+| `v2c asic [--pdk vlib\|sky130] [--def D] [--gds G] FILE...` | standard cells, placement, routing, timing, power, DRC (SKY130), GDSII |
+| `v2c gatesim opt\|ice40\|asic\|sky130 FILE...` | the testbenches on the synthesized netlist |
+| `v2c cc PROG.c [-o PROG.bin] [--run]` | C (or assembly) for the RISC-V SoC; `--run` on the instruction-set simulator |
+| `v2c pdk [DIR]` | check a full SKY130 PDK directory |
+
+```sh
+v2c sim --vcd wave.vcd tutorial/src/blinky.veryl
+v2c fpga --pnr veryl --pcf tutorial/icebreaker.pcf --bin blinky.bin tutorial/src/blinky.veryl
+v2c asic --pdk sky130 --gds alu.gds examples/src/rv32i.veryl --top Alu
+```
+
+`v2c` comes with `veryl2chip-eda` (`cargo install veryl2chip-eda`, or `./build.sh`: `veryl-eda/target/release/v2c`);
+the older commands `veryl-sim` and `veryl-eda` (`veryl-eda --ice40`, `--asic`, `--cc` ...) still work the same.
 
 See [AGENTS.md](AGENTS.md) for commands and architecture, and the READMEs in each crate ([veryl-sim](veryl-sim/README.md), [veryl-eda](veryl-eda/README.md); English, 繁體中文, 简体中文) for details.

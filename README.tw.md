@@ -63,7 +63,7 @@ IDE 以前是 `ide.html`：那一頁現在會（帶著 `#…`）轉到 `index.ht
 ./test.sh --full    # 再加 veryl-eda/test.sh：用 yosys 做形式等價、FPGA 流程（需要 OSS CAD Suite）
 ```
 
-從 crates.io 安裝命令列工具（`veryl-sim`、`veryl-eda`）：
+從 crates.io 安裝命令列工具（`v2c`、`veryl-sim`、`veryl-eda`）：
 
 ```sh
 cargo install veryl2chip-sim veryl2chip-eda
@@ -81,5 +81,28 @@ npm test
 `npm run build` 重建 `web/dist`。`npm test` 用建好的 `dist/` 把每個範例跑過一遍：模擬、合成、FPGA 佈局繞線
 （`.asc` 與 CLI 相同，`.bin` 與 icepack 相同）、ASIC 流程（結果與 CLI 相同）、每個範例的閘級模擬、
 解開匯出的專案 `.zip` 並以 `veryl test` 檢查，以及介面翻譯。
+
+## 命令列：`v2c`
+所有功能一個指令，像 git 一樣用子命令（`v2c help`、`v2c help <子命令>` 或 `v2c <子命令> -h` 看選項）：
+
+| | |
+|---|---|
+| `v2c sim [--top M] [--vcd F] 檔案...` | 跑 `#[test]` testbench（`$assert` 失敗時結束碼為 1） |
+| `v2c list 檔案...` | 列出模組，標出哪些是 testbench |
+| `v2c synth [-o OUT.json] [--verilog OUT.v] 檔案...` | 閘級網表（yosys JSON、Verilog）與統計 |
+| `v2c fpga [--pcf P] [--asc A] [--bin B] [--pnr veryl] 檔案...` | iCE40UP5K：LUT 對應、佈局繞線、位元流 |
+| `v2c asic [--pdk vlib\|sky130] [--def D] [--gds G] 檔案...` | 標準元件、佈局、繞線、時序、功耗、DRC（SKY130）、GDSII |
+| `v2c gatesim opt\|ice40\|asic\|sky130 檔案...` | 在合成後的網表上跑 testbench |
+| `v2c cc PROG.c [-o PROG.bin] [--run]` | 給 RISC-V SoC 的 C（或組合語言）；`--run` 在指令集模擬器上執行 |
+| `v2c pdk [目錄]` | 檢查完整的 SKY130 PDK 目錄 |
+
+```sh
+v2c sim --vcd wave.vcd tutorial/src/blinky.veryl
+v2c fpga --pnr veryl --pcf tutorial/icebreaker.pcf --bin blinky.bin tutorial/src/blinky.veryl
+v2c asic --pdk sky130 --gds alu.gds examples/src/rv32i.veryl --top Alu
+```
+
+`v2c` 隨 `veryl2chip-eda` 安裝（`cargo install veryl2chip-eda`，或 `./build.sh`：`veryl-eda/target/release/v2c`）；
+原本的 `veryl-sim` 與 `veryl-eda`（`veryl-eda --ice40`、`--asic`、`--cc`…）照舊可用。
 
 指令與架構見 [AGENTS.md](AGENTS.md)；各 crate 的 README（[veryl-sim](veryl-sim/README.tw.md)、[veryl-eda](veryl-eda/README.tw.md)）有更多細節。

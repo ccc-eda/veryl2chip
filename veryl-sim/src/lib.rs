@@ -1,6 +1,8 @@
 //! veryl-sim as a library: parse Veryl sources, elaborate, simulate.
-//! Used by the command line (`main.rs`) and the WebAssembly build.
+//! Used by the command line (`cli.rs`: `veryl-sim`, `v2c sim`) and the WebAssembly build.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod elab;
 pub mod gates;
 pub mod gen;

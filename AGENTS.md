@@ -6,6 +6,7 @@ EDA for Veryl HDL. Root has no build system; the real code lives in two independ
 ## Commands
 
 ```sh
+v2c help                           # the one command (veryl-eda/src/bin/v2c.rs): sim, list, synth, fpga, asic, gatesim, cc, pdk
 ./build.sh                         # whole project: veryl-sim, veryl-eda (release), web/dist (wasm + TS); --no-web
 ./test.sh                          # veryl-sim, cargo test (veryl-eda), tutorial/check.sh, npm test; --full adds veryl-eda/test.sh
 ```
@@ -17,6 +18,7 @@ cargo build --release
 cargo run --release -- [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl ...
 ```
 
+- `v2c` (bin of veryl2chip-eda, `src/bin/v2c.rs`) dispatches to `veryl_sim::cli::main` (sim, list) and `veryl_eda::cli::main` (synth, fpga = `--ice40`, asic = `--asic`, gatesim = `--gatesim KIND`, cc = `--cc`, pdk = `--pdk-check`); the old `veryl-sim` / `veryl-eda` binaries are thin wrappers over the same `cli` modules (both `#[cfg(not(target_arch = "wasm32"))]`). `cli::V2C` holds the subcommand so argument errors point to `v2c help <subcommand>`. `veryl-eda/tests/v2c.rs` runs every subcommand.
 - Always use `--release`; simulation performance matters.
 - Default top: all modules with a `#[test(...)]` attribute; if none, the last declared module. `--list` shows modules and which are tests.
 - Exit code 1 on assertion failure; `--vcd` writes GTKWave-viewable waveforms.
