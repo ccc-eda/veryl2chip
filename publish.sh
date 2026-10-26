@@ -37,8 +37,19 @@ if $REAL; then
     git diff --quiet && git diff --cached --quiet || die "uncommitted changes (commit them first)"
 fi
 
-# is NAME VERSION already on crates.io?
-published() { cargo info "$1@$2" > /dev/null 2>&1; }
+# is NAME VERSION already on crates.io? (the API knows right after an upload;
+# the index that cargo resolves dependencies from can lag behind by minutes)
+published() { curl -sf -o /dev/null -A "veryl2chip publish.sh (https://github.com/ccc-eda/veryl2chip)" "https://crates.io/api/v1/crates/$1/$2"; }
+in_index() { cargo info "$1@$2" > /dev/null 2>&1; }
+# wait until cargo can resolve NAME VERSION (up to 10 minutes)
+wait_index() {
+    for _ in $(seq 40); do
+        in_index "$1" "$2" && return 0
+        echo "   waiting for $1 $2 to appear in the crates.io index..."
+        sleep 15
+    done
+    die "$1 $2 is still not in the crates.io index; run $0 --yes again later"
+}
 
 # ---- tests
 echo "== tests"
@@ -55,14 +66,15 @@ else
     (cd veryl-sim && cargo publish "${dry[@]+"${dry[@]}"}")
 fi
 
-# ---- veryl2chip-eda (cargo publish waits until veryl2chip-sim shows up in the index)
+# ---- veryl2chip-eda (needs veryl2chip-sim in the index, which can lag behind the upload)
 if published "$EDA_NAME" "$EDA_VER"; then
     echo "== $EDA_NAME $EDA_VER is already on crates.io: skipped"
-elif ! $REAL && ! published "$SIM_NAME" "$SIM_VER"; then
-    # a dry run of veryl2chip-eda needs veryl2chip-sim on crates.io; until then, list what would be packaged
-    echo "== $EDA_NAME: $SIM_NAME $SIM_VER is not on crates.io yet, so only listing the package"
+elif ! $REAL && ! in_index "$SIM_NAME" "$SIM_VER"; then
+    # a dry run of veryl2chip-eda needs veryl2chip-sim in the crates.io index; until then, list what would be packaged
+    echo "== $EDA_NAME: $SIM_NAME $SIM_VER is not in the crates.io index yet, so only listing the package"
     (cd veryl-eda && cargo package --list --allow-dirty | grep -v '^\.' | tr '\n' ' '; echo)
 else
+    $REAL && wait_index "$SIM_NAME" "$SIM_VER"
     echo "== cargo publish ${dry[*]:-} ($EDA_NAME $EDA_VER)"
     (cd veryl-eda && cargo publish "${dry[@]+"${dry[@]}"}")
 fi
