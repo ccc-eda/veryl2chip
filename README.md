@@ -8,7 +8,7 @@
 An EDA for Veryl HDL: simulation, logic synthesis, an FPGA flow (iCE40UP5K, down to a
 bitstream) and an ASIC flow (standard cells, placement, routing, timing), all written in Rust.
 Since v2.0 the ASIC flow also runs on SkyWater's open **SKY130** PDK (`sky130_fd_sc_hd`) all the way to a
-DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk)).
+DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk)). Version history: [history.md](history.md) (Traditional Chinese).
 
 | | |
 |---|---|
