@@ -11,6 +11,11 @@ thread_local! {
 
 pub fn set_chip(c: Chip) { CHIP.with(|x| *x.borrow_mut() = Some(c)); }
 
+thread_local! {
+    /// the virtual iCEBreaker: the loaded design (kept for power cycles), its pin file and the running board
+    static BOARD: RefCell<Option<(veryl_eda::board::Design, Option<String>, veryl_eda::board::Board)>> = const { RefCell::new(None) };
+}
+
 type R<T> = Result<T, String>;
 
 fn bit(b: &Bit) -> Value {
@@ -255,6 +260,70 @@ fn synth_netlists(v: &Value) -> R<(String, SynthOut)> {
     Ok((top, (st, mapped)))
 }
 
+/// the virtual board: synthesize, map to iCE40 and power up an iCEBreaker with the design
+fn board_load(v: &Value) -> R<Value> {
+    use veryl_eda::board::{icebreaker, Design};
+    let (top, (_, mapped)) = synth_netlists(v)?;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
+    let d = Design::from_netlist(&mapped)?;
+    let b = icebreaker::board(d.clone(), pcf.as_deref())?;
+    let info = board_info(&top, &mapped, &b, pcf.is_none());
+    BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b)));
+    Ok(info)
+}
+
+fn board_info(top: &str, nl: &Netlist, b: &veryl_eda::board::Board, default_pcf: bool) -> Value {
+    use veryl_eda::board::icebreaker::{Kind, PINS};
+    let pins: Vec<Value> = PINS.iter().map(|p| {
+        let (kind, level) = match p.kind {
+            Kind::Clock => ("clock", true), Kind::Button { pressed } => ("button", pressed), Kind::Led { on } => ("led", on),
+            Kind::Uart { rx } => (if rx { "uart_rx" } else { "uart_tx" }, true), Kind::Pmod => ("pmod", true),
+        };
+        let port = b.port_of.get(&p.pin).cloned();
+        let input = if b.pin_in.contains_key(&p.pin) { port.clone() } else { None };
+        let output = if b.pin_out.iter().any(|x| x.0 == p.pin) { port } else { None };
+        json!({ "pin": p.pin, "name": p.name, "kind": kind, "level": level, "input": input, "output": output })
+    }).collect();
+    let count = |t: &str| nl.cells.iter().filter(|c| c.typ.starts_with(t)).count();
+    json!({
+        "ok": true, "top": top, "pins": pins, "warnings": b.warnings, "default_pcf": default_pcf,
+        "clock_hz": veryl_eda::board::icebreaker::CLOCK_HZ,
+        "cells": { "lut": count("SB_LUT4"), "carry": count("SB_CARRY"), "ff": count("SB_DFF"), "ram": count("SB_RAM40_4K") },
+    })
+}
+
+/// run the board: `inputs` [[pin, level], ...] first, then `cycles` clock cycles;
+/// returns each output pin's duty (fraction of cycles at 1) and the cycle count
+fn board_run(v: &Value) -> R<Value> {
+    BOARD.with(|x| {
+        let mut x = x.borrow_mut();
+        let (_, _, b) = x.as_mut().ok_or("no design on the virtual board")?;
+        if let Some(ins) = v.get("inputs").and_then(|i| i.as_array()) {
+            for i in ins {
+                let (pin, level) = (i.get(0).and_then(|p| p.as_u64()).unwrap_or(0) as u32, i.get(1).and_then(|l| l.as_u64()).unwrap_or(0) != 0);
+                b.set_pin(pin, level);
+            }
+        }
+        let cycles = v.get("cycles").and_then(|c| c.as_u64()).unwrap_or(0);
+        let evals0 = b.eng.evals;
+        b.run(cycles);
+        let duty: Vec<Value> = if cycles > 0 { b.take_duty().into_iter().map(|(p, d)| json!([p, d])).collect() } else {
+            b.pin_out.iter().map(|p| json!([p.0, if b.eng.get(p.1) { 1.0 } else { 0.0 }])).collect()
+        };
+        Ok(json!({ "ok": true, "cycle": b.cycle, "duty": duty, "evals": b.eng.evals - evals0 }))
+    })
+}
+
+/// power cycle: the same design and pins from the power-up state
+fn board_reset() -> R<Value> {
+    BOARD.with(|x| {
+        let mut x = x.borrow_mut();
+        let (d, pcf, b) = x.as_mut().ok_or("no design on the virtual board")?;
+        *b = veryl_eda::board::icebreaker::board(d.clone(), pcf.as_deref())?;
+        Ok(json!({ "ok": true, "cycle": 0 }))
+    })
+}
+
 fn synth(v: &Value) -> R<Value> {
     let fs = files(v)?;
     let mut parsers = vec![];
@@ -333,6 +402,9 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "synth" => synth(v),
         "pnr" => pnr(v),
         "asic" => asic(v),
+        "board_load" => board_load(v),
+        "board_run" => board_run(v),
+        "board_reset" => board_reset(),
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),
         c => Err(format!("unknown command '{}'", c)),
     }

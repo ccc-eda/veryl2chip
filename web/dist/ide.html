@@ -24,6 +24,7 @@
   <div class="tb-group">
     <button id="cmdSynth" class="tb-btn" disabled title="合成並檢視各階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view each stage (Ctrl/⌘+Shift+B)" data-en="⚙ Synthesize">⚙ 合成</button>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
+    <button id="cmdBoard" class="tb-btn" disabled title="合成並燒錄到虛擬 iCEBreaker 開發板" data-en-title="Synthesize and flash to a virtual iCEBreaker board" data-en="⚡ Virtual board">⚡ 虛擬板</button>
   </div>
   <span class="spacer"></span>
   <button id="cmdPalette" class="tb-btn ghost" title="命令選單（Ctrl/⌘+Shift+P）" data-en-title="Command palette (Ctrl/⌘+Shift+P)" data-en="⌘ Commands">⌘ 命令</button>
@@ -104,6 +105,7 @@
     <div id="edArea">
       <div id="editorHost"></div>
       <div id="welcome" class="hidden"></div>
+      <div id="boardPane" class="hidden"></div>
       <div id="synOverlay" class="hidden flowpane">
         <div id="synBar">
           <h1 id="synTitle">合成 → FPGA（iCE40UP5K）</h1>

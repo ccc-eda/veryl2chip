@@ -47,6 +47,7 @@ Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一
 - ⚙ 综合流程是一个编辑器标签页：共用 ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn，然后 FPGA ④–⑦
   或 ASIC ④–⑨，以及 FPGA vs ASIC
 - 下方面板（问题、输出、测试结果、波形）、状态栏、命令面板（Ctrl/⌘+Shift+P）、快速打开文件（Ctrl/⌘+P）
+- ⚡ **虚拟 iCEBreaker**：把设计烧录到画出来的开发板上，LED 会亮（亮度依占空比）、按钮可以按，引脚和真实板相同（iCE40 网表的逐周期仿真，小设计约真实速度的 0.4 倍）
 - 界面可用繁体中文、简体中文或英文（标题栏的菜单切换；默认跟随浏览器语言）
 
 `ide.html#ex=fifo&stage=place` 会打开某个示例并跳到某个阶段；加上 `&run=1` / `&verify=1` 会直接开始测试。

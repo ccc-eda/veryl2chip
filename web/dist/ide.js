@@ -185,6 +185,12 @@
     "\u5217\u5F0F": "\u884C\u5F0F"
   };
   var HANS_CHARS = {
+    "\u5B78": "\u5B66",
+    "\u64CA": "\u51FB",
+    "\u7E7C": "\u7EE7",
+    "\u865B": "\u865A",
+    "\u9215": "\u94AE",
+    "\u9396": "\u9501",
     "\u4E26": "\u5E76",
     "\u4F48": "\u5E03",
     "\u4F54": "\u5360",
@@ -2704,11 +2710,281 @@ target = { type = "directory", path = "target" }
     return 10 * p;
   }
 
+  // src/ide/board.ts
+  var PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
+  var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
+  var PMOD2 = [27, 25, 21, 19, 26, 23, 20, 18];
+  var KEYS = { "0": 10, "1": 20, "2": 19, "3": 18 };
+  var esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  var VirtualBoard = class {
+    constructor(host, core2) {
+      __publicField(this, "host", host);
+      __publicField(this, "core", core2);
+      __publicField(this, "info", null);
+      __publicField(this, "running", false);
+      __publicField(this, "loop", 0);
+      __publicField(this, "pending", []);
+      __publicField(this, "held", /* @__PURE__ */ new Map());
+      __publicField(this, "latched", /* @__PURE__ */ new Set());
+      __publicField(this, "cycles", 2e4);
+      __publicField(this, "realtime", true);
+      __publicField(this, "lastCycle", 0);
+      __publicField(this, "speed", { t: 0, c: 0, rate: 0 });
+      __publicField(this, "gen", 0);
+      host.innerHTML = `<div class="vb-bar">
+        <button class="tb-btn" data-a="flash" title="${tr("\u5408\u6210\u76EE\u524D\u7684\u8A2D\u8A08\u4E26\u71D2\u9304\u5230\u865B\u64EC\u677F", "Synthesize the current design and flash it to the virtual board")}">${tr("\u26A1 \u71D2\u9304", "\u26A1 Flash")}</button>
+        <button class="tb-btn" data-a="run" disabled>\u23F8</button>
+        <button class="tb-btn" data-a="power" disabled title="${tr("\u91CD\u65B0\u4E0A\u96FB\uFF08\u5F9E\u982D\u958B\u59CB\uFF09", "Power cycle (start over)")}">\u27F2</button>
+        <select data-a="pace" title="${tr("\u901F\u5EA6", "Speed")}"><option value="rt">${tr("\u4E0D\u8D85\u904E\u5373\u6642", "up to real time")}</option><option value="max">${tr("\u6700\u5FEB", "fastest")}</option></select>
+        <span class="vb-stat"></span>
+      </div>
+      <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+      <div class="vb-foot"></div>`;
+      this.svg.innerHTML = this.drawing();
+      this.q("[data-a=run]").onclick = () => this.setRunning(!this.running);
+      this.q("[data-a=power]").onclick = () => this.power();
+      this.q("[data-a=pace]").onchange = (e) => {
+        this.realtime = e.target.value === "rt";
+      };
+      for (const b of this.svg.querySelectorAll("[data-btn]")) {
+        const pin = +b.dataset.btn;
+        const down = (e) => {
+          e.preventDefault();
+          if (e.shiftKey) {
+            this.latched.has(pin) ? this.latched.delete(pin) : this.latched.add(pin);
+            this.press(pin, this.latched.has(pin));
+            return;
+          }
+          this.press(pin, true);
+        };
+        const up = () => {
+          if (!this.latched.has(pin)) this.press(pin, false);
+        };
+        b.addEventListener("pointerdown", down);
+        b.addEventListener("pointerup", up);
+        b.addEventListener("pointerleave", up);
+      }
+      host.tabIndex = 0;
+      host.addEventListener("keydown", (e) => {
+        const p = KEYS[e.key];
+        if (p !== void 0 && !e.repeat) {
+          this.press(p, true);
+          e.preventDefault();
+        }
+      });
+      host.addEventListener("keyup", (e) => {
+        const p = KEYS[e.key];
+        if (p !== void 0 && !this.latched.has(p)) this.press(p, false);
+      });
+    }
+    /** the flash button (the IDE hooks it up) */
+    get flashButton() {
+      return this.q("[data-a=flash]");
+    }
+    get loaded() {
+      return this.info;
+    }
+    q(sel) {
+      return this.host.querySelector(sel);
+    }
+    get svg() {
+      return this.q(".vb-svg");
+    }
+    /** synthesize + map `top` and power the board up with it */
+    async flash(files, top, pcf) {
+      this.setRunning(false);
+      const gen = ++this.gen;
+      this.stat(tr("\u5408\u6210\u4E26\u71D2\u9304\u4E2D\u2026", "Synthesizing and flashing\u2026"));
+      const core2 = await this.core();
+      const info = await core2.call({ cmd: "board_load", files, top, pcf: pcf ?? null });
+      if (gen !== this.gen) return info;
+      this.info = info;
+      this.held.clear();
+      this.latched.clear();
+      this.lastCycle = 0;
+      this.speed = { t: performance.now(), c: 0, rate: 0 };
+      this.cycles = 2e4;
+      this.wire();
+      this.foot();
+      this.q("[data-a=run]").disabled = false;
+      this.q("[data-a=power]").disabled = false;
+      this.setRunning(true);
+      return info;
+    }
+    async power() {
+      if (!this.info) return;
+      const was = this.running;
+      this.setRunning(false);
+      await (await this.core()).call({ cmd: "board_reset" });
+      this.lastCycle = 0;
+      this.speed = { t: performance.now(), c: 0, rate: 0 };
+      for (const p of this.latched) this.press(p, true);
+      if (was) this.setRunning(true);
+      else this.tick(0);
+    }
+    stop() {
+      this.setRunning(false);
+    }
+    resume() {
+      this.setRunning(true);
+    }
+    get isRunning() {
+      return this.running;
+    }
+    setRunning(on) {
+      this.running = on && !!this.info;
+      this.q("[data-a=run]").textContent = this.running ? "\u23F8" : "\u25B6";
+      this.q("[data-a=run]").title = this.running ? tr("\u66AB\u505C", "Pause") : tr("\u7E7C\u7E8C", "Run");
+      clearTimeout(this.loop);
+      if (this.running) {
+        this.speed = { t: performance.now(), c: this.lastCycle, rate: this.speed.rate };
+        this.tick(this.cycles);
+      }
+    }
+    press(pin, down) {
+      const p = this.info?.pins.find((x) => x.pin === pin);
+      if (!p || p.kind !== "button") return;
+      this.held.set(pin, down);
+      this.pending.push([pin, (down ? p.level : !p.level) ? 1 : 0]);
+      this.svg.querySelector(`[data-btn="${pin}"]`)?.classList.toggle("down", down);
+      if (!this.running) this.tick(0);
+    }
+    /** one call to the worker: `n` cycles, then draw and schedule the next */
+    async tick(n) {
+      const gen = this.gen;
+      const t0 = performance.now();
+      const inputs = this.pending;
+      this.pending = [];
+      let r;
+      try {
+        r = await (await this.core()).call({ cmd: "board_run", cycles: n, inputs });
+      } catch (e) {
+        this.stat("\u2717 " + String(e.message ?? e));
+        this.setRunning(false);
+        return;
+      }
+      if (gen !== this.gen) return;
+      const dt = performance.now() - t0;
+      this.lastCycle = r.cycle;
+      this.show(r);
+      if (!this.running) {
+        this.stat();
+        return;
+      }
+      if (n > 0) this.cycles = Math.max(1e3, Math.min(4e6, Math.round(n * 25 / Math.max(1, dt))));
+      const now = performance.now();
+      const el2 = (now - this.speed.t) / 1e3;
+      if (el2 > 0.5) {
+        this.speed.rate = (r.cycle - this.speed.c) / el2;
+        this.speed = { t: now, c: r.cycle, rate: this.speed.rate };
+      }
+      this.stat();
+      let next = this.cycles;
+      let wait = 0;
+      if (this.realtime) {
+        const hz = this.info.clock_hz;
+        next = Math.min(next, Math.round(hz * 0.03));
+        wait = Math.max(0, next / hz * 1e3 - dt);
+      }
+      this.loop = window.setTimeout(() => this.tick(next), wait);
+    }
+    /** LED brightness and pin levels from the duty cycles */
+    show(r) {
+      for (const [pin, duty] of r.duty) {
+        const p = this.info.pins.find((x) => x.pin === pin);
+        if (!p) continue;
+        const lit = p.kind === "led" ? p.level ? duty : 1 - duty : duty;
+        for (const el2 of this.svg.querySelectorAll(`[data-led="${pin}"]`)) el2.style.opacity = (lit < 4e-3 ? 0 : 0.18 + 0.82 * Math.sqrt(lit)).toFixed(3);
+        for (const el2 of this.svg.querySelectorAll(`[data-hdr="${pin}"]`)) el2.style.fill = `rgba(255, 210, 80, ${(0.15 + 0.85 * duty).toFixed(3)})`;
+      }
+    }
+    stat(text) {
+      const s = this.q(".vb-stat");
+      if (text !== void 0) {
+        s.textContent = text;
+        return;
+      }
+      if (!this.info) {
+        s.textContent = tr("\u9084\u6C92\u6709\u71D2\u9304\u8A2D\u8A08", "No design flashed yet");
+        return;
+      }
+      const hz = this.info.clock_hz;
+      const t = this.lastCycle / hz;
+      const rate = this.speed.rate;
+      s.textContent = `${this.info.top} \xB7 ${tr("\u865B\u64EC\u6642\u9593", "virtual time")} ${t < 10 ? t.toFixed(3) : t.toFixed(1)} s \xB7 ` + (this.running ? `${tr("\u901F\u5EA6", "speed")} ${(rate / 1e6).toFixed(2)} MHz\uFF08${tr("\u771F\u5BE6\u7684", "real time \xD7")} ${(rate / hz).toFixed(2)}${tr(" \u500D", "")}\uFF09` : tr("\u66AB\u505C", "paused"));
+    }
+    /** which pins the design uses: tooltips and dim parts it does not drive */
+    wire() {
+      const by = new Map(this.info.pins.map((p) => [p.pin, p]));
+      for (const el2 of this.svg.querySelectorAll("[data-pin]")) {
+        const p = by.get(+el2.dataset.pin);
+        if (!p) continue;
+        const port = p.input ?? p.output;
+        el2.classList.toggle("used", !!port);
+        const t = el2.querySelector("title") ?? el2.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "title"));
+        t.textContent = `${p.name}\uFF08${tr("\u8173", "pin")} ${p.pin}\uFF09` + (port ? ` \u2194 ${port}` : tr("\uFF1A\u8A2D\u8A08\u6C92\u6709\u7528\u5230", ": not used by the design"));
+      }
+      for (const el2 of this.svg.querySelectorAll("[data-led],[data-hdr]")) {
+        el2.style.opacity = el2.dataset.led ? "0" : "";
+        el2.style.fill = "";
+      }
+    }
+    foot() {
+      const i = this.info;
+      const used = i.pins.filter((p) => p.input || p.output).map((p) => `${p.name}\u2194${p.input ?? p.output}`);
+      this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.join("\uFF1B"))}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u9019\u662F iCE40 \u7DB2\u8868\u7684\u9010\u9031\u671F\u6A21\u64EC\uFF1A\u908F\u8F2F\u548C\u771F\u5BE6\u677F\u76F8\u540C\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. This is a cycle-by-cycle simulation of the iCE40 netlist: the logic matches the real board, the speed depends on the design size; the board drawing is schematic.")}</span>`;
+    }
+    /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
+    drawing() {
+      const hdr = (x, y, pins, label, vertical = false) => {
+        let s = `<text x="${x + (vertical ? 22 : 60)}" y="${y - 8}" class="vb-silk" text-anchor="middle">${label}</text>`;
+        const rows = [[...pins.slice(0, 4), -1, -2], [...pins.slice(4), -1, -2]];
+        rows.forEach((row, r) => row.forEach((p, k) => {
+          const [px, py] = vertical ? [x + r * 22, y + k * 22] : [x + k * 22, y + r * 22];
+          if (p < 0) {
+            s += `<rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr-pwr"><title>${p === -1 ? "GND" : "3V3"}</title></rect>`;
+            return;
+          }
+          s += `<g data-pin="${p}"><rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr" data-hdr="${p}"/></g>`;
+        }));
+        return s;
+      };
+      const led = (x, y, pin, color, label) => `<g data-pin="${pin}"><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" class="vb-led-body"/><circle cx="${x}" cy="${y}" r="16" fill="${color}" filter="url(#vbGlow)" data-led="${pin}" style="opacity:0"/><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" fill="${color}" data-led="${pin}" style="opacity:0"/><text x="${x}" y="${y + 22}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
+      const btn = (x, y, pin, label) => `<g data-pin="${pin}" data-btn="${pin}" class="vb-btn"><rect x="${x - 15}" y="${y - 15}" width="30" height="30" rx="3" class="vb-btn-base"/><circle cx="${x}" cy="${y}" r="10" class="vb-btn-cap"/><text x="${x}" y="${y + 30}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
+      return `<defs><filter id="vbGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="5"/></filter></defs>
+      <rect x="10" y="20" width="640" height="290" rx="14" class="vb-pcb"/>
+      <rect x="670" y="20" width="240" height="290" rx="14" class="vb-pcb"/>
+      <line x1="660" y1="30" x2="660" y2="300" class="vb-perf"/>
+      <text x="30" y="300" class="vb-silk vb-title">iCEBreaker</text>
+      <rect x="0" y="135" width="42" height="56" rx="4" class="vb-usb"/><text x="48" y="128" class="vb-silk">USB</text>
+      <rect x="70" y="140" width="52" height="46" rx="3" class="vb-chip"/><text x="96" y="167" class="vb-chip-t" text-anchor="middle">FTDI</text>
+      <rect x="150" y="215" width="44" height="30" rx="2" class="vb-chip"/><text x="172" y="234" class="vb-chip-t" text-anchor="middle">flash</text>
+      <g data-pin="35"><rect x="160" y="80" width="40" height="24" rx="5" class="vb-osc"/><text x="180" y="96" class="vb-chip-t" text-anchor="middle">12M</text><title>12 MHz</title></g>
+      <rect x="245" y="95" width="140" height="140" rx="4" class="vb-chip vb-fpga"/>
+      <text x="315" y="160" class="vb-chip-t vb-fpga-t" text-anchor="middle">iCE40UP5K</text>
+      <text x="315" y="180" class="vb-chip-t" text-anchor="middle">SG48</text>
+      ${led(430, 60, 11, "#ff3b30", "LEDR_N")}
+      ${led(480, 60, 37, "#34c759", "LEDG_N")}
+      ${btn(440, 255, 10, "BTN_N")}
+      ${hdr(500, 120, PMOD1A, "PMOD1A", true)}
+      ${hdr(575, 120, PMOD1B, "PMOD1B", true)}
+      ${hdr(682, 120, PMOD2, "PMOD2", true)}
+      ${led(810, 115, 26, "#ff3b30", "LED1")}
+      ${led(810, 65, 27, "#34c759", "LED2")}
+      ${led(860, 115, 25, "#34c759", "LED3")}
+      ${led(810, 165, 23, "#34c759", "LED4")}
+      ${led(760, 115, 21, "#34c759", "LED5")}
+      ${btn(760, 250, 20, "BTN1")}
+      ${btn(810, 250, 19, "BTN2")}
+      ${btn(860, 250, 18, "BTN3")}`;
+    }
+  };
+
   // src/ide/highlight.ts
   var KEYWORDS = new Set("module interface package function import export inst param const var let assign always_ff always_comb initial final if else if_reset case switch default for in rev step return break input output inout modport struct enum union typedef embed include generate pub proto bind connect type as repeat inside outside unsafe alias true false".split(" "));
   var TYPES = new Set("logic bit clock clock_posedge clock_negedge reset reset_async_high reset_async_low reset_sync_high reset_sync_low u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 signed tri string".split(" "));
   var TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*")|(\d+'s?[bodhBODH][0-9a-fA-FxXzZ_]+|\d+'[01xXzZ]|'[01xXzZ]|\d[\d_]*(?:\.\d+)?)|(\$[A-Za-z_]\w*)|(#\[[^\]]*\])|([A-Za-z_]\w*)|('[a-z_]\w*)/g;
-  function esc2(s) {
+  function esc3(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   function highlight(src) {
@@ -2720,41 +2996,41 @@ target = { type = "directory", path = "target" }
       if (inBlock) {
         const e = line.indexOf("*/");
         if (e < 0) {
-          out.push(`<span class="t-com">${esc2(line)}</span>`);
+          out.push(`<span class="t-com">${esc3(line)}</span>`);
           continue;
         }
-        h += `<span class="t-com">${esc2(line.slice(0, e + 2))}</span>`;
+        h += `<span class="t-com">${esc3(line.slice(0, e + 2))}</span>`;
         i = e + 2;
         inBlock = false;
       }
       TOKEN.lastIndex = i;
       let m;
       while (m = TOKEN.exec(line)) {
-        h += esc2(line.slice(i, m.index));
+        h += esc3(line.slice(i, m.index));
         const t = m[0];
-        if (m[1]) h += `<span class="t-com">${esc2(t)}</span>`;
+        if (m[1]) h += `<span class="t-com">${esc3(t)}</span>`;
         else if (m[2]) {
           const e = line.indexOf("*/", m.index + 2);
           const end = e < 0 ? line.length : e + 2;
-          h += `<span class="t-com">${esc2(line.slice(m.index, end))}</span>`;
+          h += `<span class="t-com">${esc3(line.slice(m.index, end))}</span>`;
           if (e < 0) inBlock = true;
           TOKEN.lastIndex = end;
           i = end;
           if (inBlock) break;
           continue;
-        } else if (m[3]) h += `<span class="t-str">${esc2(t)}</span>`;
-        else if (m[4]) h += `<span class="t-num">${esc2(t)}</span>`;
-        else if (m[5]) h += `<span class="t-sys">${esc2(t)}</span>`;
-        else if (m[6]) h += `<span class="t-attr">${esc2(t)}</span>`;
+        } else if (m[3]) h += `<span class="t-str">${esc3(t)}</span>`;
+        else if (m[4]) h += `<span class="t-num">${esc3(t)}</span>`;
+        else if (m[5]) h += `<span class="t-sys">${esc3(t)}</span>`;
+        else if (m[6]) h += `<span class="t-attr">${esc3(t)}</span>`;
         else if (m[7]) {
           if (KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
           else if (TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
           else if (/^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
           else h += t;
-        } else h += `<span class="t-dom">${esc2(t)}</span>`;
+        } else h += `<span class="t-dom">${esc3(t)}</span>`;
         i = TOKEN.lastIndex;
       }
-      if (i < line.length) h += esc2(line.slice(i));
+      if (i < line.length) h += esc3(line.slice(i));
       out.push(h);
     }
     return out;
@@ -2942,7 +3218,7 @@ target = { type = "directory", path = "target" }
   // src/ide/main.ts
   var $2 = (id) => document.getElementById(id);
   var mod = (e) => e.ctrlKey || e.metaKey;
-  var esc3 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  var esc4 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   var KEY = "veryl2chip-ide:";
   function store() {
     try {
@@ -3006,8 +3282,10 @@ target = { type = "directory", path = "target" }
   var isFpgaStage = (k) => FPGA_STAGES.some((s) => s.key === k && s.tag === "fpga");
   var FLOW_TAB = "\u2699flow";
   var WELCOME = "\u2605welcome";
+  var BOARD_TAB = "\u26A1board";
   var TUTORIAL = "https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md";
-  var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n;
+  var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n === BOARD_TAB ? tr("\u26A1 \u865B\u64EC iCEBreaker", "\u26A1 Virtual iCEBreaker") : n;
+  var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB;
   function file(name) {
     return proj.files.find((f) => f.name === name);
   }
@@ -3018,12 +3296,12 @@ target = { type = "directory", path = "target" }
     return proj.open ?? (proj.open = []);
   }
   function openFile(name, line, col) {
-    if (name !== FLOW_TAB && name !== WELCOME && !file(name)) return;
+    if (!special(name) && !file(name)) return;
     if (!openTabs().includes(name)) openTabs().push(name);
     proj.active = name;
     persist();
     showActive();
-    if (line && name !== FLOW_TAB) ed.goto(line, col ?? 1, true);
+    if (line && !special(name)) ed.goto(line, col ?? 1, true);
   }
   function closeTab(name) {
     const t = openTabs();
@@ -3036,13 +3314,25 @@ target = { type = "directory", path = "target" }
   }
   function showActive() {
     let a = proj.active;
-    if (a && a !== FLOW_TAB && a !== WELCOME && !file(a)) a = void 0;
+    if (a && !special(a) && !file(a)) a = void 0;
     if (!a) a = openTabs().find((n) => n === FLOW_TAB || file(n)) ?? WELCOME;
     proj.active = a;
     if (!openTabs().includes(a)) openTabs().push(a);
     const isFile = !!file(a);
     $2("editorHost").classList.toggle("hidden", !isFile);
     $2("synOverlay").classList.toggle("hidden", a !== FLOW_TAB);
+    $2("boardPane").classList.toggle("hidden", a !== BOARD_TAB);
+    if (board) {
+      if (a === BOARD_TAB) {
+        if (boardWasRunning) {
+          boardWasRunning = false;
+          board.resume();
+        }
+      } else if (board.isRunning) {
+        boardWasRunning = true;
+        board.stop();
+      }
+    }
     $2("welcome").classList.toggle("hidden", a !== WELCOME);
     if (isFile) {
       if (ed.value !== file(a).src || $2("editorHost").dataset.file !== a) {
@@ -3067,7 +3357,7 @@ target = { type = "directory", path = "target" }
       const f = file(n);
       const errs = problems.some((p) => p.file === n && p.severity === "error");
       t.className = "tab" + (n === proj.active ? " cur" : "") + (f && original(n) !== void 0 && original(n) !== f.src ? " dirty" : "") + (errs ? " err" : "");
-      t.innerHTML = `<span class="ic">${n === FLOW_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : "\u25A4"}</span><span class="nm">${esc3(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
+      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : "\u25A4"}</span><span class="nm">${esc4(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
       t.onclick = () => {
         proj.active = n;
         persist();
@@ -3103,7 +3393,7 @@ target = { type = "directory", path = "target" }
       const n = problems.filter((p) => p.file === f.name && p.severity === "error").length;
       const changed2 = original(f.name) !== void 0 && original(f.name) !== f.src;
       d.className = "item" + (f.name === proj.active ? " cur" : "");
-      d.innerHTML = `<span class="ic">${f.name.endsWith(".veryl") ? "\u25C6" : "\u25A4"}</span><span class="nm">${esc3(f.name)}</span><span class="acts"><button class="icon" data-a="ren" title="${tr("\u91CD\u65B0\u547D\u540D", "Rename")}">\u270E</button><button class="icon" data-a="del" title="${tr("\u522A\u9664", "Delete")}">\u{1F5D1}</button></span>` + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed2 ? `<span class="tag dirty-dot" title="${tr("\u8207\u7BC4\u4F8B\u539F\u59CB\u78BC\u4E0D\u540C", "Changed from the example")}">M</span>` : "");
+      d.innerHTML = `<span class="ic">${f.name.endsWith(".veryl") ? "\u25C6" : "\u25A4"}</span><span class="nm">${esc4(f.name)}</span><span class="acts"><button class="icon" data-a="ren" title="${tr("\u91CD\u65B0\u547D\u540D", "Rename")}">\u270E</button><button class="icon" data-a="del" title="${tr("\u522A\u9664", "Delete")}">\u{1F5D1}</button></span>` + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed2 ? `<span class="tag dirty-dot" title="${tr("\u8207\u7BC4\u4F8B\u539F\u59CB\u78BC\u4E0D\u540C", "Changed from the example")}">M</span>` : "");
       d.onclick = (e) => {
         const a = e.target.dataset.a;
         if (a === "ren") renameFile(f.name);
@@ -3132,7 +3422,7 @@ target = { type = "directory", path = "target" }
       const el2 = document.createElement("div");
       const top = d.kind === "module" && d.name === synthTop();
       el2.className = "item";
-      el2.innerHTML = `<span class="ic">${d.kind === "module" ? d.test ? "\u2714" : "\u25A3" : d.kind === "interface" ? "\u21C4" : "{}"}</span><span class="nm">${esc3(d.name)}</span><span class="tag">${top ? tr("\u5408\u6210\u9802\u5C64", "synth top") : d.test ? "test" : d.kind === "module" ? "" : d.kind}</span>`;
+      el2.innerHTML = `<span class="ic">${d.kind === "module" ? d.test ? "\u2714" : "\u25A3" : d.kind === "interface" ? "\u21C4" : "{}"}</span><span class="nm">${esc4(d.name)}</span><span class="tag">${top ? tr("\u5408\u6210\u9802\u5C64", "synth top") : d.test ? "test" : d.kind === "module" ? "" : d.kind}</span>`;
       el2.title = `${d.file}:${d.line}`;
       el2.onclick = () => openFile(d.file, d.line);
       box.appendChild(el2);
@@ -3213,7 +3503,7 @@ target = { type = "directory", path = "target" }
     wave?.set(null);
     $2("p-output").textContent = "";
     $2("p-results").innerHTML = "";
-    if (proj.active === FLOW_TAB) proj.active = void 0;
+    if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
     renderProjects();
     showActive();
@@ -3290,7 +3580,7 @@ target = { type = "directory", path = "target" }
       const opened = projects.some((p) => p.from === ex.id);
       d.className = "item";
       d.title = (ex.note ? exNote(ex) + "\n" : "") + ex.files.map((f) => f.name).join(", ");
-      d.innerHTML = `<span class="ic">${opened ? "\u25CF" : "\u25CB"}</span><span class="nm">${esc3(exTitle(ex))}</span>`;
+      d.innerHTML = `<span class="ic">${opened ? "\u25CF" : "\u25CB"}</span><span class="nm">${esc4(exTitle(ex))}</span>`;
       d.onclick = () => {
         openExample(ex);
         renderExamples();
@@ -3303,8 +3593,8 @@ target = { type = "directory", path = "target" }
     $2("welcome").innerHTML = `<h2>veryl2chip IDE</h2><p>${tr("Veryl \u2192 \u6A21\u64EC \u2192 \u5408\u6210 \u2192 FPGA / ASIC\uFF0C\u5168\u90E8\u5728\u700F\u89BD\u5668\u88E1\u3002", "Veryl \u2192 simulation \u2192 synthesis \u2192 FPGA / ASIC, all in the browser.")}</p>
     <div class="cols">
       <div><h3>${tr("\u958B\u59CB", "Start")}</h3><a data-a="newfile">${tr("\uFF0B \u65B0\u589E .veryl \u6A94", "\uFF0B New .veryl file")}</a><a data-a="newproj">${tr("\uFF0B \u65B0\u5C08\u6848", "\uFF0B New project")}</a><a data-a="examples">${tr("\u{1F4DA} \u958B\u555F\u7BC4\u4F8B\u2026", "\u{1F4DA} Open an example\u2026")}</a><a data-a="import">${tr("\u21EA \u532F\u5165 .veryl \u6A94\u2026", "\u21EA Import .veryl files\u2026")}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr("\u{1F4D6} \u5F9E\u96F6\u958B\u59CB\u7684\u6559\u5B78\uFF08\u5BEB Veryl \u2192 \u71D2\u9032 iCEBreaker\uFF09", "\u{1F4D6} Tutorial from scratch (write Veryl \u2192 flash an iCEBreaker)")}</a></div>
-      <div><h3>${tr("\u6700\u8FD1\u7684\u5C08\u6848", "Recent projects")}</h3>${recent.map((p) => `<a data-p="${p.id}">${esc3(projName(p))}</a>`).join("")}</div>
-      <div><h3>${tr("\u9019\u500B\u5C08\u6848", "This project")}</h3>${proj.files.map((f) => `<a data-f="${esc3(f.name)}">\u25C6 ${esc3(f.name)}</a>`).join("")}<a data-a="flow">${tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow")}</a></div>
+      <div><h3>${tr("\u6700\u8FD1\u7684\u5C08\u6848", "Recent projects")}</h3>${recent.map((p) => `<a data-p="${p.id}">${esc4(projName(p))}</a>`).join("")}</div>
+      <div><h3>${tr("\u9019\u500B\u5C08\u6848", "This project")}</h3>${proj.files.map((f) => `<a data-f="${esc4(f.name)}">\u25C6 ${esc4(f.name)}</a>`).join("")}<a data-a="flow">${tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow")}</a></div>
     </div>`;
     $2("welcome").onclick = (e) => {
       const t = e.target;
@@ -3388,7 +3678,7 @@ target = { type = "directory", path = "target" }
     for (const p of problems) {
       const d = document.createElement("div");
       d.className = "prob " + p.severity;
-      d.innerHTML = `<span class="sev">${p.severity === "error" ? "\u2297" : "\u26A0"}</span><span class="m">${esc3(p.msg)}</span>${p.file ? `<span class="loc">${esc3(p.file)} [${p.line}, ${p.col}]</span>` : ""}`;
+      d.innerHTML = `<span class="sev">${p.severity === "error" ? "\u2297" : "\u26A0"}</span><span class="m">${esc4(p.msg)}</span>${p.file ? `<span class="loc">${esc4(p.file)} [${p.line}, ${p.col}]</span>` : ""}`;
       if (p.file) d.onclick = () => openFile(p.file, p.line, p.col);
       box.appendChild(d);
     }
@@ -3403,12 +3693,12 @@ target = { type = "directory", path = "target" }
   function refreshTops() {
     const st = $2("simTop");
     const keep = st.value;
-    st.innerHTML = `<option value="">${tr("\u5168\u90E8 #[test]", "all #[test]")}</option>` + mods.map((m) => `<option value="${esc3(m.name)}">${esc3(m.name)}${m.test ? "  (test)" : ""}</option>`).join("");
+    st.innerHTML = `<option value="">${tr("\u5168\u90E8 #[test]", "all #[test]")}</option>` + mods.map((m) => `<option value="${esc4(m.name)}">${esc4(m.name)}${m.test ? "  (test)" : ""}</option>`).join("");
     if (mods.some((m) => m.name === keep)) st.value = keep;
     const sy = $2("synthTop");
     const designs = mods.filter((m) => !m.test);
     const want = sy.value && designs.some((m) => m.name === sy.value) ? sy.value : designs.some((m) => m.name === proj.synth) ? proj.synth : designs[designs.length - 1]?.name ?? "";
-    sy.innerHTML = designs.map((m) => `<option value="${esc3(m.name)}">${esc3(m.name)}</option>`).join("");
+    sy.innerHTML = designs.map((m) => `<option value="${esc4(m.name)}">${esc4(m.name)}</option>`).join("");
     sy.value = want;
     renderTests();
     renderOutline();
@@ -3425,7 +3715,7 @@ target = { type = "directory", path = "target" }
       const s = testState.get(t.name);
       const d = document.createElement("div");
       d.className = "item " + (s ?? "");
-      d.innerHTML = `<span class="ic">${s === "pass" ? "\u2713" : s === "fail" ? "\u2717" : s === "run" ? "\u2026" : "\u25CB"}</span><span class="nm">${esc3(t.name)}</span><span class="acts"><button class="icon" title="${tr("\u57F7\u884C", "Run")}">\u25B6</button></span>`;
+      d.innerHTML = `<span class="ic">${s === "pass" ? "\u2713" : s === "fail" ? "\u2717" : s === "run" ? "\u2026" : "\u25CB"}</span><span class="nm">${esc4(t.name)}</span><span class="acts"><button class="icon" title="${tr("\u57F7\u884C", "Run")}">\u25B6</button></span>`;
       d.onclick = () => runTests(t.name);
       d.ondblclick = () => {
         const dcl = declarations().find((x) => x.name === t.name);
@@ -3466,7 +3756,7 @@ target = { type = "directory", path = "target" }
       const fails = r.tops.filter((t) => t.fails);
       const where = r.gate ? tr(`\u3000\u9598\u7D1A\uFF1A${r.gate.top} \u2192 ${r.gate.cells} \u500B${KIND(mode)}\u5143\u4EF6`, `\u3000gate level: ${r.gate.top} \u2192 ${r.gate.cells} ${KIND(mode)}`) : "";
       const msg = fails.length ? tr(`\u2717 ${fails.reduce((a, t) => a + t.fails, 0)} \u500B\u65B7\u8A00\u5931\u6557\uFF08${fails.map((t) => t.name).join(", ")}\uFF09`, `\u2717 ${fails.reduce((a, t) => a + t.fails, 0)} assertion(s) failed (${fails.map((t) => t.name).join(", ")})`) : tr(`\u2713 ${r.tops.length} \u500B\u6E2C\u8A66\u901A\u904E`, `\u2713 ${r.tops.length} test(s) passed`);
-      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc3(msg + where)}</div><table><tr><th>testbench</th><th>${KIND(mode)}</th><th>${tr("\u7D50\u675F", "End")}</th></tr>${r.tops.map((t) => `<tr><td>${esc3(t.name)}</td><td class="${t.fails ? "fail" : "pass"}">${t.fails ? tr(`\u2717 ${t.fails} \u500B\u5931\u6557`, `\u2717 ${t.fails} failed`) : "\u2713 PASS"}</td><td>${t.finished ? "$finish" : tr("\u6642\u9593\u5230", "time limit")}</td></tr>`).join("")}</table>`;
+      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg + where)}</div><table><tr><th>testbench</th><th>${KIND(mode)}</th><th>${tr("\u7D50\u675F", "End")}</th></tr>${r.tops.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.fails ? "fail" : "pass"}">${t.fails ? tr(`\u2717 ${t.fails} \u500B\u5931\u6557`, `\u2717 ${t.fails} failed`) : "\u2713 PASS"}</td><td>${t.finished ? "$finish" : tr("\u6642\u9593\u5230", "time limit")}</td></tr>`).join("")}</table>`;
       $2("sbTest").textContent = `${fails.length ? "\u2717" : "\u2713"} ${msg.slice(2)}\uFF08${((performance.now() - t0) / 1e3).toFixed(2)} s\uFF09`;
       for (const ln of r.log.split("\n")) if (/ASSERTION FAILED/.test(ln)) problems.push({ msg: ln.trim(), severity: "error", from: "run" });
       panel(fails.length ? "output" : "results");
@@ -3498,14 +3788,14 @@ target = { type = "directory", path = "target" }
     const draw = (done) => {
       const rtl = res.get("rtl");
       let same = true;
-      const rows = tests.map((t) => `<tr><td>${esc3(t)}</td>${modes.map((m) => {
+      const rows = tests.map((t) => `<tr><td>${esc4(t)}</td>${modes.map((m) => {
         const v = res.get(m)?.get(t);
         if (v === void 0) return `<td class="na">${done ? "\u2014" : "\u2026"}</td>`;
         if (m !== "rtl" && rtl && v !== rtl.get(t)) same = false;
         return `<td class="${v === "0" ? "pass" : v === "err" ? "fail" : "fail"}">${v === "0" ? "\u2713" : v === "err" ? tr("\u932F\u8AA4", "error") : `\u2717 ${v}`}</td>`;
       }).join("")}</tr>`).join("");
       const allPass = [...res.values()].every((m) => [...m.values()].every((v) => v === "0"));
-      $2("p-results").innerHTML = (done ? `<div class="banner ${allPass && same ? "pass" : "fail"}">${allPass && same ? tr(`\u2713 \u5168\u9762\u9A57\u8B49\u901A\u904E\uFF1A${tests.length} \u500B testbench \xD7 ${modes.length} \u7A2E\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4`, `\u2713 Full verification passed: ${tests.length} testbench(es) \xD7 ${modes.length} implementations agree`) : same ? tr("\u2717 \u6709\u6E2C\u8A66\u5931\u6557\uFF08\u5404\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4\uFF09", "\u2717 Tests fail (the same in every implementation)") : tr("\u2717 \u5408\u6210\u524D\u5F8C\u7D50\u679C\u4E0D\u4E00\u81F4\uFF01", "\u2717 Results before and after synthesis differ!")}</div>` : `<div class="banner">${tr("\u9A57\u8B49\u4E2D\u2026", "Verifying\u2026")}</div>`) + `<table><tr><th>testbench</th>${modes.map((m) => `<th>${KIND(m)}${cells.has(m) ? `<br><small>${tr(`${cells.get(m)} \u5143\u4EF6`, `${cells.get(m)} cells`)}</small>` : ""}</th>`).join("")}</tr>${rows}</table>` + (synthTop() ? `<p class="side-hint">${tr(`\u9598\u7D1A\uFF1A\u628A ${esc3(synthTop())} \u63DB\u6210\u5408\u6210\u5F8C\u7684\u7DB2\u8868\uFF0C\u8DD1\u540C\u4E00\u7D44 testbench\u3002`, `Gate level: ${esc3(synthTop())} is replaced by its synthesized netlist under the same testbenches.`)}</p>` : "");
+      $2("p-results").innerHTML = (done ? `<div class="banner ${allPass && same ? "pass" : "fail"}">${allPass && same ? tr(`\u2713 \u5168\u9762\u9A57\u8B49\u901A\u904E\uFF1A${tests.length} \u500B testbench \xD7 ${modes.length} \u7A2E\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4`, `\u2713 Full verification passed: ${tests.length} testbench(es) \xD7 ${modes.length} implementations agree`) : same ? tr("\u2717 \u6709\u6E2C\u8A66\u5931\u6557\uFF08\u5404\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4\uFF09", "\u2717 Tests fail (the same in every implementation)") : tr("\u2717 \u5408\u6210\u524D\u5F8C\u7D50\u679C\u4E0D\u4E00\u81F4\uFF01", "\u2717 Results before and after synthesis differ!")}</div>` : `<div class="banner">${tr("\u9A57\u8B49\u4E2D\u2026", "Verifying\u2026")}</div>`) + `<table><tr><th>testbench</th>${modes.map((m) => `<th>${KIND(m)}${cells.has(m) ? `<br><small>${tr(`${cells.get(m)} \u5143\u4EF6`, `${cells.get(m)} cells`)}</small>` : ""}</th>`).join("")}</tr>${rows}</table>` + (synthTop() ? `<p class="side-hint">${tr(`\u9598\u7D1A\uFF1A\u628A ${esc4(synthTop())} \u63DB\u6210\u5408\u6210\u5F8C\u7684\u7DB2\u8868\uFF0C\u8DD1\u540C\u4E00\u7D44 testbench\u3002`, `Gate level: ${esc4(synthTop())} is replaced by its synthesized netlist under the same testbenches.`)}</p>` : "");
     };
     setBusy(true, tr("\u2714 \u5168\u9762\u9A57\u8B49\u4E2D\u2026", "\u2714 Verifying\u2026"));
     const t0 = performance.now();
@@ -3532,7 +3822,7 @@ target = { type = "directory", path = "target" }
   }
   function fillWaveTops() {
     const sel = $2("waveTop");
-    sel.innerHTML = vcds.map((v) => `<option>${esc3(v.top)}</option>`).join("");
+    sel.innerHTML = vcds.map((v) => `<option>${esc4(v.top)}</option>`).join("");
     sel.classList.toggle("hidden", vcds.length < 2 || curPanel !== "wave");
   }
   function runSynth(stage) {
@@ -3560,10 +3850,41 @@ target = { type = "directory", path = "target" }
     for (const [k, label, tag] of [...flow(asic), ["cmp", tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC"), "cmp"]]) {
       const d = document.createElement("div");
       d.className = "item" + (k === cur2 ? " cur" : "") + (tag === "fpga" ? " stage-fpga" : tag === "asic" ? " stage-asic" : "");
-      d.innerHTML = `<span class="ic">${k === "cmp" ? "\u21C4" : tag === "common" ? "\u25C7" : "\u25C6"}</span><span class="nm">${esc3(label.replace(/^(共|C|F|A) /, ""))}</span><span class="tag">${tag === "common" ? tr("\u5171\u7528", "common") : tag === "fpga" ? "FPGA" : tag === "asic" ? "ASIC" : ""}</span>`;
+      d.innerHTML = `<span class="ic">${k === "cmp" ? "\u21C4" : tag === "common" ? "\u25C7" : "\u25C6"}</span><span class="nm">${esc4(label.replace(/^(共|C|F|A) /, ""))}</span><span class="tag">${tag === "common" ? tr("\u5171\u7528", "common") : tag === "fpga" ? "FPGA" : tag === "asic" ? "ASIC" : ""}</span>`;
       d.onclick = () => runSynth(k);
       box.appendChild(d);
     }
+  }
+  var board = null;
+  var boardWasRunning = false;
+  var boardCore = null;
+  function getBoardCore() {
+    return boardCore ?? (boardCore = startCore(fromBase64(VERYL_WASM_B64)));
+  }
+  async function flashBoard() {
+    const top = synthTop();
+    if (!top) {
+      alert(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08#[test] \u6A21\u7D44\u4E0D\u80FD\u71D2\u9304\uFF09", "No synthesizable module (#[test] modules cannot be flashed)"));
+      return;
+    }
+    board ?? (board = new VirtualBoard($2("boardPane"), getBoardCore));
+    board.flashButton.onclick = () => flashBoard();
+    openFile(BOARD_TAB);
+    if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
+    setBusy(true, tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F\u2026", "\u26A1 Flashing the virtual board\u2026"));
+    try {
+      const info = await board.flash(proj.files.filter((f) => f.name.endsWith(".veryl")), top, proj.pcf);
+      $2("sbTest").textContent = tr(`\u26A1 ${info.top} \u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} flashed to the virtual board`);
+      problems = problems.filter((p) => p.from !== "run");
+      for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
+    } catch (e) {
+      problems = problems.filter((p) => p.from !== "run");
+      problems.push(...parseErrors(String(e.message ?? e), "run"));
+      $2("sbTest").textContent = tr("\u2717 \u71D2\u9304\u5931\u6557", "\u2717 Flashing failed");
+      panel("problems");
+    }
+    setBusy(false);
+    renderProblems();
   }
   var curPanel = "problems";
   function panel(p) {
@@ -3617,6 +3938,7 @@ target = { type = "directory", path = "target" }
       { label: tr("\u5408\u6210\u4E26\u6AA2\u8996\u6D41\u7A0B", "Synthesize and view the flow"), key: "Ctrl+Shift+B", run: () => runSynth() },
       ...[...flow(false).slice(3), ...flow(true).slice(3), ...flow(false).slice(0, 3)].map(([k, l]) => ({ label: `${tr("\u6D41\u7A0B\uFF1A", "Flow: ")}${l}`, run: () => runSynth(k) })),
       { label: tr("\u6D41\u7A0B\uFF1A\u21C4 FPGA vs ASIC \u6BD4\u8F03", "Flow: \u21C4 FPGA vs ASIC"), run: () => runSynth("cmp") },
+      { label: tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F", "\u26A1 Flash to the virtual board"), run: flashBoard },
       { label: tr("\u65B0\u589E\u6A94\u6848", "New file"), run: newFile },
       { label: tr("\u65B0\u5C08\u6848", "New project"), run: newProject },
       { label: tr("\u532F\u5165 .veryl \u6A94", "Import .veryl files"), run: () => $2("importIn").click() },
@@ -3662,7 +3984,7 @@ target = { type = "directory", path = "target" }
     palItems.forEach((c, i) => {
       const d = document.createElement("div");
       d.className = i === palSel ? "cur" : "";
-      d.innerHTML = `<span>${esc3(c.label)}</span>${c.key ? `<span class="k">${esc3(c.key)}</span>` : ""}`;
+      d.innerHTML = `<span>${esc4(c.label)}</span>${c.key ? `<span class="k">${esc4(c.key)}</span>` : ""}`;
       d.onmousedown = (e) => {
         e.preventDefault();
         closePal();
@@ -3746,6 +4068,7 @@ target = { type = "directory", path = "target" }
     $2("cmdRun").onclick = () => runTests();
     $2("cmdVerify").onclick = verifyAll;
     $2("cmdSynth").onclick = () => runSynth();
+    $2("cmdBoard").onclick = () => flashBoard();
     $2("testsRun").onclick = () => runTests();
     $2("testsVerify").onclick = verifyAll;
     $2("synthTop").onchange = () => {
@@ -3818,7 +4141,7 @@ target = { type = "directory", path = "target" }
         projects.push(proj);
       }
     }
-    if (proj.active === FLOW_TAB) proj.active = void 0;
+    if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
     renderProjects();
     renderFlow();
@@ -3829,7 +4152,7 @@ target = { type = "directory", path = "target" }
       const t0 = performance.now();
       core = await startCore(fromBase64(VERYL_WASM_B64));
       $2("sbCore").textContent = `\u2713 WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr("\uFF08\u80CC\u666F\u57F7\u884C\u7DD2\uFF09", " (worker thread)") : ""}`;
-      for (const id of ["cmdRun", "cmdVerify", "cmdSynth"]) $2(id).disabled = false;
+      for (const id of ["cmdRun", "cmdVerify", "cmdSynth", "cmdBoard"]) $2(id).disabled = false;
       synth = new SynthOverlay(core, {
         embedded: true,
         onStage: (k) => {
@@ -3843,6 +4166,7 @@ target = { type = "directory", path = "target" }
       if (st) runSynth(st);
       if (/[#&]run=1/.test(hash)) runTests();
       if (/[#&]verify=1/.test(hash)) verifyAll();
+      if (/[#&]board=1/.test(hash)) flashBoard();
     } catch (e) {
       $2("sbCore").textContent = tr("\u2717 WebAssembly \u8F09\u5165\u5931\u6557", "\u2717 WebAssembly failed to load");
       $2("statusbar").classList.add("bad");

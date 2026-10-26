@@ -125,6 +125,13 @@ detail routing is rechecked from its segments and vias alone: no grid point shar
 and cells plus fillers covering every site exactly once;
 `./test.sh` proves the standard-cell netlist equivalent to the output of `veryl build` with yosys.
 
+## Virtual board (`src/board/`)
+The web IDE's virtual iCEBreaker: a fast cycle-based simulator of the iCE40-mapped netlist wired to the board's pins
+(`board/icebreaker.rs`: 12 MHz clock on pin 35, BTN_N, the red / green LEDs, the break-off section's LED1–5 and BTN1–3, PMOD1A/1B, the FTDI UART; pins from the design's pcf, or the tutorial's).
+The engine works on a generic `Design` (4-input truth tables — carries are 3-input majorities — flip-flops, block RAMs, named IO) and is **activity driven**:
+a changed net queues only the tables it feeds, evaluated in level order (no glitches); clock edges are detected on any clock net, so divided clocks and negative edges work.
+`cargo test` checks it against netsim on 15 designs with random inputs every cycle. Speed (one core): Blinky 6.8 M cycles/s (57% of 12 MHz), RiscvSoc 1.5 M cycles/s; in WebAssembly about 75% of that.
+
 ## The flow
 | File | Contents |
 |---|---|

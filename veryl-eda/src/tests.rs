@@ -540,3 +540,132 @@ fn peripheral_testbenches() {
         }
     }
 }
+
+// ---- the virtual board (src/board) ----
+
+/// synthesize and map to iCE40 the given files (paths from the repository root)
+fn ice40_of(files: &[&str], top: &str, ov: &[(&str, u128)]) -> crate::netlist::Netlist {
+    let mut parsers = vec![];
+    for f in files {
+        let path = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), f);
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {}", path, e));
+        parsers.push(Parser::parse(&src, &path).unwrap());
+    }
+    let mut lib = Lib::new();
+    for p in &parsers { lib.add(&p.veryl); }
+    let ov = ov.iter().map(|(k, v)| (k.to_string(), crate::value::Val::new(32, *v))).collect();
+    let nl = crate::elab::synthesize_with(&lib, top, &ov).unwrap_or_else(|e| panic!("{}: {}", top, e)).0;
+    crate::ice40::map(&nl).unwrap()
+}
+
+/// the board engine against netsim: random inputs every cycle, every output equal after every clock
+#[test]
+fn board_engine_matches_netsim() {
+    let designs: &[(&[&str], &str)] = &[
+        (&["examples/src/adder.veryl"], "Adder"), (&["examples/src/seq101.veryl"], "Seq101"), (&["examples/src/pkt_reg.veryl"], "PktReg"),
+        (&["examples/src/ram.veryl"], "Ram"), (&["examples/src/sync_ram.veryl"], "SyncRam"),
+        (&["examples/src/sync_ram.veryl", "veryl-eda/examples/bram_tests.veryl"], "BramMix"),
+        (&["veryl-eda/examples/features.veryl"], "Top"), (&["veryl-eda/examples/pnr_tests.veryl"], "AccTest"),
+        (&["veryl-eda/examples/lang.veryl"], "HsTop"), (&["examples/src/fifo.veryl"], "Fifo"), (&["examples/src/uart.veryl"], "UartLoop"),
+        (&["examples/src/vga.veryl"], "VgaTiming"), (&["tutorial/src/blinky.veryl"], "Blinky"), (&["tutorial/src/knight.veryl"], "KnightRider"),
+        (&["examples/src/rv32i.veryl", "veryl-eda/examples/soc.veryl"], "RiscvSoc"),
+    ];
+    let mut seed = 12345u64;
+    let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+    for (files, top) in designs {
+        let nl = ice40_of(files, top, &[]);
+        let mut s = NetSim::new(&nl);
+        let mut e = crate::board::Engine::new(crate::board::Design::from_netlist(&nl).unwrap()).unwrap();
+        let clk = nl.ports.iter().find(|p| p.name == "i_clk").map(|p| p.name.clone());
+        let ins: Vec<(String, usize)> = nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::In && Some(&p.name) != clk.as_ref()).map(|p| (p.name.clone(), p.bits.len())).collect();
+        for cycle in 0..300 {
+            for (name, w) in &ins {
+                let v = if name == "i_rst" { (cycle >= 2 && rnd() % 50 != 0) as u128 } else { (rnd() as u128) & ((1u128 << (*w).min(64)) - 1) };
+                s.poke(name, v);
+                for i in 0..*w {
+                    let bit = if *w > 1 { format!("{}[{}]", name, i) } else { name.clone() };
+                    let n = e.input(&bit).unwrap();
+                    e.set(n, (v >> i) & 1 == 1);
+                }
+            }
+            s.settle();
+            e.propagate();
+            if let Some(c) = &clk {
+                s.tick(c);
+                let n = e.input(c).unwrap();
+                e.set(n, true);
+                e.propagate();
+                e.set(n, false);
+                e.propagate();
+            }
+            for p in nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::Out) {
+                for (i, b) in p.bits.iter().enumerate() {
+                    let bit = if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() };
+                    assert_eq!(e.get(e.output(&bit).unwrap()), s.bit(*b), "{}: {} at cycle {}", top, bit, cycle);
+                }
+            }
+        }
+    }
+}
+
+/// tutorial lesson 1 on the board's pins: LEDs count, brightness = duty
+#[test]
+fn board_blinky_pins() {
+    let nl = ice40_of(&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)]);
+    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), None).unwrap();
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    let leds = [26, 27, 25, 23, 21]; // LED1..LED5 = o_led[0..4]
+    // reset held: the button BTN_N (pin 10) pressed
+    b.set_pin(10, false);
+    b.run(3);
+    b.set_pin(10, true);
+    b.run(37); // cnt = 37 = 6'b100101: o_led = 5'b10010, the top bit is 1
+    let led: Vec<bool> = leds.iter().map(|p| b.pin(*p).unwrap()).collect();
+    assert_eq!(led, [false, true, false, false, true]);
+    assert_eq!((b.pin(11), b.pin(37)), (Some(false), Some(true)), "LEDR_N lit (0), LEDG_N dark (1)");
+    // over whole turns the top bit (LED5) is high half the time, LED1 (bit 1) too
+    b.take_duty();
+    b.run(64 * 10);
+    let duty: std::collections::HashMap<u32, f64> = b.take_duty().into_iter().collect();
+    assert!((duty[&21] - 0.5).abs() < 1e-9 && (duty[&26] - 0.5).abs() < 1e-9, "{:?}", duty);
+}
+
+/// tutorial lesson 2: holding BTN1 (pin 20) stops the light
+#[test]
+fn board_knight_button() {
+    let nl = ice40_of(&["tutorial/src/knight.veryl"], "KnightRider", &[("TICK", 2), ("DIV_W", 2)]);
+    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), None).unwrap();
+    let leds = [26, 27, 25, 23, 21];
+    let pos = |b: &crate::board::Board| leds.iter().position(|p| b.pin(*p) == Some(true));
+    b.set_pin(10, false);
+    b.run(2);
+    b.set_pin(10, true);
+    assert_eq!(pos(&b), Some(0));
+    b.run(9);
+    assert_eq!(pos(&b), Some(4), "four steps to LED5");
+    b.set_pin(20, true);
+    b.run(3);
+    let held = pos(&b);
+    b.run(20);
+    assert_eq!(pos(&b), held, "paused");
+    b.set_pin(20, false);
+    b.run(4);
+    assert_ne!(pos(&b), held, "moves again");
+}
+
+/// speed of the board engine (printed; `cargo test --release board_speed -- --nocapture`)
+#[test]
+fn board_speed() {
+    for (files, top) in [(&["tutorial/src/blinky.veryl"][..], "Blinky"), (&["examples/src/rv32i.veryl", "veryl-eda/examples/soc.veryl"][..], "RiscvSoc")] {
+        let nl = ice40_of(files, top, &[]);
+        let luts = nl.cells.iter().filter(|c| c.typ == "SB_LUT4").count();
+        let pcf = std::fs::read_to_string(format!("{}/examples/icebreaker.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), if top == "Blinky" { None } else { Some(&pcf) }).unwrap();
+        let t0 = std::time::Instant::now();
+        let n = if top == "Blinky" { 2_000_000 } else { 200_000 };
+        b.run(n);
+        let s = t0.elapsed().as_secs_f64();
+        println!("board speed: {} ({} LUTs): {:.2} M cycles/s = {:.1}% of 12 MHz, {:.1} evals/cycle", top, luts, n as f64 / s / 1e6, n as f64 / s / 12e6 * 100.0, b.eng.evals as f64 / n as f64);
+        assert!(b.cycle == n);
+    }
+}

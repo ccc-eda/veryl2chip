@@ -1,0 +1,13 @@
+# iCEBreaker (iCE40UP5K-SG48) pins for the tutorial designs.
+# Only the board itself is needed: the onboard LEDs and button, and the
+# break-off section (LED1..LED5, BTN1..BTN3). -nowarn: a design may leave pins out.
+set_io -nowarn i_clk    35  # 12 MHz oscillator
+set_io -nowarn i_rst    10  # BTN_N, onboard button (pressed = 0)
+set_io -nowarn o_ledr   11  # LEDR_N, onboard red LED (lit at 0)
+set_io -nowarn o_ledg   37  # LEDG_N, onboard green LED (lit at 0)
+set_io -nowarn o_led[0] 26  # LED1 (break-off section, lit at 1)
+set_io -nowarn o_led[1] 27  # LED2
+set_io -nowarn o_led[2] 25  # LED3
+set_io -nowarn o_led[3] 23  # LED4
+set_io -nowarn o_led[4] 21  # LED5
+set_io -nowarn i_btn    20  # BTN1 (break-off section, pressed = 1)

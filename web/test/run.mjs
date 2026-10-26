@@ -143,6 +143,52 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   }
 }
 
+// virtual board (board_load / board_run / board_reset): the tutorial designs
+// on the iCEBreaker's pins and the RISC-V SoC's LEDs on PMOD1A
+{
+  const t0 = Date.now();
+  const problems = [];
+  const ex = (id) => ctx.VERYL_EXAMPLES.find((e) => e.id === id);
+  const duty = (r) => Object.fromEntries(r.duty);
+  // lesson 1: over whole turns of the 24-bit counter the top bit (LED5, pin 21) is high half the time
+  let b = ex('tut_blinky');
+  let info = core.call({ cmd: 'board_load', files: b.files, top: 'Blinky', pcf: b.pcf });
+  if (info.warnings.length) problems.push('Blinky warnings ' + info.warnings.join('; '));
+  let r = core.call({ cmd: 'board_run', cycles: 1 << 24, inputs: [] });
+  let d = duty(r);
+  if (Math.abs(d[21] - 0.5) > 1e-6 || Math.abs(d[11] - 0.5) > 1e-6) problems.push(`Blinky duty LED5 ${d[21]}, LEDR_N ${d[11]}`);
+  // holding BTN_N (pin 10, pressed = 0) keeps the counter at 0: LEDs dark, LEDR_N high (dark), LEDG_N low (lit)
+  r = core.call({ cmd: 'board_run', cycles: 1000, inputs: [[10, 0]] });
+  d = duty(r);
+  if (d[26] !== 0 || d[21] !== 0 || d[11] !== 1 || d[37] !== 0) problems.push('Blinky reset ' + JSON.stringify(d));
+  core.call({ cmd: 'board_run', cycles: 0, inputs: [[10, 1]] });
+  // lesson 2: one light, frozen while BTN1 (pin 20) is held
+  b = ex('tut_knight');
+  core.call({ cmd: 'board_load', files: b.files, top: 'KnightRider', pcf: b.pcf });
+  const pos = () => [26, 27, 25, 23, 21].map((p) => duty(core.call({ cmd: 'board_run', cycles: 0, inputs: [] }))[p]);
+  core.call({ cmd: 'board_run', cycles: 3_000_000, inputs: [] });
+  const moving = pos();
+  if (moving.filter((x) => x === 1).length !== 1) problems.push('KnightRider lights ' + moving);
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[20, 1]] });
+  const held = pos().join();
+  core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
+  if (pos().join() !== held) problems.push('KnightRider moved while BTN1 was held');
+  core.call({ cmd: 'board_run', cycles: 1_600_000, inputs: [[20, 0]] });
+  if (pos().join() === held) problems.push('KnightRider did not move after BTN1');
+  // the SoC: Fibonacci(10) = 55 on o_led (PMOD1A), and again after a power cycle
+  b = ex('soc');
+  core.call({ cmd: 'board_load', files: b.files, top: 'RiscvSoc', pcf: b.pcf });
+  const led = () => { const x = duty(core.call({ cmd: 'board_run', cycles: 0, inputs: [] })); return [4, 2, 47, 45, 3, 48, 46, 44].reduce((a, p, i) => a | (x[p] << i), 0); };
+  core.call({ cmd: 'board_run', cycles: 200, inputs: [] });
+  const first = led();
+  core.call({ cmd: 'board_reset' });
+  const after = led();
+  core.call({ cmd: 'board_run', cycles: 200, inputs: [] });
+  if (first !== 55 || after !== 0 || led() !== 55) problems.push(`SoC LEDs ${first}, after power cycle ${after} -> ${led()}`);
+  if (problems.length) bad++;
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+}
+
 // project export: the .zip (stored, CRC-32) must unpack, and with the
 // official veryl CLI the unpacked project must check and pass its tests
 {
@@ -209,9 +255,9 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   fs.writeFileSync(ip, js);
   const { hans } = createRequire(import.meta.url)(ip);
   const srcDir = path.join(dist, '../src');
-  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts'];
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts'];
   const han = /[\u3400-\u9fff]/;
-  const trad = new Set('並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
+  const trad = new Set('學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
   let pairs = 0, badEn = [], badHans = [];
   for (const f of files) {
     const src = fs.readFileSync(path.join(srcDir, f), 'utf8');

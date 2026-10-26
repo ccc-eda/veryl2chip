@@ -28,4 +28,7 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M7–M10 | 十項擴充：block RAM、時序導向 P&R、CTS + hold、細部繞線、電源網路、功耗、佈局密度、語言（除法、interface、寬位元、多時脈）、閘級模擬、網頁（檔案管理、.zip、UART/FIFO/VGA、FPGA vs ASIC） | 每項 commit；CLI 回歸、`npm test` 全過 |
 | M11 | IDE（`ide.html`，VS Code 風格）：活動列＋側欄（專案 / 檔案 / 模組大綱、範例庫、合成流程、測試、說明）、分頁編輯器（語法上色、即時語法檢查、行號旁錯誤標記）、下方面板（問題 / 輸出 / 測試結果 / 波形）、狀態列、命令選單（Ctrl+Shift+P）與快速開檔（Ctrl+P）；專案存在瀏覽器（多專案、新增 / 改名 / 刪除 / 匯入、.zip 匯出）；「全面驗證」＝ RTL ＋三種閘級網表的測試矩陣；合成流程各階段（共 ①–③、F ④–⑦、A ④–⑨、FPGA vs ASIC）是一個編輯器分頁 | 範例與新專案能在 IDE 裡編輯、測試、全面驗證、檢視每個階段；原展示頁保留 |
 
+| M12 | 虛擬 iCEBreaker：Rust 的活動驅動逐週期模擬引擎（`veryl-eda/src/board/`，4 輸入真值表 + 正反器 + block RAM）、iCEBreaker 腳位、IDE 的「⚡ 虛擬板」分頁（SVG 開發板、LED 亮度依工作週期、可按的按鈕、獨立的 worker、速度與虛擬時間） | 引擎在 15 個設計上與 netsim 一致；教學兩課與 RISC-V SoC 在虛擬板上行為正確 |
+| M13–M16（規劃） | 位元流模擬（`.bin` 解碼）、周邊（USB 終端機、七段、VGA…）、麵包板與零件庫、虛擬實驗課 | |
+
 每個 M 完成就 commit。

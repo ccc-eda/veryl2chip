@@ -11,6 +11,7 @@ import { ASIC_STAGES, FPGA_STAGES, stageLabel, SynthOverlay } from '../synth/ove
 import { newModule, projectZip } from '../templates';
 import { WaveView } from '../wave';
 import { saveAs } from '../zip';
+import { VirtualBoard } from './board';
 import { CodeEditor, Marker } from './editor';
 
 declare const VERYL_WASM_B64: string;
@@ -88,9 +89,12 @@ const isFpgaStage = (k: string) => FPGA_STAGES.some(s => s.key === k && s.tag ==
 /** tab ids of the non-file tabs (kept in the saved tab list, so not translated) */
 const FLOW_TAB = '\u2699flow';
 const WELCOME = '\u2605welcome';
+const BOARD_TAB = '\u26a1board';
 /** the course tutorial (Traditional Chinese) */
 const TUTORIAL = 'https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md';
-const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n;
+const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n === BOARD_TAB ? tr('⚡ 虛擬 iCEBreaker', '⚡ Virtual iCEBreaker') : n;
+/** tabs that are not files */
+const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB;
 
 function file(name: string): VFile | undefined { return proj.files.find(f => f.name === name); }
 function original(name: string): string | undefined {
@@ -102,12 +106,12 @@ function original(name: string): string | undefined {
 function openTabs(): string[] { return (proj.open ??= []); }
 
 function openFile(name: string, line?: number, col?: number): void {
-  if (name !== FLOW_TAB && name !== WELCOME && !file(name)) return;
+  if (!special(name) && !file(name)) return;
   if (!openTabs().includes(name)) openTabs().push(name);
   proj.active = name;
   persist();
   showActive();
-  if (line && name !== FLOW_TAB) ed.goto(line, col ?? 1, true);
+  if (line && !special(name)) ed.goto(line, col ?? 1, true);
 }
 
 function closeTab(name: string): void {
@@ -122,13 +126,19 @@ function closeTab(name: string): void {
 
 function showActive(): void {
   let a = proj.active;
-  if (a && a !== FLOW_TAB && a !== WELCOME && !file(a)) a = undefined;
+  if (a && !special(a) && !file(a)) a = undefined;
   if (!a) a = openTabs().find(n => n === FLOW_TAB || file(n)) ?? WELCOME;
   proj.active = a;
   if (!openTabs().includes(a)) openTabs().push(a);
   const isFile = !!file(a);
   $('editorHost').classList.toggle('hidden', !isFile);
   $('synOverlay').classList.toggle('hidden', a !== FLOW_TAB);
+  $('boardPane').classList.toggle('hidden', a !== BOARD_TAB);
+  // the board simulates only while it is visible
+  if (board) {
+    if (a === BOARD_TAB) { if (boardWasRunning) { boardWasRunning = false; board.resume(); } }
+    else if (board.isRunning) { boardWasRunning = true; board.stop(); }
+  }
   $('welcome').classList.toggle('hidden', a !== WELCOME);
   if (isFile) {
     if (ed.value !== file(a)!.src || $('editorHost').dataset.file !== a) { ed.value = file(a)!.src; $('editorHost').dataset.file = a; }
@@ -151,7 +161,7 @@ function renderTabs(): void {
     const f = file(n);
     const errs = problems.some(p => p.file === n && p.severity === 'error');
     t.className = 'tab' + (n === proj.active ? ' cur' : '') + (f && original(n) !== undefined && original(n) !== f.src ? ' dirty' : '') + (errs ? ' err' : '');
-    t.innerHTML = `<span class="ic">${n === FLOW_TAB ? '' : n === WELCOME ? '★' : f?.name.endsWith('.veryl') ? '◆' : '▤'}</span><span class="nm">${esc(tabName(n))}</span><span class="x" title="${tr('關閉', 'Close')}"></span>`;
+    t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB ? '' : n === WELCOME ? '★' : f?.name.endsWith('.veryl') ? '◆' : '▤'}</span><span class="nm">${esc(tabName(n))}</span><span class="x" title="${tr('關閉', 'Close')}"></span>`;
     t.onclick = () => { proj.active = n; persist(); showActive(); };
     t.onauxclick = e => { if (e.button === 1) closeTab(n); };
     t.querySelector('.x')!.addEventListener('click', e => { e.stopPropagation(); closeTab(n); });
@@ -288,7 +298,7 @@ function switchProject(id: string): void {
   wave?.set(null);
   $('p-output').textContent = '';
   $('p-results').innerHTML = '';
-  if (proj.active === FLOW_TAB) proj.active = undefined;
+  if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
   renderProjects();
   showActive();
@@ -662,6 +672,38 @@ function renderFlow(cur?: string): void {
   }
 }
 
+// ---------------------------------------------------------------- virtual board
+
+let board: VirtualBoard | null = null;
+let boardWasRunning = false;
+let boardCore: Promise<Core> | null = null;
+
+/** the board has its own core (worker), so synthesis does not wait for the simulation */
+function getBoardCore(): Promise<Core> { return (boardCore ??= startCore(fromBase64(VERYL_WASM_B64))); }
+
+async function flashBoard(): Promise<void> {
+  const top = synthTop();
+  if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能燒錄）', 'No synthesizable module (#[test] modules cannot be flashed)')); return; }
+  board ??= new VirtualBoard($('boardPane'), getBoardCore);
+  board.flashButton.onclick = () => flashBoard();
+  openFile(BOARD_TAB);
+  if (window.innerHeight < 900) $('panel').classList.add('collapsed');
+  setBusy(true, tr('⚡ 燒錄到虛擬板…', '⚡ Flashing the virtual board…'));
+  try {
+    const info = await board.flash(proj.files.filter(f => f.name.endsWith('.veryl')), top, proj.pcf);
+    $('sbTest').textContent = tr(`⚡ ${info.top} 已燒錄到虛擬板`, `⚡ ${info.top} flashed to the virtual board`);
+    problems = problems.filter(p => p.from !== 'run');
+    for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
+  } catch (e) {
+    problems = problems.filter(p => p.from !== 'run');
+    problems.push(...parseErrors(String((e as Error).message ?? e), 'run'));
+    $('sbTest').textContent = tr('✗ 燒錄失敗', '✗ Flashing failed');
+    panel('problems');
+  }
+  setBusy(false);
+  renderProblems();
+}
+
 // ---------------------------------------------------------------- layout
 
 let curPanel = 'problems';
@@ -719,6 +761,7 @@ function commands(): Cmd[] {
     { label: tr('合成並檢視流程', 'Synthesize and view the flow'), key: 'Ctrl+Shift+B', run: () => runSynth() },
     ...[...flow(false).slice(3), ...flow(true).slice(3), ...flow(false).slice(0, 3)].map(([k, l]) => ({ label: `${tr('流程：', 'Flow: ')}${l}`, run: () => runSynth(k) })),
     { label: tr('流程：⇄ FPGA vs ASIC 比較', 'Flow: ⇄ FPGA vs ASIC'), run: () => runSynth('cmp') },
+    { label: tr('⚡ 燒錄到虛擬板', '⚡ Flash to the virtual board'), run: flashBoard },
     { label: tr('新增檔案', 'New file'), run: newFile },
     { label: tr('新專案', 'New project'), run: newProject },
     { label: tr('匯入 .veryl 檔', 'Import .veryl files'), run: () => $<HTMLInputElement>('importIn').click() },
@@ -819,6 +862,7 @@ function wire(): void {
   $('cmdRun').onclick = () => runTests();
   $('cmdVerify').onclick = verifyAll;
   $('cmdSynth').onclick = () => runSynth();
+  $('cmdBoard').onclick = () => flashBoard();
   $('testsRun').onclick = () => runTests();
   $('testsVerify').onclick = verifyAll;
   $<HTMLSelectElement>('synthTop').onchange = () => { renderOutline(); };
@@ -888,7 +932,7 @@ async function boot(): Promise<void> {
     const have = projects.find(p => p.from === ex.id);
     if (have) proj = have; else { proj = fromExample(ex); projects.push(proj); }
   }
-  if (proj.active === FLOW_TAB) proj.active = undefined;
+  if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
   renderProjects();
   renderFlow();
@@ -899,7 +943,7 @@ async function boot(): Promise<void> {
     const t0 = performance.now();
     core = await startCore(fromBase64(VERYL_WASM_B64));
     $('sbCore').textContent = `✓ WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr('（背景執行緒）', ' (worker thread)') : ''}`;
-    for (const id of ['cmdRun', 'cmdVerify', 'cmdSynth']) $<HTMLButtonElement>(id).disabled = false;
+    for (const id of ['cmdRun', 'cmdVerify', 'cmdSynth', 'cmdBoard']) $<HTMLButtonElement>(id).disabled = false;
     synth = new SynthOverlay(core, {
       embedded: true,
       onStage: k => {
@@ -913,6 +957,7 @@ async function boot(): Promise<void> {
     if (st) runSynth(st);
     if (/[#&]run=1/.test(hash)) runTests();
     if (/[#&]verify=1/.test(hash)) verifyAll();
+    if (/[#&]board=1/.test(hash)) flashBoard();
   } catch (e) {
     $('sbCore').textContent = tr('✗ WebAssembly 載入失敗', '✗ WebAssembly failed to load');
     $('statusbar').classList.add('bad');

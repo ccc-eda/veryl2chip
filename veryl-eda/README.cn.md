@@ -122,6 +122,13 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 单元加填充单元恰好铺满每个 site；
 `./test.sh` 用 yosys 对 `veryl build` 的输出做标准单元 netlist 的形式等价验证。
 
+## 虚拟开发板（`src/board/`）
+网页 IDE 的虚拟 iCEBreaker：iCE40 映射后网表的快速逐周期仿真器，接到板子的引脚
+（`board/icebreaker.rs`：引脚 35 的 12 MHz 时钟、BTN_N、红绿 LED、扩展板的 LED1–5 与 BTN1–3、PMOD1A/1B、FTDI 串口；引脚来自设计的 pcf，没有的话用教学的）。
+引擎跑在通用的 `Design` 上（4 输入真值表——进位是 3 输入多数表决——触发器、block RAM、具名 IO），采**活动驱动**：
+某条 net 改变时只把它驱动的真值表排入队列，依层级顺序求值（不会有毛刺）；任何时钟 net 上的边缘都会被检测，所以分频时钟与下降沿都能用。
+`cargo test` 在 15 个设计上用每拍随机输入和 netsim 比对。速度（单核）：Blinky 每秒 680 万周期（12 MHz 的 57%），RiscvSoc 每秒 150 万周期；WebAssembly 约为其 75%。
+
 ## 流程
 | 文件 | 内容 |
 |---|---|
