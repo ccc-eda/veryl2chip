@@ -84,6 +84,9 @@
 
   // src/i18n_hans.ts
   var HANS_PHRASES = {
+    "\u7B26\u5408\u8996\u7A97": "\u9002\u5E94\u7A97\u53E3",
+    "\u6A19\u984C\u5217": "\u6807\u9898\u680F",
+    "\u6AA2\u8996": "\u67E5\u770B",
     "\u6A21\u7D44": "\u6A21\u5757",
     "\u6A94\u6848\u7E3D\u7BA1": "\u8D44\u6E90\u7BA1\u7406\u5668",
     "\u6A94\u6848": "\u6587\u4EF6",
@@ -1500,7 +1503,7 @@
       this.asic = null;
       this.asicErr = null;
       this.nets.clear();
-      $("synInfo").textContent = tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026");
+      this.note(tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026"));
       $("synSide").innerHTML = "";
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.buttons();
@@ -1510,7 +1513,7 @@
         res = await this.core.call({ cmd: "synth", files: this.files, top: top || null });
       } catch (e) {
         if (gen !== this.gen) return;
-        $("synInfo").textContent = tr("\u5408\u6210\u5931\u6557\uFF1A\n", "Synthesis failed:\n") + String(e.message ?? e);
+        this.note(tr("\u5408\u6210\u5931\u6557\uFF1A\n", "Synthesis failed:\n") + String(e.message ?? e), true);
         $("synStats").innerHTML = "";
         return;
       }
@@ -1533,10 +1536,10 @@
       this.pnrBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
-        if (gen === this.gen && PNR.has(this.stage)) $("synInfo").textContent = tr(`\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `Placing and routing\u2026 (iCE40UP5K, ${((performance.now() - t0) / 1e3).toFixed(1)} s)`);
+        if (gen === this.gen && PNR.has(this.stage)) this.note(tr(`\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `Placing and routing\u2026 (iCE40UP5K, ${((performance.now() - t0) / 1e3).toFixed(1)} s)`));
       }, 200);
       try {
-        $("synInfo").textContent = tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026", "Loading the chip database (IceStorm chipdb-5k, 4 MB)\u2026");
+        this.note(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026", "Loading the chip database (IceStorm chipdb-5k, 4 MB)\u2026"));
         await this.core.chipdb();
         const r = await this.core.call({ cmd: "pnr", files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
         if (gen !== this.gen) return;
@@ -1569,7 +1572,7 @@
       this.asicBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
-        if (gen === this.gen && ASIC.has(this.stage)) $("synInfo").textContent = tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`);
+        if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`));
       }, 200);
       try {
         const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1 });
@@ -1731,10 +1734,11 @@
         this.view.set({ boxes: [], lines: [], texts: [] });
         this.side(document.createElement("div"));
         if (this.asicErr) {
-          this.info([tr("ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", "ASIC flow failed:"), this.asicErr]);
+          this.note([tr("ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", "ASIC flow failed:"), this.asicErr].join("\n"), true);
           return;
         }
-        this.info([tr("ASIC \u6D41\u7A0B\u4E2D\u2026", "Running the ASIC flow\u2026")]);
+        this.info([]);
+        this.note(tr("ASIC \u6D41\u7A0B\u4E2D\u2026", "Running the ASIC flow\u2026"));
         this.runAsic();
         return;
       }
@@ -1756,10 +1760,11 @@
         this.side(document.createElement("div"));
         if (this.pnrErr) {
           const fit = /does not fit/.test(this.pnrErr);
-          this.info([tr("\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", "Place and route failed:"), this.pnrErr, ...fit ? ["", tr("iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002", 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : []]);
+          this.note([tr("\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", "Place and route failed:"), this.pnrErr, ...fit ? ["", tr("iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002", 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : []].join("\n"), true);
           return;
         }
-        this.info([tr("\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026", "Placing and routing\u2026")]);
+        this.info([]);
+        this.note(tr("\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026", "Placing and routing\u2026"));
         this.runPnr();
         return;
       }
@@ -1917,7 +1922,7 @@
         const fr = p.history[f];
         const scene = deviceScene(p, fr.pos, void 0, fr.ram);
         this.view.set(scene, false);
-        $("synInfo").textContent = tr(`\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `\u2464 Annealing: snapshot ${f + 1}/${p.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`);
+        this.note(tr(`\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `\u2464 Annealing: snapshot ${f + 1}/${p.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`));
         f++;
         if (f < p.history.length) this.anim = window.setTimeout(step, 90);
         else this.anim = window.setTimeout(() => {
@@ -1935,7 +1940,7 @@
       const step = () => {
         const fr = a.history[f];
         this.view.set(dieScene(a, fr.pos), false);
-        $("synInfo").textContent = tr(`A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `A \u2464 Annealing: snapshot ${f + 1}/${a.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`);
+        this.note(tr(`A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `A \u2464 Annealing: snapshot ${f + 1}/${a.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`));
         f++;
         if (f < a.history.length) this.anim = window.setTimeout(step, 110);
         else this.anim = window.setTimeout(() => {
@@ -2213,7 +2218,10 @@
       }
     }
     redrawLines() {
-      $("synEdges").textContent = tr(`\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `\u2301 Wires: ${this.edges ? "on" : "off"}`);
+      const eb = $("synEdges");
+      eb.classList.toggle("on", this.edges);
+      if (this.opts.embedded) eb.title = tr(`\u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `Wires: ${this.edges ? "on" : "off"}`);
+      else eb.textContent = tr(`\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `\u2301 Wires: ${this.edges ? "on" : "off"}`);
       const k = this.stage;
       if (PNR.has(k)) {
         if (this.pnr) this.drawPnr(false);
@@ -2278,8 +2286,25 @@
         `${tr("LUT \u5C64\u6578", "LUT levels")} ${v.lev.depth} ${big}`
       ];
     }
+    /** the stage's report; clears the progress line */
     info(lines) {
       $("synInfo").textContent = lines.join("\n");
+      const m = document.getElementById("synMsg");
+      if (m) {
+        m.textContent = m.title = "";
+        m.classList.remove("err");
+      }
+    }
+    /** progress or an error: the IDE's flow bar has a line for it (#synMsg), the demo shows it as the report */
+    note(text, err = false) {
+      const m = document.getElementById("synMsg");
+      if (m) {
+        m.textContent = text.replace(/\s*\n\s*/g, " ");
+        m.title = text;
+        m.classList.toggle("err", err);
+        if (!err) return;
+      }
+      $("synInfo").textContent = text;
     }
     side(html) {
       const s = $("synSide");
@@ -4027,7 +4052,7 @@ ${lines.join("\n")}
   var testState = /* @__PURE__ */ new Map();
   var synthKey = "";
   var busy = 0;
-  var flow = (asic) => (asic ? ASIC_STAGES : FPGA_STAGES).map((s) => [s.key, stageLabel(s), s.tag]);
+  var flow = (asic) => (asic ? ASIC_STAGES : FPGA_STAGES).map((s) => [s.key, stageLabel(s).replace(/^(共|C|F|A) /, ""), s.tag]);
   var isAsicStage = (k) => ASIC_STAGES.some((s) => s.key === k && s.tag === "asic");
   var isFpgaStage = (k) => FPGA_STAGES.some((s) => s.key === k && s.tag === "fpga");
   var FLOW_TAB = "\u2699flow";
@@ -4081,6 +4106,7 @@ ${lines.join("\n")}
     const isFile = !!file(a);
     $2("editorHost").classList.toggle("hidden", !isFile);
     $2("synOverlay").classList.toggle("hidden", a !== FLOW_TAB);
+    syncStage();
     $2("boardPane").classList.toggle("hidden", a !== BOARD_TAB);
     if (board) {
       if (a === BOARD_TAB) {
@@ -4518,6 +4544,7 @@ ${lines.join("\n")}
     sy.value = want;
     renderTests();
     renderOutline();
+    syncStage();
   }
   function renderTests() {
     const box = $2("testList");
@@ -4655,21 +4682,33 @@ ${lines.join("\n")}
     if (key !== synthKey || !synth.synthesized) {
       synthKey = key;
       const target = stage && isAsicStage(stage) ? "asic" : stage && isFpgaStage(stage) ? "fpga" : void 0;
-      synth.open(files, top, pcfOf(proj), target ?? $2("flowTarget").value, stage);
+      synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage);
     } else if (stage) synth.showStage(stage);
-    sideView("flow");
   }
-  function renderFlow(cur2) {
-    const asic = $2("flowTarget").value === "asic";
-    const box = $2("flowList");
-    box.innerHTML = "";
-    for (const [k, label, tag] of [...flow(asic), ["cmp", tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC"), "cmp"]]) {
-      const d = document.createElement("div");
-      d.className = "item" + (k === cur2 ? " cur" : "") + (tag === "fpga" ? " stage-fpga" : tag === "asic" ? " stage-asic" : "");
-      d.innerHTML = `<span class="ic">${k === "cmp" ? "\u21C4" : tag === "common" ? "\u25C7" : "\u25C6"}</span><span class="nm">${esc4(label.replace(/^(共|C|F|A) /, ""))}</span><span class="tag">${tag === "common" ? tr("\u5171\u7528", "common") : tag === "fpga" ? "FPGA" : tag === "asic" ? "ASIC" : ""}</span>`;
-      d.onclick = () => runSynth(k);
-      box.appendChild(d);
+  var flowTarget = () => $2("flowTarget").value;
+  function fillStages() {
+    const sel = $2("flowStage");
+    sel.innerHTML = `<option value="" hidden>${tr("\u2699 \u5408\u6210", "\u2699 Synthesize")}</option>` + flow(flowTarget() === "asic").map(([k, l]) => `<option value="${k}">${esc4(l)}</option>`).join("") + `<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option><option value="cmp">${tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC")}</option>`;
+    syncStage();
+  }
+  function syncStage() {
+    const k = proj.active === FLOW_TAB && synth?.synthesized ? synth.current : "";
+    const sel = $2("flowStage");
+    sel.value = [...sel.options].some((o) => o.value === k) ? k : "";
+    const label = sel.value ? sel.selectedOptions[0].textContent : "";
+    $2("synCrumb").innerHTML = `<span class="c" data-c="synthTop">${esc4(synthTop())}</span><span class="sep">\u203A</span>` + (k === "cmp" ? "" : `<span class="c" data-c="flowTarget">${flowTarget() === "asic" ? "ASIC" : "FPGA"}</span><span class="sep">\u203A</span>`) + `<span class="c last" data-c="flowStage">${esc4(label)}</span>`;
+    $2("synDl").classList.toggle("hidden", ![...$2("synDlMenu").children].some((b) => !b.classList.contains("hidden")));
+  }
+  function synthStatus() {
+    const items = $2("synStats").innerHTML.split(/<span class="sep">[^<]*<\/span>/).map((x) => x.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim()).filter(Boolean);
+    const sb = $2("sbSynth");
+    if (!items.length) {
+      sb.textContent = sb.title = "";
+      return;
     }
+    const pick = items.filter((x, i) => i === 1 || /^LUT4 |DFF \d|^Fmax/.test(x)).map((x) => x.replace(/ → /, "\u2192"));
+    sb.textContent = `\u2699 ${synthTop()} \xB7 ${pick.join(" \xB7 ")}`;
+    sb.title = items.join("\n");
   }
   var board = null;
   var boardWasRunning = false;
@@ -4769,11 +4808,18 @@ ${lines.join("\n")}
       r.addEventListener("pointerup", up);
     });
   }
+  function stepStage(d) {
+    const keys = flow(flowTarget() === "asic").map(([k]) => k);
+    const i = keys.indexOf(synth?.current ?? "");
+    runSynth(keys[Math.max(0, Math.min(keys.length - 1, i < 0 ? 0 : i + d))]);
+  }
   function commands() {
     const c = [
       { label: tr("\u57F7\u884C\u6E2C\u8A66", "Run tests"), key: "Ctrl+Enter", run: () => runTests() },
       { label: tr("\u5168\u9762\u9A57\u8B49\uFF08RTL + \u4E09\u7A2E\u9598\u7D1A\u7DB2\u8868\uFF09", "Full verification (RTL + three gate-level netlists)"), run: verifyAll },
       { label: tr("\u5408\u6210\u4E26\u6AA2\u8996\u6D41\u7A0B", "Synthesize and view the flow"), key: "Ctrl+Shift+B", run: () => runSynth() },
+      { label: tr("\u6D41\u7A0B\uFF1A\u4E0B\u4E00\u500B\u968E\u6BB5", "Flow: next stage"), run: () => stepStage(1) },
+      { label: tr("\u6D41\u7A0B\uFF1A\u4E0A\u4E00\u500B\u968E\u6BB5", "Flow: previous stage"), run: () => stepStage(-1) },
       ...[...flow(false).slice(3), ...flow(true).slice(3), ...flow(false).slice(0, 3)].map(([k, l]) => ({ label: `${tr("\u6D41\u7A0B\uFF1A", "Flow: ")}${l}`, run: () => runSynth(k) })),
       { label: tr("\u6D41\u7A0B\uFF1A\u21C4 FPGA vs ASIC \u6BD4\u8F03", "Flow: \u21C4 FPGA vs ASIC"), run: () => runSynth("cmp") },
       { label: tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F", "\u26A1 Flash to the virtual board"), run: flashBoard },
@@ -4907,22 +4953,51 @@ ${lines.join("\n")}
     $2("cmdPalette").onclick = () => palette(false);
     $2("cmdRun").onclick = () => runTests();
     $2("cmdVerify").onclick = verifyAll;
-    $2("cmdSynth").onclick = () => runSynth();
     $2("cmdBoard").onclick = () => flashBoard();
     $2("testsRun").onclick = () => runTests();
     $2("testsVerify").onclick = verifyAll;
     $2("synthTop").onchange = () => {
       renderOutline();
+      if (proj.active === FLOW_TAB) runSynth(synth?.current);
+      else syncStage();
     };
     $2("flowTarget").onchange = () => {
-      renderFlow();
+      fillStages();
       if (proj.active === FLOW_TAB && synth?.synthesized) {
-        const asic = $2("flowTarget").value === "asic";
+        const asic = flowTarget() === "asic";
         const map = asic ? { map: "amap", place: "aplace", route: "aroute", sta: "asta" } : { amap: "map", aplace: "place", aroute: "route", adetail: "route", asta: "sta", apower: "sta" };
-        const k = map[synth.current] ?? synth.current;
-        synth.showStage(k);
+        runSynth(map[synth.current] ?? synth.current);
       }
     };
+    $2("flowStage").onchange = () => {
+      const k = $2("flowStage").value;
+      if (k) runSynth(k);
+    };
+    $2("synCrumb").onclick = (e) => {
+      const id = e.target.dataset.c;
+      if (!id) return;
+      const sel = $2(id);
+      try {
+        sel.showPicker();
+      } catch {
+        sel.focus();
+      }
+    };
+    const infoOpen = (on) => {
+      $2("synInfo").classList.toggle("hidden", !on);
+      $2("synInfoBtn").classList.toggle("on", on);
+    };
+    $2("synInfoBtn").onclick = () => infoOpen($2("synInfo").classList.contains("hidden"));
+    $2("synMsg").onclick = () => infoOpen(true);
+    $2("synDlBtn").onclick = (e) => {
+      e.stopPropagation();
+      $2("synDlMenu").classList.toggle("hidden");
+    };
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest?.("#synDlBtn")) $2("synDlMenu").classList.add("hidden");
+      if (!e.target.closest?.("#synInfo, #synInfoBtn, #synMsg")) infoOpen(false);
+    });
+    $2("sbSynth").onclick = () => runSynth();
     for (const b of $2("activity").querySelectorAll("button")) b.onclick = () => sideView(b.dataset.view);
     for (const b of $2("panelTabs").querySelectorAll("button[data-panel]")) b.onclick = () => panel(b.dataset.panel);
     $2("panelToggle").onclick = () => $2("panel").classList.toggle("collapsed");
@@ -4943,12 +5018,7 @@ ${lines.join("\n")}
     $2("waveTop").onchange = () => wave?.set(vcds.find((v) => v.top === $2("waveTop").value)?.text ?? null);
     resizer("sideResize", "--sidew", "x", 150, () => window.innerWidth * 0.5);
     resizer("panelResize", "--panelh", "y", 60, () => window.innerHeight * 0.75, true);
-    new MutationObserver(() => {
-      const t = $2("synStats").innerHTML.split(/<span class="sep">[^<]*<\/span>/).map((x) => x.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim()).filter(Boolean).join("\n");
-      $2("flowSum").innerText = t;
-      const f = /Fmax\s*([\d.]+)\s*MHz/.exec(t);
-      $2("sbSynth").textContent = f ? `\u2699 ${synthTop()} \xB7 Fmax ${f[1]} MHz` : $2("synStats").innerText ? `\u2699 ${synthTop()}` : "";
-    }).observe($2("synStats"), { childList: true, subtree: true, characterData: true });
+    new MutationObserver(synthStatus).observe($2("synStats"), { childList: true, subtree: true, characterData: true });
   }
   function initLang() {
     const saved = load("lang", "");
@@ -4987,7 +5057,7 @@ ${lines.join("\n")}
     if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
     renderProjects();
-    renderFlow();
+    fillStages();
     showActive();
     renderProblems();
     demoLink();
@@ -4996,13 +5066,15 @@ ${lines.join("\n")}
       const t0 = performance.now();
       core = await startCore(fromBase64(VERYL_WASM_B64));
       $2("sbCore").textContent = `\u2713 WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr("\uFF08\u80CC\u666F\u57F7\u884C\u7DD2\uFF09", " (worker thread)") : ""}`;
-      for (const id of ["cmdRun", "cmdVerify", "cmdSynth", "cmdBoard"]) $2(id).disabled = false;
+      for (const id of ["cmdRun", "cmdVerify", "cmdBoard", "flowTarget", "flowStage"]) $2(id).disabled = false;
       synth = new SynthOverlay(core, {
         embedded: true,
         onStage: (k) => {
-          if (isAsicStage(k)) $2("flowTarget").value = "asic";
-          else if (isFpgaStage(k)) $2("flowTarget").value = "fpga";
-          renderFlow(k);
+          const t = isAsicStage(k) ? "asic" : isFpgaStage(k) ? "fpga" : flowTarget();
+          if (t !== flowTarget()) {
+            $2("flowTarget").value = t;
+            fillStages();
+          } else syncStage();
         }
       });
       await check();

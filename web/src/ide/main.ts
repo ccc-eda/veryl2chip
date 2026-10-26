@@ -86,8 +86,8 @@ let testState = new Map<string, 'pass' | 'fail' | 'run'>();
 let synthKey = '';
 let busy = 0;
 
-/** [key, label, tag] of the flow stages, in the current language */
-const flow = (asic: boolean) => (asic ? ASIC_STAGES : FPGA_STAGES).map(s => [s.key, stageLabel(s), s.tag] as const);
+/** [key, label, tag] of the flow stages, in the current language (the back end is the menu's, not a prefix) */
+const flow = (asic: boolean) => (asic ? ASIC_STAGES : FPGA_STAGES).map(s => [s.key, stageLabel(s).replace(/^(共|C|F|A) /, ''), s.tag] as const);
 const isAsicStage = (k: string) => ASIC_STAGES.some(s => s.key === k && s.tag === 'asic');
 const isFpgaStage = (k: string) => FPGA_STAGES.some(s => s.key === k && s.tag === 'fpga');
 /** tab ids of the non-file tabs (kept in the saved tab list, so not translated) */
@@ -148,6 +148,7 @@ function showActive(): void {
   const isFile = !!file(a);
   $('editorHost').classList.toggle('hidden', !isFile);
   $('synOverlay').classList.toggle('hidden', a !== FLOW_TAB);
+  syncStage();
   $('boardPane').classList.toggle('hidden', a !== BOARD_TAB);
   // the board simulates only while it is visible
   if (board) {
@@ -576,6 +577,7 @@ function refreshTops(): void {
   sy.value = want;
   renderTests();
   renderOutline();
+  syncStage();
 }
 
 // ---------------------------------------------------------------- tests
@@ -719,22 +721,42 @@ function runSynth(stage?: string): void {
   if (key !== synthKey || !synth.synthesized) {
     synthKey = key;
     const target = stage && isAsicStage(stage) ? 'asic' : stage && isFpgaStage(stage) ? 'fpga' : undefined;
-    synth.open(files, top, pcfOf(proj), target ?? ($<HTMLSelectElement>('flowTarget').value as 'fpga' | 'asic'), stage);
+    synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage);
   } else if (stage) synth.showStage(stage);
-  sideView('flow');
 }
 
-function renderFlow(cur?: string): void {
-  const asic = $<HTMLSelectElement>('flowTarget').value === 'asic';
-  const box = $('flowList');
-  box.innerHTML = '';
-  for (const [k, label, tag] of [...flow(asic), ['cmp', tr('⇄ FPGA vs ASIC 比較', '⇄ FPGA vs ASIC'), 'cmp'] as const]) {
-    const d = document.createElement('div');
-    d.className = 'item' + (k === cur ? ' cur' : '') + (tag === 'fpga' ? ' stage-fpga' : tag === 'asic' ? ' stage-asic' : '');
-    d.innerHTML = `<span class="ic">${k === 'cmp' ? '⇄' : tag === 'common' ? '◇' : '◆'}</span><span class="nm">${esc(label.replace(/^(共|C|F|A) /, ''))}</span><span class="tag">${tag === 'common' ? tr('共用', 'common') : tag === 'fpga' ? 'FPGA' : tag === 'asic' ? 'ASIC' : ''}</span>`;
-    d.onclick = () => runSynth(k);
-    box.appendChild(d);
-  }
+const flowTarget = () => $<HTMLSelectElement>('flowTarget').value as 'fpga' | 'asic';
+
+/** the title bar's stage menu: the back end's stages, then the comparison; "⚙ Synthesize" while the flow tab is not shown */
+function fillStages(): void {
+  const sel = $<HTMLSelectElement>('flowStage');
+  sel.innerHTML = `<option value="" hidden>${tr('⚙ 合成', '⚙ Synthesize')}</option>`
+    + flow(flowTarget() === 'asic').map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('')
+    + `<option disabled>──────────</option><option value="cmp">${tr('⇄ FPGA vs ASIC 比較', '⇄ FPGA vs ASIC')}</option>`;
+  syncStage();
+}
+
+/** show the stage on view in the menu and the breadcrumb */
+function syncStage(): void {
+  const k = proj.active === FLOW_TAB && synth?.synthesized ? synth.current : '';
+  const sel = $<HTMLSelectElement>('flowStage');
+  sel.value = [...sel.options].some(o => o.value === k) ? k : '';
+  const label = sel.value ? sel.selectedOptions[0].textContent! : '';
+  $('synCrumb').innerHTML = `<span class="c" data-c="synthTop">${esc(synthTop())}</span><span class="sep">›</span>`
+    + (k === 'cmp' ? '' : `<span class="c" data-c="flowTarget">${flowTarget() === 'asic' ? 'ASIC' : 'FPGA'}</span><span class="sep">›</span>`)
+    + `<span class="c last" data-c="flowStage">${esc(label)}</span>`;
+  // the download menu only where there is something to download
+  $('synDl').classList.toggle('hidden', ![...$('synDlMenu').children].some(b => !b.classList.contains('hidden')));
+}
+
+/** the flow's numbers, compact in the status bar (all of them in its tooltip) */
+function synthStatus(): void {
+  const items = $('synStats').innerHTML.split(/<span class="sep">[^<]*<\/span>/).map(x => x.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').trim()).filter(Boolean);
+  const sb = $('sbSynth');
+  if (!items.length) { sb.textContent = sb.title = ''; return; }
+  const pick = items.filter((x, i) => i === 1 || /^LUT4 |DFF \d|^Fmax/.test(x)).map(x => x.replace(/ → /, '→'));
+  sb.textContent = `⚙ ${synthTop()} · ${pick.join(' · ')}`;
+  sb.title = items.join('\n');
 }
 
 // ---------------------------------------------------------------- virtual board
@@ -835,6 +857,13 @@ function resizer(id: string, prop: string, axis: 'x' | 'y', min: number, max: ()
   });
 }
 
+/** the next / previous stage of the current back end */
+function stepStage(d: number): void {
+  const keys = flow(flowTarget() === 'asic').map(([k]) => k);
+  const i = keys.indexOf(synth?.current ?? '');
+  runSynth(keys[Math.max(0, Math.min(keys.length - 1, i < 0 ? 0 : i + d))]);
+}
+
 // ---------------------------------------------------------------- command palette
 
 interface Cmd { label: string; key?: string; run: () => void }
@@ -844,6 +873,8 @@ function commands(): Cmd[] {
     { label: tr('執行測試', 'Run tests'), key: 'Ctrl+Enter', run: () => runTests() },
     { label: tr('全面驗證（RTL + 三種閘級網表）', 'Full verification (RTL + three gate-level netlists)'), run: verifyAll },
     { label: tr('合成並檢視流程', 'Synthesize and view the flow'), key: 'Ctrl+Shift+B', run: () => runSynth() },
+    { label: tr('流程：下一個階段', 'Flow: next stage'), run: () => stepStage(1) },
+    { label: tr('流程：上一個階段', 'Flow: previous stage'), run: () => stepStage(-1) },
     ...[...flow(false).slice(3), ...flow(true).slice(3), ...flow(false).slice(0, 3)].map(([k, l]) => ({ label: `${tr('流程：', 'Flow: ')}${l}`, run: () => runSynth(k) })),
     { label: tr('流程：⇄ FPGA vs ASIC 比較', 'Flow: ⇄ FPGA vs ASIC'), run: () => runSynth('cmp') },
     { label: tr('⚡ 燒錄到虛擬板', '⚡ Flash to the virtual board'), run: flashBoard },
@@ -948,20 +979,38 @@ function wire(): void {
   $('cmdPalette').onclick = () => palette(false);
   $('cmdRun').onclick = () => runTests();
   $('cmdVerify').onclick = verifyAll;
-  $('cmdSynth').onclick = () => runSynth();
   $('cmdBoard').onclick = () => flashBoard();
   $('testsRun').onclick = () => runTests();
   $('testsVerify').onclick = verifyAll;
-  $<HTMLSelectElement>('synthTop').onchange = () => { renderOutline(); };
+  $<HTMLSelectElement>('synthTop').onchange = () => {
+    renderOutline();
+    if (proj.active === FLOW_TAB) runSynth(synth?.current); else syncStage();
+  };
   $<HTMLSelectElement>('flowTarget').onchange = () => {
-    renderFlow();
+    fillStages();
     if (proj.active === FLOW_TAB && synth?.synthesized) {
-      const asic = $<HTMLSelectElement>('flowTarget').value === 'asic';
+      const asic = flowTarget() === 'asic';
       const map: Record<string, string> = asic ? { map: 'amap', place: 'aplace', route: 'aroute', sta: 'asta' } : { amap: 'map', aplace: 'place', aroute: 'route', adetail: 'route', asta: 'sta', apower: 'sta' };
-      const k = map[synth.current] ?? synth.current;
-      synth.showStage(k);
+      runSynth(map[synth.current] ?? synth.current);
     }
   };
+  $<HTMLSelectElement>('flowStage').onchange = () => { const k = $<HTMLSelectElement>('flowStage').value; if (k) runSynth(k); };
+  // the breadcrumb opens the title bar's menus
+  $('synCrumb').onclick = e => {
+    const id = (e.target as HTMLElement).dataset.c;
+    if (!id) return;
+    const sel = $<HTMLSelectElement>(id);
+    try { sel.showPicker(); } catch { sel.focus(); }
+  };
+  const infoOpen = (on: boolean) => { $('synInfo').classList.toggle('hidden', !on); $('synInfoBtn').classList.toggle('on', on); };
+  $('synInfoBtn').onclick = () => infoOpen($('synInfo').classList.contains('hidden'));
+  $('synMsg').onclick = () => infoOpen(true);
+  $('synDlBtn').onclick = e => { e.stopPropagation(); $('synDlMenu').classList.toggle('hidden'); };
+  document.addEventListener('click', e => {
+    if (!(e.target as HTMLElement).closest?.('#synDlBtn')) $('synDlMenu').classList.add('hidden');
+    if (!(e.target as HTMLElement).closest?.('#synInfo, #synInfoBtn, #synMsg')) infoOpen(false);
+  });
+  $('sbSynth').onclick = () => runSynth();
   for (const b of $('activity').querySelectorAll<HTMLElement>('button')) b.onclick = () => sideView(b.dataset.view!);
   for (const b of $('panelTabs').querySelectorAll<HTMLElement>('button[data-panel]')) b.onclick = () => panel(b.dataset.panel!);
   $('panelToggle').onclick = () => $('panel').classList.toggle('collapsed');
@@ -979,13 +1028,8 @@ function wire(): void {
   $<HTMLSelectElement>('waveTop').onchange = () => wave?.set(vcds.find(v => v.top === $<HTMLSelectElement>('waveTop').value)?.text ?? null);
   resizer('sideResize', '--sidew', 'x', 150, () => window.innerWidth * 0.5);
   resizer('panelResize', '--panelh', 'y', 60, () => window.innerHeight * 0.75, true);
-  // the flow's stats line, mirrored into the side bar and the status bar
-  new MutationObserver(() => {
-    const t = $('synStats').innerHTML.split(/<span class="sep">[^<]*<\/span>/).map(x => x.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').trim()).filter(Boolean).join('\n');
-    $('flowSum').innerText = t;
-    const f = /Fmax\s*([\d.]+)\s*MHz/.exec(t);
-    $('sbSynth').textContent = f ? `⚙ ${synthTop()} · Fmax ${f[1]} MHz` : $('synStats').innerText ? `⚙ ${synthTop()}` : '';
-  }).observe($('synStats'), { childList: true, subtree: true, characterData: true });
+  // the flow's numbers in the status bar
+  new MutationObserver(synthStatus).observe($('synStats'), { childList: true, subtree: true, characterData: true });
 }
 
 /** the interface language: saved choice, else the browser's */
@@ -1025,7 +1069,7 @@ async function boot(): Promise<void> {
   if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
   renderProjects();
-  renderFlow();
+  fillStages();
   showActive();
   renderProblems();
   demoLink();
@@ -1034,13 +1078,12 @@ async function boot(): Promise<void> {
     const t0 = performance.now();
     core = await startCore(fromBase64(VERYL_WASM_B64));
     $('sbCore').textContent = `✓ WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr('（背景執行緒）', ' (worker thread)') : ''}`;
-    for (const id of ['cmdRun', 'cmdVerify', 'cmdSynth', 'cmdBoard']) $<HTMLButtonElement>(id).disabled = false;
+    for (const id of ['cmdRun', 'cmdVerify', 'cmdBoard', 'flowTarget', 'flowStage']) $<HTMLButtonElement>(id).disabled = false;
     synth = new SynthOverlay(core, {
       embedded: true,
       onStage: k => {
-        if (isAsicStage(k)) $<HTMLSelectElement>('flowTarget').value = 'asic';
-        else if (isFpgaStage(k)) $<HTMLSelectElement>('flowTarget').value = 'fpga';
-        renderFlow(k);
+        const t = isAsicStage(k) ? 'asic' : isFpgaStage(k) ? 'fpga' : flowTarget();
+        if (t !== flowTarget()) { $<HTMLSelectElement>('flowTarget').value = t; fillStages(); } else syncStage();
       },
     });
     await check();

@@ -56,9 +56,6 @@ button.icon:hover { background: #3a3d41; }
 .tree .item.pass .ic { color: var(--ok); }
 .tree .item.fail .ic { color: var(--err); }
 .tree .item.run .ic { color: var(--warn); }
-#flowSum { white-space: pre-line; font-family: ui-monospace, Menlo, monospace; font-size: 11px; margin-top: 8px; }
-.tree .item.stage-fpga .tag { color: #7ec3ff; }
-.tree .item.stage-asic .tag { color: #e0b87e; }
 .dirty-dot { color: #e2c08d; }
 
 .resizer.v { flex: 0 0 4px; cursor: col-resize; background: transparent; margin-left: -2px; margin-right: -2px; z-index: 5; }
@@ -109,16 +106,33 @@ button.icon:hover { background: #3a3d41; }
 
 /* the synthesis views as an editor tab */
 #synOverlay.flowpane { position: absolute; inset: 0; z-index: 4; overflow: hidden; }
-/* title, stats and top are in the title bar / flow side bar */
-.flowpane #synBar { display: none; }
-.flowpane #synPipe { padding: 4px 10px; }
-.flowpane #synPipe button { padding: 2px 8px; }
-.flowpane #synPipe { background: var(--bg); border-bottom: 1px solid var(--line); }
-.flowpane #synInfo { background: var(--bg); border-bottom: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; max-height: 112px; padding: 4px 12px 6px; }
+/* one line, like an editor's title: breadcrumb, progress, icon actions; back end, stage and top are in the title bar */
+.flowpane #synBar { flex: 0 0 30px; display: flex; align-items: center; gap: 2px; padding: 0 8px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: nowrap; }
+#synCrumb { font-size: 12px; color: var(--dim); white-space: nowrap; }
+#synCrumb .c { cursor: pointer; padding: 1px 3px; border-radius: 3px; }
+#synCrumb .c:hover { color: var(--fg); background: var(--hover); }
+#synCrumb .c.last { color: var(--fg); }
+#synCrumb .sep { padding: 0 2px; color: #6b6b6b; }
+#synMsg { flex: 0 1 auto; min-width: 0; margin-left: 12px; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#synMsg.err { color: var(--err); }
+.flowpane #synBar button.icon { width: 24px; height: 22px; padding: 0; }
+.flowpane #synBar button.icon:disabled { opacity: .35; cursor: default; }
+#synEdges:not(.on) { opacity: .4; }
+#synInfoBtn.on { background: #3a3d41; }
+.flowpane #synZoom { position: static; display: flex; flex-direction: row; gap: 0; margin-left: 4px; padding-left: 4px; border-left: 1px solid var(--line); }
+.flowpane #synZoom button { width: 24px; height: 22px; }
+#synDl { position: relative; }
+#synDlMenu { position: absolute; top: 24px; right: 0; z-index: 6; display: flex; flex-direction: column; min-width: 140px; padding: 4px 0; background: var(--side); border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 16px #0008; }
+#synDlMenu button { background: none; border: none; color: var(--fg); text-align: left; padding: 4px 14px; cursor: pointer; font-size: 12px; }
+#synDlMenu button:hover:not(:disabled) { background: var(--sel); }
+#synDlMenu button:disabled { opacity: .4; cursor: default; }
+#synDlMenu button::after { content: attr(title); color: var(--dim); margin-left: 12px; }
+/* ⓘ: the stage's report as a popover */
+.flowpane #synInfo { position: absolute; top: 34px; right: 10px; z-index: 5; width: min(600px, calc(100% - 20px)); max-height: 60%; overflow: auto; padding: 8px 12px; background: var(--side); border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 16px #0008; color: var(--fg); font: 12px/1.5 ui-monospace, Menlo, monospace; }
 .flowpane #synBody { min-height: 0; }
 .flowpane #synCanvasWrap { background: #181818; }
 .flowpane #synSide { background: var(--side); border-left: 1px solid var(--line); }
-.flowpane #synPipe button.cur { background: var(--accent); border-color: #1b8ae6; }
+#sbSynth { cursor: pointer; }
 
 /* the virtual board */
 #boardPane.drop { box-shadow: inset 0 0 0 3px var(--accent); }
@@ -267,7 +281,6 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
   .flowpane #synBody { flex-direction: row; min-height: 0; }
   .flowpane #synCanvasWrap { flex: 3 1 0; }
   .flowpane #synSide { flex: 0 0 230px; min-width: 0; max-width: none; border-top: none; border-left: 1px solid var(--line); }
-  .flowpane #synInfo { max-height: 80px; }
 }
 @media (max-width: 800px) {
   #sidebar { flex-basis: 180px; }

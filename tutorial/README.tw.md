@@ -282,13 +282,14 @@ gtkwave build/blinky.vcd
 
 模擬過了，接下來把 Veryl 變成 FPGA 裡真正的元件。這叫**合成（synthesis）**，分好幾個階段。
 
-**路線 A**：按標題列的 **⚙ 合成**，會開一個「合成流程」分頁，上方一排階段可以點：
+**路線 A**：標題列有兩個選單：後端 **FPGA** / ASIC，和**階段**。選一個階段，就會開一個「合成流程」分頁顯示它：
 
 ```
-共 ① RTL→Logic → 共 ② Logic Netlist → 共 ③ Tech-indep Syn → F ④ LUT4 Techmap → F ⑤ Placement → F ⑥ Routing → F ⑦ Timing
+① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn → ④ LUT4 Techmap → ⑤ Placement → ⑥ Routing → ⑦ Timing
 ```
 
-每個階段都有說明、可縮放的圖（點方塊看細節）和右邊的統計。
+每個階段都有可縮放的圖（點方塊看細節）和右邊的細節；分頁右上的 **ⓘ** 是這個階段的說明和數字，
+主要的數字（閘數、LUT、DFF、Fmax）也顯示在最下面的狀態列。
 
 | 階段 | 做什麼 | Blinky 的結果 |
 |---|---|---|
@@ -368,7 +369,7 @@ set_io -nowarn i_btn    20  # BTN1（擴充板，按下 = 1）
 
 ### 看佈局與繞線
 
-**路線 A**：在合成流程分頁點 **F ⑤ Placement**（第一次會載入 4 MB 的晶片資料庫並佈局繞線，幾秒鐘）。
+**路線 A**：在階段選單選 **⑤ Placement**（第一次會載入 4 MB 的晶片資料庫並佈局繞線，幾秒鐘）。
 - ⑤：晶片的 26×32 個 tile；彩色的格子是用到的邏輯單元（LC = LUT + 正反器）。按「▶ 退火動畫」看
   模擬退火演算法怎麼把元件慢慢聚在一起，讓連線變短。
 - ⑥：實際走的線。點右邊的 net 可以單獨看一條。
@@ -401,7 +402,7 @@ wrote build/blinky.bin
 
 **位元流（bitstream）** 是 FPGA 的設定檔：每個 LUT 的真值表、每個繞線開關的開或關，總共約 100 KB。
 
-**路線 A**：合成流程分頁 → **F ⑥** 或 **F ⑦** → 右上的 **⬇ .bin**，下載 `Blinky.bin`。
+**路線 A**：階段選單選 **⑥** 或 **⑦** → 分頁右上的 **⬇** → **.bin**，下載 `Blinky.bin`。
 
 **路線 B**：上一節的指令已經產生 `build/blinky.bin`。
 
@@ -529,7 +530,7 @@ $EDA --top KnightRider --ice40 --pnr veryl --pcf icebreaker.pcf --bin build/knig
 iceprog build/knight.bin
 ```
 
-路線 A：範例庫 → 教學 → 「第 2 課 跑馬燈」，依序 ▶ 測試、✔ 全面驗證、⚙ 合成、⬇ .bin。
+路線 A：範例庫 → 教學 → 「第 2 課 跑馬燈」，依序 ▶ 測試、✔ 全面驗證、階段選單選 ⑥、⬇ → .bin。
 
 ---
 
@@ -607,7 +608,7 @@ IDE：範例庫 → 教學 → 「第 3 課 UART 回聲」→ **⚡ 虛擬板**�
    人眼看到的是亮度漸變。（Veryl 在 `function` 裡寫比較要用 `<:`，見附錄。）
 5. **UART 計數器**：改第 3 課，每秒送出一行目前的秒數（`0`、`1`、…、`9` 再回到 `0`），並把收到的字元數顯示在擴充板的 5 顆 LED 上。
    提示：數字 n 的 ASCII 碼是 `8'h30 + n`。在虛擬板的終端機上驗證，再燒進實體板用 `screen` 看。
-6. **晶片要多大？**：在 IDE 的合成流程把後端從 FPGA 切到 **ASIC**，看同一個設計變成標準元件後的面積和 Fmax，
+6. **晶片要多大？**：在 IDE 標題列把後端從 FPGA 切到 **ASIC**，看同一個設計變成標準元件後的面積和 Fmax，
    再點「⇄ FPGA vs ASIC」比較。為什麼 ASIC 快那麼多？
 
 ---
@@ -632,11 +633,11 @@ IDE：範例庫 → 教學 → 「第 3 課 UART 回聲」→ **⚡ 虛擬板**�
 | 語法 / 語意檢查 | `veryl check` | 打字時自動檢查 |
 | 模擬 | `$SIM a.veryl` | ▶ 測試（Ctrl/⌘+Enter） |
 | 波形 | `$SIM --vcd out.vcd a.veryl`，`gtkwave out.vcd` | 下方面板「波形」 |
-| 合成統計 | `$EDA --ice40 a.veryl` | ⚙ 合成 → ④ |
+| 合成統計 | `$EDA --ice40 a.veryl` | 階段選單 ④ |
 | 閘級模擬 | `$EDA --top M --gatesim ice40 a.veryl` | ✔ 全面驗證 |
-| 佈局繞線 + 位元流 | `$EDA --ice40 --pnr veryl --pcf icebreaker.pcf --bin out.bin a.veryl` | ⚙ 合成 → ⑥ → ⬇ .bin |
+| 佈局繞線 + 位元流 | `$EDA --ice40 --pnr veryl --pcf icebreaker.pcf --bin out.bin a.veryl` | 階段選單 ⑥ → ⬇ → .bin |
 | 燒錄 | `iceprog out.bin` | （下載後在命令列執行） |
-| ASIC 流程 | `$EDA --asic a.veryl` | ⚙ 合成 → 後端選 ASIC |
+| ASIC 流程 | `$EDA --asic a.veryl` | 後端選單選 ASIC |
 
 ### 本教學驗證過的事
 

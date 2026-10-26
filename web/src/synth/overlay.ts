@@ -119,7 +119,7 @@ export class SynthOverlay {
     this.asic = null;
     this.asicErr = null;
     this.nets.clear();
-    $('synInfo').textContent = tr('合成中…', 'Synthesizing…');
+    this.note(tr('合成中…', 'Synthesizing…'));
     $('synSide').innerHTML = '';
     this.view.set({ boxes: [], lines: [], texts: [] });
     this.buttons();
@@ -129,7 +129,7 @@ export class SynthOverlay {
       res = await this.core.call<SynthResult>({ cmd: 'synth', files: this.files, top: top || null });
     } catch (e) {
       if (gen !== this.gen) return;
-      $('synInfo').textContent = tr('合成失敗：\n', 'Synthesis failed:\n') + String((e as Error).message ?? e);
+      this.note(tr('合成失敗：\n', 'Synthesis failed:\n') + String((e as Error).message ?? e), true);
       $('synStats').innerHTML = '';
       return;
     }
@@ -153,10 +153,10 @@ export class SynthOverlay {
     this.pnrBusy = true;
     const t0 = performance.now();
     const tick = setInterval(() => {
-      if (gen === this.gen && PNR.has(this.stage)) $('synInfo').textContent = tr(`佈局繞線中…（iCE40UP5K，${((performance.now() - t0) / 1000).toFixed(1)} s）`, `Placing and routing… (iCE40UP5K, ${((performance.now() - t0) / 1000).toFixed(1)} s)`);
+      if (gen === this.gen && PNR.has(this.stage)) this.note(tr(`佈局繞線中…（iCE40UP5K，${((performance.now() - t0) / 1000).toFixed(1)} s）`, `Placing and routing… (iCE40UP5K, ${((performance.now() - t0) / 1000).toFixed(1)} s)`));
     }, 200);
     try {
-      $('synInfo').textContent = tr('載入晶片資料庫（IceStorm chipdb-5k，4 MB）…', 'Loading the chip database (IceStorm chipdb-5k, 4 MB)…');
+      this.note(tr('載入晶片資料庫（IceStorm chipdb-5k，4 MB）…', 'Loading the chip database (IceStorm chipdb-5k, 4 MB)…'));
       await this.core.chipdb();
       const r = await this.core.call<PnrResult>({ cmd: 'pnr', files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
       if (gen !== this.gen) return;
@@ -193,7 +193,7 @@ export class SynthOverlay {
     this.asicBusy = true;
     const t0 = performance.now();
     const tick = setInterval(() => {
-      if (gen === this.gen && ASIC.has(this.stage)) $('synInfo').textContent = tr(`ASIC 流程中：標準元件對應 → 列式佈局退火 → 全域繞線 → STA…（${((performance.now() - t0) / 1000).toFixed(1)} s）`, `ASIC flow: standard-cell mapping → row placement → global routing → STA… (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
+      if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC 流程中：標準元件對應 → 列式佈局退火 → 全域繞線 → STA…（${((performance.now() - t0) / 1000).toFixed(1)} s）`, `ASIC flow: standard-cell mapping → row placement → global routing → STA… (${((performance.now() - t0) / 1000).toFixed(1)} s)`));
     }, 200);
     try {
       const r = await this.core.call<AsicResult>({ cmd: 'asic', files: this.files, top: this.res.top, seed: 1 });
@@ -332,8 +332,9 @@ export class SynthOverlay {
     if (ASIC.has(key) && !this.asic) {
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.side(document.createElement('div'));
-      if (this.asicErr) { this.info([tr('ASIC 流程失敗：', 'ASIC flow failed:'), this.asicErr]); return; }
-      this.info([tr('ASIC 流程中…', 'Running the ASIC flow…')]);
+      if (this.asicErr) { this.note([tr('ASIC 流程失敗：', 'ASIC flow failed:'), this.asicErr].join('\n'), true); return; }
+      this.info([]);
+      this.note(tr('ASIC 流程中…', 'Running the ASIC flow…'));
       this.runAsic();
       return;
     }
@@ -356,10 +357,11 @@ export class SynthOverlay {
       this.side(document.createElement('div'));
       if (this.pnrErr) {
         const fit = /does not fit/.test(this.pnrErr);
-        this.info([tr('佈局繞線失敗：', 'Place and route failed:'), this.pnrErr, ...(fit ? ['', tr('iCE40UP5K-SG48 只有 5280 個 LC、39 個 IO 腳：整顆 RV32I 核心（暫存器檔用正反器）放不下。請改用「RISC-V SoC（FPGA）」範例，或改看 ASIC 流程。', 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : [])]);
+        this.note([tr('佈局繞線失敗：', 'Place and route failed:'), this.pnrErr, ...(fit ? ['', tr('iCE40UP5K-SG48 只有 5280 個 LC、39 個 IO 腳：整顆 RV32I 核心（暫存器檔用正反器）放不下。請改用「RISC-V SoC（FPGA）」範例，或改看 ASIC 流程。', 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : [])].join('\n'), true);
         return;
       }
-      this.info([tr('佈局繞線中…', 'Placing and routing…')]);
+      this.info([]);
+      this.note(tr('佈局繞線中…', 'Placing and routing…'));
       this.runPnr();
       return;
     }
@@ -501,7 +503,7 @@ export class SynthOverlay {
       const fr = p.history[f];
       const scene = deviceScene(p, fr.pos, undefined, fr.ram);
       this.view.set(scene, false);
-      $('synInfo').textContent = tr(`⑤ 退火動畫：第 ${f + 1}/${p.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${fr.cost.toFixed(0)}　接受率 ${(fr.accept * 100).toFixed(0)}%`, `⑤ Annealing: snapshot ${f + 1}/${p.history.length}　temperature ${fr.temp.toFixed(2)}　HPWL ${fr.cost.toFixed(0)}　acceptance ${(fr.accept * 100).toFixed(0)}%`);
+      this.note(tr(`⑤ 退火動畫：第 ${f + 1}/${p.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${fr.cost.toFixed(0)}　接受率 ${(fr.accept * 100).toFixed(0)}%`, `⑤ Annealing: snapshot ${f + 1}/${p.history.length}　temperature ${fr.temp.toFixed(2)}　HPWL ${fr.cost.toFixed(0)}　acceptance ${(fr.accept * 100).toFixed(0)}%`));
       f++;
       if (f < p.history.length) this.anim = window.setTimeout(step, 90);
       else this.anim = window.setTimeout(() => { this.anim = 0; this.info(this.pnrReport('place')); }, 1200);
@@ -517,7 +519,7 @@ export class SynthOverlay {
     const step = () => {
       const fr = a.history[f];
       this.view.set(dieScene(a, fr.pos), false);
-      $('synInfo').textContent = tr(`A ⑤ 退火動畫：第 ${f + 1}/${a.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${(fr.cost / 1000).toFixed(2)} mm　接受率 ${(fr.accept * 100).toFixed(0)}%`, `A ⑤ Annealing: snapshot ${f + 1}/${a.history.length}　temperature ${fr.temp.toFixed(2)}　HPWL ${(fr.cost / 1000).toFixed(2)} mm　acceptance ${(fr.accept * 100).toFixed(0)}%`);
+      this.note(tr(`A ⑤ 退火動畫：第 ${f + 1}/${a.history.length} 個快照　溫度 ${fr.temp.toFixed(2)}　HPWL ${(fr.cost / 1000).toFixed(2)} mm　接受率 ${(fr.accept * 100).toFixed(0)}%`, `A ⑤ Annealing: snapshot ${f + 1}/${a.history.length}　temperature ${fr.temp.toFixed(2)}　HPWL ${(fr.cost / 1000).toFixed(2)} mm　acceptance ${(fr.accept * 100).toFixed(0)}%`));
       f++;
       if (f < a.history.length) this.anim = window.setTimeout(step, 110);
       else this.anim = window.setTimeout(() => { this.anim = 0; this.info(this.asicReport('aplace')); }, 1200);
@@ -744,7 +746,10 @@ export class SynthOverlay {
   private stopAnim(): void { if (this.anim) { clearTimeout(this.anim); this.anim = 0; } }
 
   private redrawLines(): void {
-    $('synEdges').textContent = tr(`⌁ 連線：${this.edges ? '開' : '關'}`, `⌁ Wires: ${this.edges ? 'on' : 'off'}`);
+    const eb = $('synEdges');
+    eb.classList.toggle('on', this.edges);
+    if (this.opts.embedded) eb.title = tr(`連線：${this.edges ? '開' : '關'}`, `Wires: ${this.edges ? 'on' : 'off'}`);
+    else eb.textContent = tr(`⌁ 連線：${this.edges ? '開' : '關'}`, `⌁ Wires: ${this.edges ? 'on' : 'off'}`);
     const k = this.stage;
     if (PNR.has(k)) { if (this.pnr) this.drawPnr(false); return; }
     if (APHYS.has(k)) { if (this.asic) this.drawAsic(false); return; }
@@ -805,7 +810,24 @@ export class SynthOverlay {
     ];
   }
 
-  private info(lines: string[]): void { $('synInfo').textContent = lines.join('\n'); }
+  /** the stage's report; clears the progress line */
+  private info(lines: string[]): void {
+    $('synInfo').textContent = lines.join('\n');
+    const m = document.getElementById('synMsg');
+    if (m) { m.textContent = m.title = ''; m.classList.remove('err'); }
+  }
+
+  /** progress or an error: the IDE's flow bar has a line for it (#synMsg), the demo shows it as the report */
+  private note(text: string, err = false): void {
+    const m = document.getElementById('synMsg');
+    if (m) {
+      m.textContent = text.replace(/\s*\n\s*/g, ' ');
+      m.title = text;
+      m.classList.toggle('err', err);
+      if (!err) return;
+    }
+    $('synInfo').textContent = text;
+  }
 
   private side(html: HTMLElement): void {
     const s = $('synSide');

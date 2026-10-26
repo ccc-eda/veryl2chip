@@ -22,7 +22,8 @@
     <button id="cmdVerify" class="tb-btn" disabled title="RTL + 三種閘級網表全部跑一遍（驗證矩陣）" data-en-title="Run RTL and all three gate-level netlists (verification matrix)" data-en="✔ Verify all">✔ 全面驗證</button>
   </div>
   <div class="tb-group">
-    <button id="cmdSynth" class="tb-btn" disabled title="合成並檢視各階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view each stage (Ctrl/⌘+Shift+B)" data-en="⚙ Synthesize">⚙ 合成</button>
+    <select id="flowTarget" disabled title="合成的後端" data-en-title="Synthesis back end"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select>
+    <select id="flowStage" disabled title="合成並檢視這個階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view this stage (Ctrl/⌘+Shift+B)"></select>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
     <button id="cmdBoard" class="tb-btn" disabled title="合成並燒錄到虛擬 iCEBreaker 開發板" data-en-title="Synthesize and flash to a virtual iCEBreaker board" data-en="⚡ Virtual board">⚡ 虛擬板</button>
   </div>
@@ -35,7 +36,6 @@
   <nav id="activity">
     <button data-view="explorer" class="cur" title="檔案總管" data-en-title="Explorer">📁</button>
     <button data-view="examples" title="範例庫" data-en-title="Examples">📚</button>
-    <button data-view="flow" title="合成流程（各階段檢視）" data-en-title="Synthesis flow (every stage)">⚙</button>
     <button data-view="tests" title="測試" data-en-title="Tests">✔</button>
     <span class="spacer"></span>
     <button data-view="help" title="說明與快捷鍵" data-en-title="Help and shortcuts">?</button>
@@ -68,12 +68,6 @@
       <p class="side-hint" data-en="Click to open as a new project (your changes stay in the browser; the example is not changed).">點一下開成新專案（你的修改存在瀏覽器，不會改到範例）。</p>
       <div id="exList" class="tree"></div>
     </section>
-    <section id="view-flow" class="sideview hidden">
-      <div class="side-head"><span data-en="Synthesis flow">合成流程</span><span class="spacer"></span>
-        <select id="flowTarget" title="後端" data-en-title="Back end"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select></div>
-      <div id="flowList" class="tree"></div>
-      <div id="flowSum" class="side-hint"></div>
-    </section>
     <section id="view-tests" class="sideview hidden">
       <div class="side-head"><span data-en="Tests">測試</span><span class="spacer"></span>
         <button id="testsRun" class="icon" title="全部執行" data-en-title="Run all">▶</button>
@@ -82,7 +76,7 @@
     </section>
     <section id="view-help" class="sideview hidden">
       <div class="side-head"><span data-en="Help">說明</span></div>
-      <div class="side-hint help" data-en-html="<p><b>Veryl → chip</b>, all in the browser (WebAssembly), no server needed.</p><table><tr><td>Ctrl/⌘+Enter</td><td>run tests</td></tr><tr><td>Ctrl/⌘+Shift+B</td><td>synthesize</td></tr><tr><td>Ctrl/⌘+Shift+P</td><td>command palette</td></tr><tr><td>Ctrl/⌘+P</td><td>quick open</td></tr><tr><td>Ctrl/⌘+/</td><td>toggle comment</td></tr><tr><td>Tab / Shift+Tab</td><td>indent / outdent</td></tr><tr><td>Ctrl/⌘+S</td><td>save (it saves as you type anyway)</td></tr></table><p>Syntax is checked as you type (the official veryl-parser); errors show in the Problems panel and next to the line numbers.</p><p>Flow: common ① RTL→Logic → ② Logic Netlist → ③ technology-independent optimization → FPGA ④ LUT4 → ⑤ placement (annealing) → ⑥ routing → ⑦ STA; ASIC ④ standard cells → ⑤ row placement → ⑥ CTS + global routing → ⑦ detail routing → ⑧ STA → ⑨ power.</p><p>&quot;Verify all&quot; runs the same testbenches on the RTL and on the three synthesized netlists; the results must agree.</p><p><a href=&quot;https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;>📖 Tutorial from scratch</a> (Traditional Chinese): write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker.</p>">
+      <div class="side-hint help" data-en-html="<p><b>Veryl → chip</b>, all in the browser (WebAssembly), no server needed.</p><table><tr><td>Ctrl/⌘+Enter</td><td>run tests</td></tr><tr><td>Ctrl/⌘+Shift+B</td><td>synthesize</td></tr><tr><td>Ctrl/⌘+Shift+P</td><td>command palette</td></tr><tr><td>Ctrl/⌘+P</td><td>quick open</td></tr><tr><td>Ctrl/⌘+/</td><td>toggle comment</td></tr><tr><td>Tab / Shift+Tab</td><td>indent / outdent</td></tr><tr><td>Ctrl/⌘+S</td><td>save (it saves as you type anyway)</td></tr></table><p>Syntax is checked as you type (the official veryl-parser); errors show in the Problems panel and next to the line numbers.</p><p>Flow (the back-end and stage menus in the title bar; ⓘ explains the stage): ① RTL→Logic → ② Logic Netlist → ③ technology-independent optimization → FPGA ④ LUT4 → ⑤ placement (annealing) → ⑥ routing → ⑦ STA; ASIC ④ standard cells → ⑤ row placement → ⑥ CTS + global routing → ⑦ detail routing → ⑧ STA → ⑨ power.</p><p>&quot;Verify all&quot; runs the same testbenches on the RTL and on the three synthesized netlists; the results must agree.</p><p><a href=&quot;https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;>📖 Tutorial from scratch</a> (Traditional Chinese): write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker.</p>">
         <p><b>Veryl → 晶片</b>，全部在瀏覽器裡（WebAssembly），不需要伺服器。</p>
         <table>
           <tr><td>Ctrl/⌘+Enter</td><td>執行測試</td></tr>
@@ -94,7 +88,7 @@
           <tr><td>Ctrl/⌘+S</td><td>儲存（其實隨打隨存）</td></tr>
         </table>
         <p>編輯時會即時語法檢查（官方 veryl-parser）；錯誤顯示在「問題」面板與行號旁。</p>
-        <p>流程：共 ① RTL→Logic → ② Logic Netlist → ③ 技術無關最佳化 → FPGA ④ LUT4 → ⑤ 佈局退火 → ⑥ 繞線 → ⑦ STA；ASIC ④ 標準元件 → ⑤ 列式佈局 → ⑥ CTS + 全域繞線 → ⑦ 細部繞線 → ⑧ STA → ⑨ 功耗。</p>
+        <p>流程（標題列的後端與階段選單；ⓘ 是該階段的說明）：① RTL→Logic → ② Logic Netlist → ③ 技術無關最佳化 → FPGA ④ LUT4 → ⑤ 佈局退火 → ⑥ 繞線 → ⑦ STA；ASIC ④ 標準元件 → ⑤ 列式佈局 → ⑥ CTS + 全域繞線 → ⑦ 細部繞線 → ⑧ STA → ⑨ 功耗。</p>
         <p>「全面驗證」用同一組 testbench 跑 RTL 和三種合成後網表，結果必須一致。</p>
         <p><a href="https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md" target="_blank" rel="noopener">📖 從零開始的教學</a>：寫 Veryl → 模擬 → 看波形 → 合成 → 燒進 iCEBreaker。</p>
       </div>
@@ -109,28 +103,28 @@
       <div id="boardPane" class="hidden"></div>
       <div id="synOverlay" class="hidden flowpane">
         <div id="synBar">
-          <h1 id="synTitle">合成 → FPGA（iCE40UP5K）</h1>
-          <div id="synStats"></div>
+          <nav id="synCrumb"></nav>
+          <span id="synMsg"></span>
           <span class="spacer"></span>
-          <label class="inl"><span data-en="Top">頂層</span> <select id="synTop"></select></label>
+          <button id="synInfoBtn" class="icon" title="這個階段的說明與數字" data-en-title="About this stage, with its numbers">ⓘ</button>
+          <button id="synEdges" class="icon on" title="連線：開" data-en-title="Wires: on">⌁</button>
+          <button id="synAnim" class="icon hidden" title="退火動畫" data-en-title="Annealing animation">▶</button>
+          <span id="synDl" class="hidden"><button id="synDlBtn" class="icon" title="下載" data-en-title="Download">⬇</button>
+            <span id="synDlMenu" class="menu hidden">
+              <button id="synAsc" class="hidden" title="IceStorm 設定檔" data-en-title="IceStorm configuration">.asc</button>
+              <button id="synPcf" class="hidden" title="腳位指定" data-en-title="Pin constraints">.pcf</button>
+              <button id="synBin" class="hidden" title="位元流（iceprog 可燒錄）" data-en-title="Bitstream (flash it with iceprog)">.bin</button>
+              <button id="synV" class="hidden" title="標準元件網表（Verilog）" data-en-title="Standard-cell netlist (Verilog)">.v</button>
+              <button id="synDef" class="hidden" title="佈局（DEF）" data-en-title="Layout (DEF)">.def</button>
+            </span></span>
+          <span id="synZoom"><button id="synZin" class="icon" title="放大" data-en-title="Zoom in">＋</button><button id="synZout" class="icon" title="縮小" data-en-title="Zoom out">－</button><button id="synZfit" class="icon" title="符合視窗" data-en-title="Fit">⤢</button></span>
         </div>
-        <div id="synPipe">
-          <select id="synTarget" title="後端" data-en-title="Back end"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select>
-          <div id="synChips"></div>
-          <span class="spacer"></span>
-          <button id="synAnim" class="hidden" data-en="▶ Annealing">▶ 退火動畫</button>
-          <button id="synAsc" class="hidden" title="下載 IceStorm .asc" data-en-title="Download the IceStorm .asc">⬇ .asc</button>
-          <button id="synPcf" class="hidden" title="下載腳位指定" data-en-title="Download the pin constraints">⬇ .pcf</button>
-          <button id="synBin" class="hidden" title="下載位元流（iceprog 可燒錄）" data-en-title="Download the bitstream (flash it with iceprog)">⬇ .bin</button>
-          <button id="synV" class="hidden" title="下載標準元件網表（Verilog）" data-en-title="Download the standard-cell netlist (Verilog)">⬇ .v</button>
-          <button id="synDef" class="hidden" title="下載佈局（DEF）" data-en-title="Download the layout (DEF)">⬇ .def</button>
-          <button id="synEdges" data-en="⌁ Wires: on">⌁ 連線：開</button>
-        </div>
-        <div id="synInfo"></div>
+        <div id="synInfo" class="hidden"></div>
+        <!-- the overlay's own controls; the IDE drives them from the title bar and the breadcrumb -->
+        <div hidden><h1 id="synTitle"></h1><div id="synStats"></div><select id="synTop"></select><select id="synTarget"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select><div id="synChips"></div></div>
         <div id="synBody">
           <div id="synCanvasWrap">
             <canvas id="synCanvas"></canvas>
-            <div id="synZoom"><button id="synZin">＋</button><button id="synZout">－</button><button id="synZfit">⤢</button></div>
           </div>
           <div id="synSide"></div>
         </div>

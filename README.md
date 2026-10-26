@@ -40,12 +40,13 @@ The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&targe
 ### IDE
 `web/dist/ide.html` is a fuller, VS Code style IDE on the same core (the demo page above stays as it is):
 
-- activity bar and side bar: project files and module outline, example library, the synthesis flow stages, tests, help
+- activity bar and side bar: project files and module outline, example library, tests, help
 - tabbed editor with Veryl syntax highlighting and live syntax checking (problems panel, gutter markers, squiggles)
 - projects kept in the browser: several projects, new / rename / delete / import files, `.zip` export
 - ▶ tests (RTL or gate-level), ✔ full verification: every testbench on RTL and on the three synthesized netlists
-- ⚙ the flow as an editor tab: common ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦ or
-  ASIC ④–⑨, and FPGA vs ASIC
+- synthesis: the title bar's **FPGA / ASIC** and **stage** menus (① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦
+  or ASIC ④–⑨, last the FPGA vs ASIC comparison) show that stage in the flow tab, which has just a breadcrumb and icon buttons
+  (ⓘ about the stage, wires, annealing animation, ⬇ downloads, zoom); the numbers are in the status bar
 - bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)
 - ⚡ **virtual iCEBreaker**: flash the design onto a drawn board; LEDs light (brightness from the duty cycle) and buttons can be pressed, with the same pins as the real board (it runs the real placed-and-routed bitstream, decoded back into a circuit and simulated cycle by cycle, about 0.3–0.4× real time for small designs; any iCE40UP5K `.bin`, e.g. from nextpnr, can be dropped on it); plug in a USB serial terminal and PMOD modules (8 LEDs, 8 switches, a 2-digit 7-segment display, a VGA monitor, a buzzer) and a **breadboard** (LEDs, resistors, buttons, switches, wires on the PMOD pins, with warnings for shorts, missing series resistors and floating inputs); a pin table writes the project's `pins.pcf`; a lab (files, pins, modules, breadboard) can be shared as a link
 - interface in Traditional Chinese, Simplified Chinese or English (menu in the title bar; the browser's language by default)

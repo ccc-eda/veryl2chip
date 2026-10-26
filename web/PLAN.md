@@ -33,5 +33,6 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M14 | 周邊：USB 序列終端機（雙向、可選鮑率）、PMOD 模組（8 LED、8 開關、兩位數七段、VGA 螢幕、蜂鳴器）、每個專案記住接了什麼；教學第 3 課 UART、七段計數範例、VgaDemo；Veryl 的 `port: _`（不接的輸出） | 終端機、七段、VGA 在 cargo test 與 npm test 都有逐項檢查；瀏覽器實測 |
 | M15 | 麵包板：零件（LED、電阻、按鈕、開關、導線）接在 PMOD 腳與 3V3 / GND 上，數位電路模型（強連接、經電阻的弱電位＝上拉 / 下拉、LED 亮度＝正極電位 ×（1 − 負極電位）），短路 / 缺限流電阻 / 輸入浮接警告；腳位檔變成專案檔 `pins.pcf` 與腳位表；實驗分享連結與 `.lab.json`；邏輯閘麵包板實驗 | 模型單元測試（npm test）、瀏覽器實測真值表、分享連結來回 |
 | M16 | 虛擬實驗課：講義 `tutorial/labs.tw.md`（8 個實驗，每個都有直接燒進虛擬板的連結 `ide.html#ex=…&board=1`、檢查點、動手改、思考題）；新實驗 `ButtonCounter`（上升緣）與 `TrafficLight`（狀態機，麵包板上三顆 LED） | veryl test / veryl-sim / 三種閘級模擬、npm test 在虛擬板上按按鈕檢查計數與紅綠燈、麵包板接線無警告、全面形式驗證 |
+| M16+ | 合成介面改成 VS Code 式：「⚙ 合成」按鈕換成標題列的後端（FPGA / ASIC）＋階段選單（最後一項是 FPGA vs ASIC 比較）；流程分頁只剩一行麵包屑＋圖示按鈕（ⓘ 說明浮框、連線、退火動畫、⬇ 下載選單、縮放），進度與錯誤在同一行；數字移到狀態列；拿掉側欄的合成流程 | 瀏覽器實測 FPGA / ASIC / 比較、下載選單、ⓘ；展示頁不變；npm test |
 
 每個 M 完成就 commit。

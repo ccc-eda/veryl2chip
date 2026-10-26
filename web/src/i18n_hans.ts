@@ -3,6 +3,9 @@
 // Generated tables, kept to the characters the interface uses.
 
 export const HANS_PHRASES: Record<string, string> = {
+  '符合視窗': '适应窗口',
+  '標題列': '标题栏',
+  '檢視': '查看',
   '模組': '模块',
   '檔案總管': '资源管理器',
   '檔案': '文件',

@@ -84,6 +84,9 @@
 
   // src/i18n_hans.ts
   var HANS_PHRASES = {
+    "\u7B26\u5408\u8996\u7A97": "\u9002\u5E94\u7A97\u53E3",
+    "\u6A19\u984C\u5217": "\u6807\u9898\u680F",
+    "\u6AA2\u8996": "\u67E5\u770B",
     "\u6A21\u7D44": "\u6A21\u5757",
     "\u6A94\u6848\u7E3D\u7BA1": "\u8D44\u6E90\u7BA1\u7406\u5668",
     "\u6A94\u6848": "\u6587\u4EF6",
@@ -1466,7 +1469,7 @@
       this.asic = null;
       this.asicErr = null;
       this.nets.clear();
-      $("synInfo").textContent = tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026");
+      this.note(tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026"));
       $("synSide").innerHTML = "";
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.buttons();
@@ -1476,7 +1479,7 @@
         res = await this.core.call({ cmd: "synth", files: this.files, top: top || null });
       } catch (e) {
         if (gen !== this.gen) return;
-        $("synInfo").textContent = tr("\u5408\u6210\u5931\u6557\uFF1A\n", "Synthesis failed:\n") + String(e.message ?? e);
+        this.note(tr("\u5408\u6210\u5931\u6557\uFF1A\n", "Synthesis failed:\n") + String(e.message ?? e), true);
         $("synStats").innerHTML = "";
         return;
       }
@@ -1499,10 +1502,10 @@
       this.pnrBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
-        if (gen === this.gen && PNR.has(this.stage)) $("synInfo").textContent = tr(`\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `Placing and routing\u2026 (iCE40UP5K, ${((performance.now() - t0) / 1e3).toFixed(1)} s)`);
+        if (gen === this.gen && PNR.has(this.stage)) this.note(tr(`\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `Placing and routing\u2026 (iCE40UP5K, ${((performance.now() - t0) / 1e3).toFixed(1)} s)`));
       }, 200);
       try {
-        $("synInfo").textContent = tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026", "Loading the chip database (IceStorm chipdb-5k, 4 MB)\u2026");
+        this.note(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026", "Loading the chip database (IceStorm chipdb-5k, 4 MB)\u2026"));
         await this.core.chipdb();
         const r = await this.core.call({ cmd: "pnr", files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
         if (gen !== this.gen) return;
@@ -1535,7 +1538,7 @@
       this.asicBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
-        if (gen === this.gen && ASIC.has(this.stage)) $("synInfo").textContent = tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`);
+        if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`));
       }, 200);
       try {
         const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1 });
@@ -1697,10 +1700,11 @@
         this.view.set({ boxes: [], lines: [], texts: [] });
         this.side(document.createElement("div"));
         if (this.asicErr) {
-          this.info([tr("ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", "ASIC flow failed:"), this.asicErr]);
+          this.note([tr("ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", "ASIC flow failed:"), this.asicErr].join("\n"), true);
           return;
         }
-        this.info([tr("ASIC \u6D41\u7A0B\u4E2D\u2026", "Running the ASIC flow\u2026")]);
+        this.info([]);
+        this.note(tr("ASIC \u6D41\u7A0B\u4E2D\u2026", "Running the ASIC flow\u2026"));
         this.runAsic();
         return;
       }
@@ -1722,10 +1726,11 @@
         this.side(document.createElement("div"));
         if (this.pnrErr) {
           const fit = /does not fit/.test(this.pnrErr);
-          this.info([tr("\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", "Place and route failed:"), this.pnrErr, ...fit ? ["", tr("iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002", 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : []]);
+          this.note([tr("\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", "Place and route failed:"), this.pnrErr, ...fit ? ["", tr("iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002", 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : []].join("\n"), true);
           return;
         }
-        this.info([tr("\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026", "Placing and routing\u2026")]);
+        this.info([]);
+        this.note(tr("\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026", "Placing and routing\u2026"));
         this.runPnr();
         return;
       }
@@ -1883,7 +1888,7 @@
         const fr = p.history[f];
         const scene = deviceScene(p, fr.pos, void 0, fr.ram);
         this.view.set(scene, false);
-        $("synInfo").textContent = tr(`\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `\u2464 Annealing: snapshot ${f + 1}/${p.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`);
+        this.note(tr(`\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `\u2464 Annealing: snapshot ${f + 1}/${p.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`));
         f++;
         if (f < p.history.length) this.anim = window.setTimeout(step, 90);
         else this.anim = window.setTimeout(() => {
@@ -1901,7 +1906,7 @@
       const step = () => {
         const fr = a.history[f];
         this.view.set(dieScene(a, fr.pos), false);
-        $("synInfo").textContent = tr(`A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `A \u2464 Annealing: snapshot ${f + 1}/${a.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`);
+        this.note(tr(`A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `A \u2464 Annealing: snapshot ${f + 1}/${a.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`));
         f++;
         if (f < a.history.length) this.anim = window.setTimeout(step, 110);
         else this.anim = window.setTimeout(() => {
@@ -2179,7 +2184,10 @@
       }
     }
     redrawLines() {
-      $("synEdges").textContent = tr(`\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `\u2301 Wires: ${this.edges ? "on" : "off"}`);
+      const eb = $("synEdges");
+      eb.classList.toggle("on", this.edges);
+      if (this.opts.embedded) eb.title = tr(`\u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `Wires: ${this.edges ? "on" : "off"}`);
+      else eb.textContent = tr(`\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `\u2301 Wires: ${this.edges ? "on" : "off"}`);
       const k = this.stage;
       if (PNR.has(k)) {
         if (this.pnr) this.drawPnr(false);
@@ -2244,8 +2252,25 @@
         `${tr("LUT \u5C64\u6578", "LUT levels")} ${v.lev.depth} ${big}`
       ];
     }
+    /** the stage's report; clears the progress line */
     info(lines) {
       $("synInfo").textContent = lines.join("\n");
+      const m = document.getElementById("synMsg");
+      if (m) {
+        m.textContent = m.title = "";
+        m.classList.remove("err");
+      }
+    }
+    /** progress or an error: the IDE's flow bar has a line for it (#synMsg), the demo shows it as the report */
+    note(text, err = false) {
+      const m = document.getElementById("synMsg");
+      if (m) {
+        m.textContent = text.replace(/\s*\n\s*/g, " ");
+        m.title = text;
+        m.classList.toggle("err", err);
+        if (!err) return;
+      }
+      $("synInfo").textContent = text;
     }
     side(html) {
       const s = $("synSide");
