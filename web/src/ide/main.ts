@@ -60,7 +60,9 @@ function projName(p: Project): string {
 function uid(): string { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
 function fromExample(ex: Example): Project {
-  return { id: uid(), name: ex.title, files: ex.files.map(f => ({ ...f })), synth: ex.synth, pcf: ex.pcf, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
+  const files = ex.files.map(f => ({ ...f }));
+  if (ex.pcf) files.push({ name: PCF, src: ex.pcf });
+  return { id: uid(), name: ex.title, files, synth: ex.synth, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
 }
 
 function blankProject(name: string): Project {
@@ -99,6 +101,17 @@ const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synt
 const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB;
 
 function file(name: string): VFile | undefined { return proj.files.find(f => f.name === name); }
+
+/** the pin file is an ordinary project file (the first .pcf) */
+const PCF = 'pins.pcf';
+function pcfOf(p: Project): string | undefined { return p.files.find(f => f.name.endsWith('.pcf'))?.src; }
+/** older projects kept the pins in `pcf`: make it a file */
+function migratePcf(p: Project): void {
+  if (p.pcf !== undefined) {
+    if (!p.files.some(f => f.name.endsWith('.pcf')) && p.pcf.trim()) p.files.push({ name: PCF, src: p.pcf });
+    delete p.pcf;
+  }
+}
 function original(name: string): string | undefined {
   return proj.from ? examples().find(e => e.id === proj.from)?.files.find(f => f.name === name)?.src : undefined;
 }
@@ -280,7 +293,11 @@ async function importFiles(list: FileList | null): Promise<void> {
   let last = '';
   for (const f of Array.from(list)) {
     const src = await f.text();
-    if (f.name.endsWith('.pcf')) { proj.pcf = src; continue; }
+    if (f.name.endsWith('.json')) {
+      try { importLab(JSON.parse(src), ''); } catch (e) { alert(String((e as Error).message ?? e)); }
+      return;
+    }
+    if (f.name.endsWith('.pcf')) { proj.files = proj.files.filter(x => !x.name.endsWith('.pcf')); }
     const cur = file(f.name);
     if (cur) cur.src = src; else proj.files.push({ name: f.name, src });
     last = f.name;
@@ -350,14 +367,60 @@ function revertProject(): void {
   if (!confirm(tr('捨棄所有修改，回到範例原始碼？', 'Discard all changes and go back to the example\'s source?'))) return;
   proj.files = ex.files.map(f => ({ ...f }));
   proj.synth = ex.synth;
-  proj.pcf = ex.pcf;
+  if (ex.pcf) proj.files.push({ name: PCF, src: ex.pcf });
   showActive();
   changed();
 }
 
+// ---------------------------------------------------------------- sharing labs
+
+/** a lab: everything a student needs (sources, pins, what is plugged in, the breadboard) */
+interface Lab { v: 1; name: string; files: VFile[]; synth?: string; board?: BoardSetup; from?: string }
+const labOf = (p: Project): Lab => ({ v: 1, name: projName(p), files: p.files, synth: p.synth, board: p.board, from: p.from });
+
+async function gz(data: string | Uint8Array, compress: boolean): Promise<Uint8Array> {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  const stream = new Blob([bytes as BlobPart]).stream()
+    .pipeThrough(compress ? new CompressionStream('gzip') : new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+const b64url = (u: Uint8Array) => { let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64url = (s: string) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/')); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+
+/** a link that opens this lab as a new project */
+async function shareLab(): Promise<void> {
+  const code = b64url(await gz(JSON.stringify(labOf(proj)), true));
+  const url = `${location.origin}${location.pathname}#lab=${code}`;
+  try { await navigator.clipboard.writeText(url); } catch { /* not allowed: the prompt shows it */ }
+  prompt(tr(`分享連結（${url.length} 字元，已複製到剪貼簿）：開啟它會把這個實驗匯入成新專案`, `Share link (${url.length} characters, copied): opening it imports this lab as a new project`), url);
+}
+
+function exportLab(): void {
+  saveAs(`${projName(proj).replace(/[^\w.-]+/g, '_') || 'lab'}.lab.json`, JSON.stringify(labOf(proj), null, 1), 'application/json');
+}
+
+function importLab(l: Lab, suffix: string): void {
+  if (!l || !Array.isArray(l.files)) throw new Error(tr('不是實驗檔', 'not a lab file'));
+  const files = l.files.filter(f => typeof f.name === 'string' && typeof f.src === 'string');
+  const first = files.find(f => f.name.endsWith('.veryl'))?.name ?? files[0]?.name;
+  const p: Project = { id: uid(), name: (l.name || 'lab') + suffix, files, synth: l.synth, board: l.board, from: l.from, open: first ? [first] : [], active: first };
+  projects.push(p);
+  switchProject(p.id);
+}
+
+async function labFromHash(code: string): Promise<void> {
+  try {
+    const text = new TextDecoder().decode(await gz(unb64url(code), false));
+    importLab(JSON.parse(text), tr('（分享）', ' (shared)'));
+  } catch (e) {
+    alert(tr('無法開啟分享的實驗：', 'Cannot open the shared lab: ') + String((e as Error).message ?? e));
+  }
+  try { history.replaceState(null, '', location.pathname); } catch { /* file:// */ }
+}
+
 function exportZip(): void {
   saveAs(`${projName(proj).replace(/[^\w.-]+/g, '_') || 'project'}.zip`,
-    projectZip(projName(proj), proj.files, proj.pcf ? { name: `${proj.synth ?? 'top'}.pcf`, src: proj.pcf } : undefined), 'application/zip');
+    projectZip(projName(proj), proj.files), 'application/zip');
 }
 
 // ---------------------------------------------------------------- examples
@@ -649,14 +712,14 @@ function runSynth(stage?: string): void {
   const top = synthTop();
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能合成）', 'No synthesizable module (#[test] modules cannot be synthesized)')); return; }
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
-  const key = JSON.stringify([files, top, proj.pcf]);
+  const key = JSON.stringify([files, top, pcfOf(proj)]);
   openFile(FLOW_TAB);
   // the chip views need the room on small screens; the panel comes back with the next run
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
   if (key !== synthKey || !synth.synthesized) {
     synthKey = key;
     const target = stage && isAsicStage(stage) ? 'asic' : stage && isFpgaStage(stage) ? 'fpga' : undefined;
-    synth.open(files, top, proj.pcf, target ?? ($<HTMLSelectElement>('flowTarget').value as 'fpga' | 'asic'), stage);
+    synth.open(files, top, pcfOf(proj), target ?? ($<HTMLSelectElement>('flowTarget').value as 'fpga' | 'asic'), stage);
   } else if (stage) synth.showStage(stage);
   sideView('flow');
 }
@@ -688,6 +751,12 @@ function ensureBoard(): VirtualBoard {
   board = new VirtualBoard($('boardPane'), getBoardCore);
   board.flashButton.onclick = () => flashBoard();
   board.onSetup = s => { proj.board = s; persist(); };
+  board.onPins = text => {
+    const f = proj.files.find(x => x.name.endsWith('.pcf'));
+    if (f) f.src = text; else proj.files.push({ name: PCF, src: text });
+    changed();
+    flashBoard();
+  };
   board.onLoaded = info => {
     problems = problems.filter(p => p.from !== 'run');
     for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
@@ -706,7 +775,7 @@ async function flashBoard(): Promise<void> {
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
   setBusy(true, tr('⚡ 燒錄到虛擬板…', '⚡ Flashing the virtual board…'));
   try {
-    const info = await board!.flash(proj.files.filter(f => f.name.endsWith('.veryl')), top, proj.pcf);
+    const info = await board!.flash(proj.files.filter(f => f.name.endsWith('.veryl')), top, pcfOf(proj));
     $('sbTest').textContent = tr(`⚡ ${info.top} 已燒錄到虛擬板`, `⚡ ${info.top} flashed to the virtual board`);
     problems = problems.filter(p => p.from !== 'run');
     for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
@@ -782,6 +851,8 @@ function commands(): Cmd[] {
     { label: tr('新專案', 'New project'), run: newProject },
     { label: tr('匯入 .veryl 檔', 'Import .veryl files'), run: () => $<HTMLInputElement>('importIn').click() },
     { label: tr('下載專案 .zip', 'Download the project .zip'), run: exportZip },
+    { label: tr('🔗 分享實驗（產生連結）', '🔗 Share the lab (link)'), run: shareLab },
+    { label: tr('匯出實驗檔 .lab.json', 'Export the lab .lab.json'), run: exportLab },
     { label: tr('重新命名專案', 'Rename project'), run: renameProject },
     { label: tr('還原成範例原始碼', 'Revert to the example source'), run: revertProject },
     { label: tr('刪除專案', 'Delete project'), run: deleteProject },
@@ -903,6 +974,7 @@ function wire(): void {
   $('fileImport').onclick = () => $<HTMLInputElement>('importIn').click();
   $<HTMLInputElement>('importIn').onchange = () => { importFiles($<HTMLInputElement>('importIn').files); $<HTMLInputElement>('importIn').value = ''; };
   $('projZip').onclick = exportZip;
+  $('projShare').onclick = () => shareLab();
   wave = new WaveView($<HTMLCanvasElement>('waveCanvas'), $('wavePick'), $<HTMLInputElement>('waveFilter'));
   $<HTMLSelectElement>('waveTop').onchange = () => wave?.set(vcds.find(v => v.top === $<HTMLSelectElement>('waveTop').value)?.text ?? null);
   resizer('sideResize', '--sidew', 'x', 150, () => window.innerWidth * 0.5);
@@ -937,10 +1009,12 @@ function switchLang(l: Lang): void {
 }
 
 async function boot(): Promise<void> {
+  for (const p of projects) migratePcf(p);
   initLang();
   wire();
   const hash = location.hash;
   const exId = /ex=([\w-]+)/.exec(hash)?.[1];
+  const labCode = /lab=([\w-]+)/.exec(hash)?.[1];
   if (!projects.length) projects.push(fromExample(examples().find(e => e.id === (exId ?? 'tut_blinky')) ?? examples()[0]));
   proj = projects.find(p => p.id === load<string>('cur', '')) ?? projects[0];
   const ex = exId ? examples().find(e => e.id === exId) : undefined;
@@ -955,6 +1029,7 @@ async function boot(): Promise<void> {
   showActive();
   renderProblems();
   demoLink();
+  if (labCode) await labFromHash(labCode);
   try {
     const t0 = performance.now();
     core = await startCore(fromBase64(VERYL_WASM_B64));

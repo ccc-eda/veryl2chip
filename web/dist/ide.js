@@ -76,9 +76,9 @@
       return this.call({ cmd: "simulate", files, top: top || null, max_time: opts.maxTime ?? 1e6, vcd: !!opts.vcd });
     }
   };
-  async function gunzip(gz) {
+  async function gunzip(gz2) {
     const ds = new DecompressionStream("gzip");
-    const stream = new Blob([gz]).stream().pipeThrough(ds);
+    const stream = new Blob([gz2]).stream().pipeThrough(ds);
     return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
@@ -177,6 +177,7 @@
     "\u5373\u6642": "\u5B9E\u65F6",
     "\u5C55\u793A\u7248": "\u6F14\u793A\u7248",
     "\u5408\u6210": "\u7EFC\u5408",
+    "\u526A\u8CBC\u7C3F": "\u526A\u8D34\u677F",
     "\u87A2\u5E55": "\u663E\u793A\u5668",
     "\u9B91\u7387": "\u6CE2\u7279\u7387",
     "\u9B91": "\u6CE2\u7279",
@@ -188,6 +189,11 @@
     "\u5217\u5F0F": "\u884C\u5F0F"
   };
   var HANS_CHARS = {
+    "\u6975": "\u6781",
+    "\u88FD": "\u5236",
+    "\u8907": "\u590D",
+    "\u8CBC": "\u8D34",
+    "\u9EB5": "\u9762",
     "\u55CE": "\u5417",
     "\u8072": "\u58F0",
     "\u87A2": "\u8424",
@@ -538,8 +544,8 @@
       call: (req) => send({ type: "call", req }),
       chipdb: () => {
         if (!db) {
-          const gz = chipdbGz();
-          db = send({ type: "chipdb", gz }, [gz.buffer]).then(() => {
+          const gz2 = chipdbGz();
+          db = send({ type: "chipdb", gz: gz2 }, [gz2.buffer]).then(() => {
           });
           db.catch(() => {
             db = null;
@@ -2720,6 +2726,354 @@ target = { type = "directory", path = "target" }
     return 10 * p;
   }
 
+  // src/ide/bbmodel.ts
+  function node(p) {
+    const m = /^h:(\d+):([a-j])$/.exec(p);
+    if (m) return `s:${m[1]}:${"abcde".includes(m[2]) ? "top" : "bot"}`;
+    const r = /^r:([a-z]+[+-]):\d+$/.exec(p);
+    if (r) return `rail:${r[1]}`;
+    return p;
+  }
+  var Uf = class {
+    constructor() {
+      __publicField(this, "p", /* @__PURE__ */ new Map());
+    }
+    find(a) {
+      let r = a;
+      while (this.p.has(r) && this.p.get(r) !== r) r = this.p.get(r);
+      this.p.set(a, r);
+      return r;
+    }
+    union(a, b) {
+      const x = this.find(a), y = this.find(b);
+      if (x !== y) this.p.set(x, y);
+    }
+  };
+  function solve(parts, outputs, inputs, pressed, tr2 = (h) => h) {
+    const uf = new Uf();
+    const nodes = /* @__PURE__ */ new Set(["vcc", "gnd"]);
+    for (const p of parts) {
+      nodes.add(node(p.a));
+      nodes.add(node(p.b));
+    }
+    for (const pin of [...outputs.keys(), ...inputs]) nodes.add(`p:${pin}`);
+    for (const n of nodes) uf.find(n);
+    for (const p of parts) {
+      const closed = p.kind === "wire" || p.kind === "sw" && p.on || p.kind === "btn" && pressed.has(p.id);
+      if (closed) uf.union(node(p.a), node(p.b));
+    }
+    const drivers = /* @__PURE__ */ new Map();
+    const add = (n, what, v) => {
+      const r = uf.find(n);
+      if (!drivers.has(r)) drivers.set(r, []);
+      drivers.get(r).push({ what, v });
+    };
+    add("vcc", "3V3", 1);
+    add("gnd", "GND", 0);
+    for (const [pin, d] of outputs) add(`p:${pin}`, tr2(`\u8173 ${pin}`, `pin ${pin}`), d);
+    const warnings = [];
+    const level = /* @__PURE__ */ new Map();
+    const nets = new Set([...nodes].map((n) => uf.find(n)));
+    for (const r of nets) {
+      const ds = drivers.get(r) ?? [];
+      if (ds.length > 1) {
+        warnings.push(tr2(`\u77ED\u8DEF\uFF1A${ds.map((d) => d.what).join(" \u548C ")} \u63A5\u5728\u4E00\u8D77`, `Short circuit: ${ds.map((d) => d.what).join(" and ")} are connected`));
+      }
+      level.set(r, ds.length ? ds[0].v : null);
+    }
+    const strong = new Set([...nets].filter((r) => level.get(r) !== null));
+    for (let changed2 = true, k = 0; changed2 && k < 50; k++) {
+      changed2 = false;
+      for (const p of parts.filter((q) => q.kind === "res")) {
+        const [x, y] = [uf.find(node(p.a)), uf.find(node(p.b))];
+        for (const [from, to] of [[x, y], [y, x]]) {
+          if (!strong.has(to) && level.get(to) == null && level.get(from) != null) {
+            level.set(to, level.get(from));
+            changed2 = true;
+          }
+        }
+      }
+    }
+    const lv = (n) => level.get(uf.find(n)) ?? null;
+    const led = /* @__PURE__ */ new Map();
+    for (const p of parts.filter((q) => q.kind === "led")) {
+      const [a, c] = [lv(node(p.a)), lv(node(p.b))];
+      led.set(p.id, a === null || c === null ? 0 : Math.max(0, a * (1 - c)));
+      const [ra, rc] = [uf.find(node(p.a)), uf.find(node(p.b))];
+      if (strong.has(ra) && strong.has(rc) && (level.get(ra) ?? 0) > 0 && (level.get(rc) ?? 1) < 1) {
+        warnings.push(tr2("LED \u6C92\u6709\u4E32\u806F\u9650\u6D41\u96FB\u963B\uFF08\u771F\u5BE6\u96FB\u8DEF\u4E2D\u6703\u71D2\u6389 LED \u6216 FPGA \u8173\u4F4D\uFF09", "An LED has no series resistor (on real hardware it would burn the LED or the FPGA pin)"));
+      }
+    }
+    const ins = /* @__PURE__ */ new Map();
+    for (const pin of inputs) {
+      const n = `p:${pin}`;
+      if (!parts.some((p) => node(p.a) === n || node(p.b) === n)) continue;
+      const v = lv(n);
+      if (v === null) warnings.push(tr2(`\u8173 ${pin} \u6D6E\u63A5\uFF08\u6C92\u6709\u63A5\u5230\u4EFB\u4F55\u96FB\u4F4D\uFF09\uFF1A\u52A0\u4E00\u500B\u4E0A\u62C9\u6216\u4E0B\u62C9\u96FB\u963B`, `Pin ${pin} floats (nothing drives it): add a pull-up or pull-down resistor`));
+      ins.set(pin, v !== null && v > 0.5 ? 1 : 0);
+    }
+    return { level, led, inputs: ins, warnings: [...new Set(warnings)] };
+  }
+
+  // src/ide/breadboard.ts
+  var PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
+  var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
+  var NAMES = ["1", "2", "3", "4", "7", "8", "9", "10"];
+  var COLS = 30;
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var TOOLS = [
+    ["select", "\u2196 \u9078\u53D6", "\u2196 Select"],
+    ["wire", "\u3030 \u5C0E\u7DDA", "\u3030 Wire"],
+    ["led", "\u25C9 LED", "\u25C9 LED"],
+    ["res", "\u25AD \u96FB\u963B", "\u25AD Resistor"],
+    ["btn", "\u23FA \u6309\u9215", "\u23FA Button"],
+    ["sw", "\u21CB \u958B\u95DC", "\u21CB Switch"]
+  ];
+  var LED_COLORS = ["#ff3b30", "#34c759", "#ffcc00", "#0a84ff"];
+  var WIRE_COLORS = ["#e5484d", "#3e63dd", "#30a46c", "#f76b15", "#8e4ec6", "#e5e5e5"];
+  function points() {
+    const m = /* @__PURE__ */ new Map();
+    [...PMOD1A, ...PMOD1B].forEach((pin, i) => m.set(`p:${pin}`, { x: 34 + i * 26 + (i >= 8 ? 14 : 0), y: 30 }));
+    m.set("vcc", { x: 34 + 16 * 26 + 30, y: 30 });
+    m.set("gnd", { x: 34 + 17 * 26 + 30, y: 30 });
+    for (let c = 1; c <= COLS; c++) {
+      const x = 40 + (c - 1) * 16;
+      m.set(`r:top+:${c}`, { x, y: 64 });
+      m.set(`r:top-:${c}`, { x, y: 78 });
+      "abcde".split("").forEach((r, i) => m.set(`h:${c}:${r}`, { x, y: 104 + i * 14 }));
+      "fghij".split("").forEach((r, i) => m.set(`h:${c}:${r}`, { x, y: 186 + i * 14 }));
+      m.set(`r:bot+:${c}`, { x, y: 264 });
+      m.set(`r:bot-:${c}`, { x, y: 278 });
+    }
+    return m;
+  }
+  var Breadboard = class {
+    constructor(host) {
+      __publicField(this, "host", host);
+      __publicField(this, "parts", []);
+      __publicField(this, "pressed", /* @__PURE__ */ new Set());
+      __publicField(this, "blocked", /* @__PURE__ */ new Set());
+      __publicField(this, "tool", "select");
+      __publicField(this, "first", null);
+      __publicField(this, "sel", null);
+      __publicField(this, "pts", points());
+      __publicField(this, "svg");
+      __publicField(this, "ledColor", 0);
+      __publicField(this, "wireColor", 0);
+      /** layout changed (save it) / a button or switch changed (solve again) */
+      __publicField(this, "onChange", () => {
+      });
+      host.innerHTML = `<div class="bb-tools">${TOOLS.map(([t, h, e]) => `<button class="tb-btn bb-tool" data-tool="${t}">${tr(h, e)}</button>`).join("")}
+      <span class="bb-hint">${tr("\u9078\u5DE5\u5177\uFF0C\u9EDE\u5169\u500B\u5B54\u653E\u96F6\u4EF6\uFF08LED\uFF1A\u5148\u9EDE\u6B63\u6975\uFF09\uFF1B\u9078\u53D6\u5F8C\u6309 Delete \u522A\u9664\uFF0C\u53F3\u9375\u4E5F\u53EF\u522A\u9664\uFF1B\u6309\u4F4F\u6309\u9215\u3001\u9EDE\u4E00\u4E0B\u958B\u95DC", "Pick a tool and click two holes (LED: anode first); select + Delete, or right-click, removes; hold buttons, click switches")}</span>
+      <button class="tb-btn ghost bb-clear" title="${tr("\u6E05\u7A7A\u9EB5\u5305\u677F", "Clear the breadboard")}">\u{1F5D1}</button></div>
+      <svg class="bb-svg" viewBox="0 0 560 296" xmlns="${SVGNS}"></svg>
+      <div class="bb-warn"></div>`;
+      this.svg = host.querySelector(".bb-svg");
+      for (const b of host.querySelectorAll(".bb-tool")) b.onclick = () => this.setTool(b.dataset.tool);
+      host.querySelector(".bb-clear").onclick = () => {
+        if (!this.parts.length || confirm(tr("\u6E05\u7A7A\u9EB5\u5305\u677F\uFF1F", "Clear the breadboard?"))) {
+          this.parts = [];
+          this.render();
+          this.onChange(true);
+        }
+      };
+      this.svg.addEventListener("pointerdown", (e) => this.down(e));
+      this.svg.addEventListener("pointerup", () => this.release());
+      this.svg.addEventListener("pointerleave", () => this.release());
+      this.svg.addEventListener("pointermove", (e) => this.hover(e));
+      this.svg.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        const id = this.partAt(e);
+        if (id !== null) this.remove(id);
+      });
+      host.tabIndex = 0;
+      host.addEventListener("keydown", (e) => {
+        if ((e.key === "Delete" || e.key === "Backspace") && this.sel !== null) {
+          this.remove(this.sel);
+          e.preventDefault();
+        }
+        if (e.key === "Escape") {
+          this.first = null;
+          this.setTool("select");
+        }
+      });
+      this.setTool("select");
+    }
+    setParts(parts) {
+      this.parts = parts.map((p) => ({ ...p }));
+      this.pressed.clear();
+      this.render();
+    }
+    setTool(t) {
+      this.tool = t;
+      this.first = null;
+      for (const b of this.host.querySelectorAll(".bb-tool")) b.classList.toggle("cur", b.dataset.tool === t);
+      this.render();
+    }
+    local(e) {
+      const p = this.svg.createSVGPoint();
+      p.x = e.clientX;
+      p.y = e.clientY;
+      const m = this.svg.getScreenCTM();
+      return m ? p.matrixTransform(m.inverse()) : { x: 0, y: 0 };
+    }
+    pointAt(e) {
+      const { x, y } = this.local(e);
+      let best = null, bd = 64;
+      for (const [id, q] of this.pts) {
+        if (id.startsWith("p:") && this.blocked.has(+id.slice(2))) continue;
+        const d = (q.x - x) ** 2 + (q.y - y) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = id;
+        }
+      }
+      return best;
+    }
+    partAt(e) {
+      const el2 = e.target.closest("[data-part]");
+      return el2 ? +el2.dataset.part : null;
+    }
+    down(e) {
+      this.host.focus();
+      if (e.button !== 0) return;
+      const id = this.partAt(e);
+      if (this.tool === "select") {
+        if (id === null) {
+          this.sel = null;
+          this.render();
+          return;
+        }
+        const p = this.parts.find((q) => q.id === id);
+        this.sel = id;
+        if (p.kind === "btn") {
+          this.pressed.add(id);
+          this.onChange(false);
+        }
+        if (p.kind === "sw") {
+          p.on = !p.on;
+          this.onChange(true);
+        }
+        this.render();
+        return;
+      }
+      const pt = this.pointAt(e);
+      if (!pt) return;
+      if (!this.first) {
+        this.first = pt;
+        this.render();
+        return;
+      }
+      if (pt === this.first) return;
+      const id2 = this.parts.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+      const part = { id: id2, kind: this.tool, a: this.first, b: pt };
+      if (this.tool === "led") part.color = LED_COLORS[this.ledColor++ % LED_COLORS.length];
+      if (this.tool === "wire") part.color = WIRE_COLORS[this.wireColor++ % WIRE_COLORS.length];
+      if (this.tool === "sw") part.on = false;
+      this.parts.push(part);
+      this.first = null;
+      this.render();
+      this.onChange(true);
+    }
+    release() {
+      if (this.pressed.size) {
+        this.pressed.clear();
+        this.render();
+        this.onChange(false);
+      }
+    }
+    hover(e) {
+      const h = this.svg.querySelector(".bb-hover");
+      const pt = this.tool === "select" ? null : this.pointAt(e);
+      if (!h) return;
+      if (!pt) {
+        h.setAttribute("r", "0");
+        return;
+      }
+      const q = this.pts.get(pt);
+      h.setAttribute("cx", String(q.x));
+      h.setAttribute("cy", String(q.y));
+      h.setAttribute("r", "6");
+    }
+    remove(id) {
+      this.parts = this.parts.filter((p) => p.id !== id);
+      if (this.sel === id) this.sel = null;
+      this.render();
+      this.onChange(true);
+    }
+    /** LED brightness by part id */
+    setLeds(led) {
+      for (const el2 of this.svg.querySelectorAll("[data-glow]")) {
+        const v = led.get(+el2.dataset.glow) ?? 0;
+        el2.style.opacity = (v < 4e-3 ? 0 : 0.25 + 0.75 * Math.sqrt(v)).toFixed(3);
+      }
+    }
+    setWarnings(w) {
+      this.host.querySelector(".bb-warn").innerHTML = w.map((x) => `\u26A0 ${x.replace(/</g, "&lt;")}`).join("<br>");
+    }
+    render() {
+      const P = this.pts;
+      let s = "";
+      s += `<rect x="14" y="8" width="532" height="38" rx="5" class="bb-header"/>`;
+      s += `<text x="${34 + 3.5 * 26}" y="18" class="bb-t" text-anchor="middle">PMOD1A</text><text x="${34 + 11.5 * 26 + 14}" y="18" class="bb-t" text-anchor="middle">PMOD1B</text>`;
+      [...PMOD1A, ...PMOD1B].forEach((pin, i) => {
+        const q = P.get(`p:${pin}`);
+        const off = this.blocked.has(pin);
+        s += `<g class="bb-pin${off ? " off" : ""}"><title>${i < 8 ? "PMOD1A" : "PMOD1B"} ${NAMES[i % 8]}\uFF08${tr("\u8173", "pin")} ${pin}\uFF09${off ? tr("\uFF1A\u5DF2\u63A5\u6A21\u7D44", ": a module is plugged in") : ""}</title><rect x="${q.x - 6}" y="${q.y - 6}" width="12" height="12" rx="2"/><text x="${q.x}" y="${q.y + 15}" class="bb-t" text-anchor="middle">${NAMES[i % 8]}</text></g>`;
+      });
+      for (const [id, label, cls] of [["vcc", "3V3", "bb-vcc"], ["gnd", "GND", "bb-gnd"]]) {
+        const q = P.get(id);
+        s += `<g class="bb-pin ${cls}"><rect x="${q.x - 6}" y="${q.y - 6}" width="12" height="12" rx="2"/><text x="${q.x}" y="${q.y + 15}" class="bb-t" text-anchor="middle">${label}</text></g>`;
+      }
+      s += `<rect x="22" y="54" width="516" height="236" rx="6" class="bb-board"/>`;
+      s += `<line x1="30" y1="64" x2="530" y2="64" class="bb-rail-p"/><line x1="30" y1="78" x2="530" y2="78" class="bb-rail-n"/>`;
+      s += `<line x1="30" y1="264" x2="530" y2="264" class="bb-rail-p"/><line x1="30" y1="278" x2="530" y2="278" class="bb-rail-n"/>`;
+      s += `<rect x="30" y="168" width="500" height="6" class="bb-gap"/>`;
+      for (let c = 1; c <= COLS; c += 1) if (c % 5 === 0 || c === 1) s += `<text x="${40 + (c - 1) * 16}" y="96" class="bb-t" text-anchor="middle">${c}</text>`;
+      "abcdefghij".split("").forEach((r, i) => s += `<text x="30" y="${(i < 5 ? 104 + i * 14 : 186 + (i - 5) * 14) + 3}" class="bb-t" text-anchor="middle">${r}</text>`);
+      for (const [id, q] of P) {
+        if (id.startsWith("p:") || id === "vcc" || id === "gnd") continue;
+        s += `<rect x="${q.x - 3}" y="${q.y - 3}" width="6" height="6" rx="1" class="bb-hole"/>`;
+      }
+      for (const p of this.parts) {
+        const [a, b] = [P.get(p.a), P.get(p.b)];
+        if (!a || !b) continue;
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        const sel = p.id === this.sel ? " sel" : "";
+        let g = `<g data-part="${p.id}" class="bb-part${sel}">`;
+        if (p.kind === "wire") {
+          g += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${p.color}" class="bb-wire"/>`;
+        } else {
+          g += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" class="bb-leg"/>`;
+          const ang = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+          if (p.kind === "led") {
+            g += `<circle cx="${mx}" cy="${my}" r="15" fill="${p.color}" filter="url(#bbGlow)" data-glow="${p.id}" style="opacity:0"/>`;
+            g += `<g transform="translate(${mx} ${my}) rotate(${ang})"><circle r="8" class="bb-led" stroke="${p.color}"/><circle r="8" fill="${p.color}" data-glow="${p.id}" style="opacity:0"/><path d="M-3 -4 L3 0 L-3 4 Z M3 -4 V4" class="bb-sym"/></g>`;
+          } else if (p.kind === "res") {
+            g += `<g transform="translate(${mx} ${my}) rotate(${ang})"><rect x="-11" y="-4" width="22" height="8" rx="3" class="bb-res"/><path d="M-6 -4 v8 M-2 -4 v8 M4 -4 v8" class="bb-band"/></g>`;
+          } else if (p.kind === "btn") {
+            g += `<g transform="translate(${mx} ${my})"><rect x="-9" y="-9" width="18" height="18" rx="2" class="bb-btn-base"/><circle r="6" class="bb-btn${this.pressed.has(p.id) ? " down" : ""}"/></g>`;
+          } else if (p.kind === "sw") {
+            g += `<g transform="translate(${mx} ${my})"><rect x="-11" y="-7" width="22" height="14" rx="3" class="bb-sw-base"/><rect x="${p.on ? 0 : -9}" y="-5" width="9" height="10" rx="2" class="bb-sw${p.on ? " on" : ""}"/></g>`;
+          }
+        }
+        g += `<title>${this.title(p)}</title></g>`;
+        s += g;
+      }
+      if (this.first) {
+        const q = P.get(this.first);
+        s += `<circle cx="${q.x}" cy="${q.y}" r="6" class="bb-first"/>`;
+      }
+      s += `<circle class="bb-hover" r="0"/>`;
+      this.svg.innerHTML = `<defs><filter id="bbGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="4"/></filter></defs>` + s;
+    }
+    title(p) {
+      const name = (pt) => pt.startsWith("p:") ? `${tr("\u8173", "pin")} ${pt.slice(2)}` : pt === "vcc" ? "3V3" : pt === "gnd" ? "GND" : pt.startsWith("r:") ? tr(`\u96FB\u6E90\u8ECC ${pt.split(":")[1]}`, `rail ${pt.split(":")[1]}`) : pt.slice(2).replace(":", "");
+      const k = { led: "LED", res: tr("\u96FB\u963B", "resistor"), btn: tr("\u6309\u9215", "button"), sw: tr("\u958B\u95DC", "switch"), wire: tr("\u5C0E\u7DDA", "wire") };
+      return `${k[p.kind]}\uFF1A${name(p.a)} \u2192 ${name(p.b)}${p.kind === "led" ? tr("\uFF08\u6B63\u6975 \u2192 \u8CA0\u6975\uFF09", " (anode \u2192 cathode)") : ""}`;
+    }
+  };
+
   // src/ide/board.ts
   var DEFAULT_SETUP = { uart: false, baud: 115200, pmod1a: "", pmod1b: "" };
   var SLOT = { pmod1a: [4, 2, 47, 45, 3, 48, 46, 44], pmod1b: [43, 38, 34, 31, 42, 36, 32, 28] };
@@ -2731,8 +3085,8 @@ target = { type = "directory", path = "target" }
     ["vga", "VGA \u87A2\u5E55\uFF08\u4F54 1A+1B\uFF09", "VGA monitor (1A+1B)"],
     ["buzzer", "\u8702\u9CF4\u5668\uFF08\u8173 1\uFF09", "buzzer (pin 1)"]
   ];
-  var PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
-  var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
+  var PMOD1A2 = [4, 2, 47, 45, 3, 48, 46, 44];
+  var PMOD1B2 = [43, 38, 34, 31, 42, 36, 32, 28];
   var PMOD2 = [27, 25, 21, 19, 26, 23, 20, 18];
   var KEYS = { "0": 10, "1": 20, "2": 19, "3": 18 };
   var esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -2752,6 +3106,9 @@ target = { type = "directory", path = "target" }
       __publicField(this, "speed", { t: 0, c: 0, rate: 0 });
       __publicField(this, "gen", 0);
       __publicField(this, "setup", { ...DEFAULT_SETUP });
+      __publicField(this, "bb");
+      __publicField(this, "duty", /* @__PURE__ */ new Map());
+      __publicField(this, "bbIn", /* @__PURE__ */ new Map());
       __publicField(this, "vgaSeen", 0);
       __publicField(this, "term", "");
       __publicField(this, "sendQ", "");
@@ -2759,6 +3116,9 @@ target = { type = "directory", path = "target" }
       __publicField(this, "switches", /* @__PURE__ */ new Map());
       /** called when the user changes what is plugged in (the IDE saves it with the project) */
       __publicField(this, "onSetup", () => {
+      });
+      /** a new pin file from the pin table (the IDE saves it as pins.pcf and flashes again) */
+      __publicField(this, "onPins", () => {
       });
       /** called after an uploaded bitstream is on the board (the IDE shows its warnings) */
       __publicField(this, "onLoaded", () => {
@@ -2771,6 +3131,7 @@ target = { type = "directory", path = "target" }
         <select data-a="mode" title="${tr("\u71D2\u9304\u4EC0\u9EBC\uFF1A\u4F4D\u5143\u6D41\uFF1D\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u7684\u771F\u5BE6\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u6A21\u64EC\uFF09\uFF1B\u7DB2\u8868\uFF1D\u6620\u5C04\u5F8C\u7684\u7DB2\u8868\uFF08\u5FEB\uFF0C\u4E0D\u4F48\u5C40\u7E5E\u7DDA\uFF09", "What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route)")}">
           <option value="bitstream">${tr("\u4F4D\u5143\u6D41\uFF08\u771F\u5BE6\uFF09", "bitstream (real)")}</option><option value="netlist">${tr("\u7DB2\u8868\uFF08\u5FEB\u901F\uFF09", "netlist (fast)")}</option></select>
         <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u4EFB\u4F55 iCE40UP5K \u7684 .bin\uFF08\u4F8B\u5982 nextpnr + icepack \u505A\u7684\uFF1B\u4E5F\u53EF\u4EE5\u62D6\u653E\u5230\u677F\u5B50\u4E0A\uFF09", "Load any iCE40UP5K .bin (e.g. from nextpnr + icepack; or drop it on the board)")}">${tr("\u{1F4C2} .bin", "\u{1F4C2} .bin")}</button>
+        <button class="tb-btn ghost" data-a="pins" disabled title="${tr("\u8173\u4F4D\u6307\u5B9A\uFF1A\u8A2D\u8A08\u7684\u6BCF\u500B\u57E0\u63A5\u5230\u677F\u5B50\u7684\u54EA\u652F\u8173\uFF08\u5BEB\u5165 pins.pcf\uFF09", "Pin assignment: which board pin each port uses (written to pins.pcf)")}">${tr("\u{1F4CC} \u8173\u4F4D", "\u{1F4CC} Pins")}</button>
         <button class="tb-btn ghost hidden" data-a="download" title="${tr("\u4E0B\u8F09\u9019\u500B\u4F4D\u5143\u6D41\uFF08iceprog \u53EF\u4EE5\u71D2\u9032\u771F\u5BE6\u7684 iCEBreaker\uFF09", "Download this bitstream (iceprog flashes it to a real iCEBreaker)")}">\u2B07 .bin</button>
         <input type="file" accept=".bin" class="hidden" data-a="file">
         <select data-a="pace" title="${tr("\u901F\u5EA6", "Speed")}"><option value="rt">${tr("\u4E0D\u8D85\u904E\u5373\u6642", "up to real time")}</option><option value="max">${tr("\u6700\u5FEB", "fastest")}</option></select>
@@ -2783,12 +3144,15 @@ target = { type = "directory", path = "target" }
         <span class="vb-sep">\u2502</span>
         <label class="vb-chk">PMOD1A <select data-a="pmod1a">${MODULES.map((m) => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join("")}</select></label>
         <label class="vb-chk">PMOD1B <select data-a="pmod1b">${MODULES.filter((m) => m[0] !== "vga").map((m) => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join("")}</select></label>
+        <span class="vb-sep">\u2502</span>
+        <label class="vb-chk"><input type="checkbox" data-a="breadboard"> ${tr("\u{1F9EA} \u9EB5\u5305\u677F", "\u{1F9EA} Breadboard")}</label>
       </div>
       <div class="vb-main">
-        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg><div class="bb hidden"></div></div>
         <div class="vb-cards"></div>
       </div>
-      <div class="vb-foot"></div>`;
+      <div class="vb-foot"></div>
+      <div class="vb-pins hidden"></div>`;
       this.svg.innerHTML = this.drawing();
       this.q("[data-a=run]").onclick = () => this.setRunning(!this.running);
       this.q("[data-a=power]").onclick = () => this.power();
@@ -2802,7 +3166,17 @@ target = { type = "directory", path = "target" }
         e.target.value = "";
       };
       this.q("[data-a=download]").onclick = () => this.download();
-      for (const k of ["uart", "baud", "pmod1a", "pmod1b"]) this.q(`[data-a=${k}]`).addEventListener("change", () => this.setupFromUi());
+      this.q("[data-a=pins]").onclick = () => this.pinTable();
+      for (const k of ["uart", "baud", "pmod1a", "pmod1b", "breadboard"]) this.q(`[data-a=${k}]`).addEventListener("change", () => this.setupFromUi());
+      this.bb = new Breadboard(this.q(".bb"));
+      this.bb.onChange = (layout) => {
+        if (layout) {
+          this.setup.bb = this.bb.parts.map((p) => ({ ...p }));
+          this.onSetup(this.setup);
+        }
+        this.solveBB();
+        if (!this.running) this.tick(0);
+      };
       host.addEventListener("dragover", (e) => {
         e.preventDefault();
         host.classList.add("drop");
@@ -2854,6 +3228,11 @@ target = { type = "directory", path = "target" }
       this.q("[data-a=pmod1a]").value = this.setup.pmod1a;
       this.q("[data-a=pmod1b]").value = this.setup.pmod1b;
       this.q("[data-a=pmod1b]").disabled = this.setup.pmod1a === "vga";
+      this.q("[data-a=breadboard]").checked = !!this.setup.breadboard;
+      this.q(".bb").classList.toggle("hidden", !this.setup.breadboard);
+      this.bb.blocked = /* @__PURE__ */ new Set([...this.setup.pmod1a ? SLOT.pmod1a : [], ...this.setup.pmod1b || this.setup.pmod1a === "vga" ? SLOT.pmod1b : []]);
+      this.bb.setParts(this.setup.bb ?? []);
+      this.bbIn.clear();
       this.cards();
       if (this.info) this.attach();
     }
@@ -2862,7 +3241,9 @@ target = { type = "directory", path = "target" }
         uart: this.q("[data-a=uart]").checked,
         baud: +this.q("[data-a=baud]").value,
         pmod1a: this.q("[data-a=pmod1a]").value,
-        pmod1b: this.q("[data-a=pmod1b]").value
+        pmod1b: this.q("[data-a=pmod1b]").value,
+        breadboard: this.q("[data-a=breadboard]").checked,
+        bb: this.bb.parts.map((p) => ({ ...p }))
       };
       this.setSetup(s);
       this.onSetup(this.setup);
@@ -3020,6 +3401,31 @@ target = { type = "directory", path = "target" }
         this.stat("\u2717 " + String(e.message ?? e));
       }
     }
+    /** the pin assignment table: a pin per port bit */
+    pinTable() {
+      const i = this.info;
+      const box = this.q(".vb-pins");
+      if (!i?.ports) return;
+      const cur2 = /* @__PURE__ */ new Map();
+      for (const p of i.pins) {
+        const port = p.input ?? p.output;
+        if (port) cur2.set(port, p.pin);
+      }
+      const kind = (k) => ({ clock: tr("\u6642\u8108", "clock"), button: tr("\u6309\u9215", "button"), led: "LED", uart_rx: "UART RX", uart_tx: "UART TX", pmod: "PMOD" })[k] ?? k;
+      const opts = (port) => `<option value="">\u2014</option>` + i.pins.map((p) => `<option value="${p.pin}"${cur2.get(port) === p.pin ? " selected" : ""}>${p.name}\uFF08${p.pin}\uFF0C${kind(p.kind)}\uFF09</option>`).join("");
+      box.innerHTML = `<div class="vb-pins-box"><div class="vb-card-h">${tr("\u8173\u4F4D\u6307\u5B9A", "Pin assignment")}\u3000<span class="vb-dim">${tr("\u5957\u7528\u5F8C\u5BEB\u5165 pins.pcf \u4E26\u91CD\u65B0\u71D2\u9304", "Apply writes pins.pcf and flashes again")}</span></div>
+      <table>${i.ports.map((p) => `<tr><td>${esc2(p.name)}</td><td class="vb-dim">${p.dir === "in" ? tr("\u8F38\u5165", "input") : tr("\u8F38\u51FA", "output")}</td><td><select data-port="${esc2(p.name)}">${opts(p.name)}</select></td></tr>`).join("")}</table>
+      <div class="vb-pins-act"><button class="tb-btn primary" data-a="pins-ok">${tr("\u5957\u7528\u4E26\u71D2\u9304", "Apply and flash")}</button><button class="tb-btn" data-a="pins-no">${tr("\u53D6\u6D88", "Cancel")}</button></div></div>`;
+      box.classList.remove("hidden");
+      box.querySelector("[data-a=pins-no]").onclick = () => box.classList.add("hidden");
+      box.querySelector("[data-a=pins-ok]").onclick = () => {
+        const lines = [...box.querySelectorAll("select[data-port]")].filter((sel) => sel.value).map((sel) => `set_io -nowarn ${sel.dataset.port} ${sel.value}`);
+        box.classList.add("hidden");
+        this.onPins(`# pins of ${i.top} on the iCEBreaker (written by the pin table)
+${lines.join("\n")}
+`);
+      };
+    }
     download() {
       if (!this.info?.bin) return;
       const raw = atob(this.info.bin);
@@ -3047,7 +3453,9 @@ target = { type = "directory", path = "target" }
       this.q("[data-a=run]").disabled = false;
       this.q("[data-a=power]").disabled = false;
       this.q("[data-a=download]").classList.toggle("hidden", !info.bin);
+      this.q("[data-a=pins]").disabled = !info.ports;
       this.term = "";
+      this.bbIn.clear();
       this.cards();
       this.attach().then(() => this.setRunning(true));
     }
@@ -3133,8 +3541,29 @@ target = { type = "directory", path = "target" }
       }
       this.loop = window.setTimeout(() => this.tick(next), wait);
     }
+    /** the breadboard against the outputs' duties: LED brightness, warnings, the FPGA's input levels */
+    solveBB() {
+      if (!this.setup.breadboard || !this.info) return;
+      const outs = /* @__PURE__ */ new Map(), ins = /* @__PURE__ */ new Set();
+      for (const p of this.info.pins) {
+        if (this.bb.blocked.has(p.pin)) continue;
+        if (p.output) outs.set(p.pin, this.duty.get(p.pin) ?? 0);
+        if (p.input) ins.add(p.pin);
+      }
+      const r = solve(this.bb.parts, outs, ins, this.bb.pressed, tr);
+      this.bb.setLeds(r.led);
+      this.bb.setWarnings(r.warnings);
+      for (const [pin, v] of r.inputs) {
+        if (this.bbIn.get(pin) !== v) {
+          this.bbIn.set(pin, v);
+          this.pending.push([pin, v]);
+        }
+      }
+    }
     /** LED brightness and pin levels from the duty cycles */
     show(r) {
+      this.duty = new Map(r.duty);
+      this.solveBB();
       this.showPeriph(r);
       for (const [pin, duty] of r.duty) {
         const p = this.info.pins.find((x) => x.pin === pin);
@@ -3283,8 +3712,8 @@ target = { type = "directory", path = "target" }
       ${led(430, 60, 11, "#ff3b30", "LEDR_N")}
       ${led(480, 60, 37, "#34c759", "LEDG_N")}
       ${btn(440, 255, 10, "BTN_N")}
-      ${hdr(500, 120, PMOD1A, "PMOD1A", true)}
-      ${hdr(575, 120, PMOD1B, "PMOD1B", true)}
+      ${hdr(500, 120, PMOD1A2, "PMOD1A", true)}
+      ${hdr(575, 120, PMOD1B2, "PMOD1B", true)}
       ${hdr(682, 120, PMOD2, "PMOD2", true)}
       ${led(810, 115, 26, "#ff3b30", "LED1")}
       ${led(810, 65, 27, "#34c759", "LED2")}
@@ -3576,7 +4005,9 @@ target = { type = "directory", path = "target" }
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
   function fromExample(ex) {
-    return { id: uid(), name: ex.title, files: ex.files.map((f) => ({ ...f })), synth: ex.synth, pcf: ex.pcf, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
+    const files = ex.files.map((f) => ({ ...f }));
+    if (ex.pcf) files.push({ name: PCF, src: ex.pcf });
+    return { id: uid(), name: ex.title, files, synth: ex.synth, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
   }
   function blankProject(name) {
     const m = name.replace(/[^A-Za-z0-9_]/g, "").replace(/^[^A-Za-z]+/, "") || "Top";
@@ -3605,6 +4036,16 @@ target = { type = "directory", path = "target" }
   var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB;
   function file(name) {
     return proj.files.find((f) => f.name === name);
+  }
+  var PCF = "pins.pcf";
+  function pcfOf(p) {
+    return p.files.find((f) => f.name.endsWith(".pcf"))?.src;
+  }
+  function migratePcf(p) {
+    if (p.pcf !== void 0) {
+      if (!p.files.some((f) => f.name.endsWith(".pcf")) && p.pcf.trim()) p.files.push({ name: PCF, src: p.pcf });
+      delete p.pcf;
+    }
   }
   function original(name) {
     return proj.from ? examples().find((e) => e.id === proj.from)?.files.find((f) => f.name === name)?.src : void 0;
@@ -3797,9 +4238,16 @@ target = { type = "directory", path = "target" }
     let last = "";
     for (const f of Array.from(list)) {
       const src = await f.text();
+      if (f.name.endsWith(".json")) {
+        try {
+          importLab(JSON.parse(src), "");
+        } catch (e) {
+          alert(String(e.message ?? e));
+        }
+        return;
+      }
       if (f.name.endsWith(".pcf")) {
-        proj.pcf = src;
-        continue;
+        proj.files = proj.files.filter((x) => !x.name.endsWith(".pcf"));
       }
       const cur2 = file(f.name);
       if (cur2) cur2.src = src;
@@ -3870,14 +4318,63 @@ target = { type = "directory", path = "target" }
     if (!confirm(tr("\u6368\u68C4\u6240\u6709\u4FEE\u6539\uFF0C\u56DE\u5230\u7BC4\u4F8B\u539F\u59CB\u78BC\uFF1F", "Discard all changes and go back to the example's source?"))) return;
     proj.files = ex.files.map((f) => ({ ...f }));
     proj.synth = ex.synth;
-    proj.pcf = ex.pcf;
+    if (ex.pcf) proj.files.push({ name: PCF, src: ex.pcf });
     showActive();
     changed();
+  }
+  var labOf = (p) => ({ v: 1, name: projName(p), files: p.files, synth: p.synth, board: p.board, from: p.from });
+  async function gz(data, compress) {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    const stream = new Blob([bytes]).stream().pipeThrough(compress ? new CompressionStream("gzip") : new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  var b64url = (u) => {
+    let s = "";
+    for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode(...u.subarray(i, i + 32768));
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  };
+  var unb64url = (s) => {
+    const b = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+    const u = new Uint8Array(b.length);
+    for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+    return u;
+  };
+  async function shareLab() {
+    const code = b64url(await gz(JSON.stringify(labOf(proj)), true));
+    const url = `${location.origin}${location.pathname}#lab=${code}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+    }
+    prompt(tr(`\u5206\u4EAB\u9023\u7D50\uFF08${url.length} \u5B57\u5143\uFF0C\u5DF2\u8907\u88FD\u5230\u526A\u8CBC\u7C3F\uFF09\uFF1A\u958B\u555F\u5B83\u6703\u628A\u9019\u500B\u5BE6\u9A57\u532F\u5165\u6210\u65B0\u5C08\u6848`, `Share link (${url.length} characters, copied): opening it imports this lab as a new project`), url);
+  }
+  function exportLab() {
+    saveAs(`${projName(proj).replace(/[^\w.-]+/g, "_") || "lab"}.lab.json`, JSON.stringify(labOf(proj), null, 1), "application/json");
+  }
+  function importLab(l, suffix) {
+    if (!l || !Array.isArray(l.files)) throw new Error(tr("\u4E0D\u662F\u5BE6\u9A57\u6A94", "not a lab file"));
+    const files = l.files.filter((f) => typeof f.name === "string" && typeof f.src === "string");
+    const first = files.find((f) => f.name.endsWith(".veryl"))?.name ?? files[0]?.name;
+    const p = { id: uid(), name: (l.name || "lab") + suffix, files, synth: l.synth, board: l.board, from: l.from, open: first ? [first] : [], active: first };
+    projects.push(p);
+    switchProject(p.id);
+  }
+  async function labFromHash(code) {
+    try {
+      const text = new TextDecoder().decode(await gz(unb64url(code), false));
+      importLab(JSON.parse(text), tr("\uFF08\u5206\u4EAB\uFF09", " (shared)"));
+    } catch (e) {
+      alert(tr("\u7121\u6CD5\u958B\u555F\u5206\u4EAB\u7684\u5BE6\u9A57\uFF1A", "Cannot open the shared lab: ") + String(e.message ?? e));
+    }
+    try {
+      history.replaceState(null, "", location.pathname);
+    } catch {
+    }
   }
   function exportZip() {
     saveAs(
       `${projName(proj).replace(/[^\w.-]+/g, "_") || "project"}.zip`,
-      projectZip(projName(proj), proj.files, proj.pcf ? { name: `${proj.synth ?? "top"}.pcf`, src: proj.pcf } : void 0),
+      projectZip(projName(proj), proj.files),
       "application/zip"
     );
   }
@@ -4150,13 +4647,13 @@ target = { type = "directory", path = "target" }
       return;
     }
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
-    const key = JSON.stringify([files, top, proj.pcf]);
+    const key = JSON.stringify([files, top, pcfOf(proj)]);
     openFile(FLOW_TAB);
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
     if (key !== synthKey || !synth.synthesized) {
       synthKey = key;
       const target = stage && isAsicStage(stage) ? "asic" : stage && isFpgaStage(stage) ? "fpga" : void 0;
-      synth.open(files, top, proj.pcf, target ?? $2("flowTarget").value, stage);
+      synth.open(files, top, pcfOf(proj), target ?? $2("flowTarget").value, stage);
     } else if (stage) synth.showStage(stage);
     sideView("flow");
   }
@@ -4186,6 +4683,13 @@ target = { type = "directory", path = "target" }
       proj.board = s;
       persist();
     };
+    board.onPins = (text) => {
+      const f = proj.files.find((x) => x.name.endsWith(".pcf"));
+      if (f) f.src = text;
+      else proj.files.push({ name: PCF, src: text });
+      changed();
+      flashBoard();
+    };
     board.onLoaded = (info) => {
       problems = problems.filter((p) => p.from !== "run");
       for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
@@ -4205,7 +4709,7 @@ target = { type = "directory", path = "target" }
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
     setBusy(true, tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F\u2026", "\u26A1 Flashing the virtual board\u2026"));
     try {
-      const info = await board.flash(proj.files.filter((f) => f.name.endsWith(".veryl")), top, proj.pcf);
+      const info = await board.flash(proj.files.filter((f) => f.name.endsWith(".veryl")), top, pcfOf(proj));
       $2("sbTest").textContent = tr(`\u26A1 ${info.top} \u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} flashed to the virtual board`);
       problems = problems.filter((p) => p.from !== "run");
       for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
@@ -4275,6 +4779,8 @@ target = { type = "directory", path = "target" }
       { label: tr("\u65B0\u5C08\u6848", "New project"), run: newProject },
       { label: tr("\u532F\u5165 .veryl \u6A94", "Import .veryl files"), run: () => $2("importIn").click() },
       { label: tr("\u4E0B\u8F09\u5C08\u6848 .zip", "Download the project .zip"), run: exportZip },
+      { label: tr("\u{1F517} \u5206\u4EAB\u5BE6\u9A57\uFF08\u7522\u751F\u9023\u7D50\uFF09", "\u{1F517} Share the lab (link)"), run: shareLab },
+      { label: tr("\u532F\u51FA\u5BE6\u9A57\u6A94 .lab.json", "Export the lab .lab.json"), run: exportLab },
       { label: tr("\u91CD\u65B0\u547D\u540D\u5C08\u6848", "Rename project"), run: renameProject },
       { label: tr("\u9084\u539F\u6210\u7BC4\u4F8B\u539F\u59CB\u78BC", "Revert to the example source"), run: revertProject },
       { label: tr("\u522A\u9664\u5C08\u6848", "Delete project"), run: deleteProject },
@@ -4430,6 +4936,7 @@ target = { type = "directory", path = "target" }
       $2("importIn").value = "";
     };
     $2("projZip").onclick = exportZip;
+    $2("projShare").onclick = () => shareLab();
     wave = new WaveView($2("waveCanvas"), $2("wavePick"), $2("waveFilter"));
     $2("waveTop").onchange = () => wave?.set(vcds.find((v) => v.top === $2("waveTop").value)?.text ?? null);
     resizer("sideResize", "--sidew", "x", 150, () => window.innerWidth * 0.5);
@@ -4458,10 +4965,12 @@ target = { type = "directory", path = "target" }
     location.reload();
   }
   async function boot() {
+    for (const p of projects) migratePcf(p);
     initLang();
     wire();
     const hash = location.hash;
     const exId = /ex=([\w-]+)/.exec(hash)?.[1];
+    const labCode = /lab=([\w-]+)/.exec(hash)?.[1];
     if (!projects.length) projects.push(fromExample(examples().find((e) => e.id === (exId ?? "tut_blinky")) ?? examples()[0]));
     proj = projects.find((p) => p.id === load("cur", "")) ?? projects[0];
     const ex = exId ? examples().find((e) => e.id === exId) : void 0;
@@ -4480,6 +4989,7 @@ target = { type = "directory", path = "target" }
     showActive();
     renderProblems();
     demoLink();
+    if (labCode) await labFromHash(labCode);
     try {
       const t0 = performance.now();
       core = await startCore(fromBase64(VERYL_WASM_B64));

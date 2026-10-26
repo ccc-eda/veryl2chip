@@ -271,6 +271,7 @@ fn board_load(v: &Value) -> R<Value> {
     let cells = json!({ "lut": count("SB_LUT4"), "carry": count("SB_CARRY"), "ff": count("SB_DFF"), "ram": count("SB_RAM40_4K") });
     let mut info = board_info(&top, cells, &b, pcf.is_none(), None);
     info["mode"] = json!("netlist");
+    info["ports"] = port_bits(&mapped);
     BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b, Value::Null)));
     Ok(info)
 }
@@ -311,6 +312,7 @@ fn board_flash(v: &Value) -> R<Value> {
     let cells = json!({ "lut": rep.lcs, "carry": 0, "ff": 0, "ram": rep.rams, "lc": rep.lcs });
     let mut info = board_info(&top, cells, &b, pcf.is_none(), Some(&names));
     info["mode"] = json!("bitstream");
+    info["ports"] = port_bits(&mapped);
     info["fmax"] = json!(fmax);
     info["bin"] = json!(base64(&bin));
     BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
@@ -368,6 +370,14 @@ fn attach(b: &mut veryl_eda::board::Board, p: &Value) {
     if let Some(g) = p.get("vga").filter(|g| !g.is_null()) {
         b.attach_vga(g.get("hs").and_then(pin).unwrap_or(0), g.get("vs").and_then(pin).unwrap_or(0), &pins(g.get("r")), &pins(g.get("g")), &pins(g.get("b")));
     }
+}
+
+/// the design's port bits as the pin file names them: [{name, dir}]
+fn port_bits(nl: &Netlist) -> Value {
+    json!(nl.ports.iter().flat_map(|p| (0..p.bits.len()).map(move |i| json!({
+        "name": if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() },
+        "dir": dir(p.dir),
+    }))).collect::<Vec<_>>())
 }
 
 fn unbase64(s: &str) -> R<Vec<u8>> {

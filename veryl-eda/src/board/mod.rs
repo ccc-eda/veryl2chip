@@ -411,7 +411,8 @@ impl Board {
             }
         }
         let clk = pin_in.get(&clock_pin).copied();
-        if clk.is_none() { warnings.push(format!("nothing is connected to the clock pin {}", clock_pin)); }
+        // (a purely combinational design needs no clock)
+        if clk.is_none() && (!d.ffs.is_empty() || !d.rams.is_empty()) { warnings.push(format!("nothing is connected to the clock pin {}", clock_pin)); }
         let eng = Engine::new(d)?;
         let n = pin_out.len();
         Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings, prev: vec![0; n], edges: vec![0; n], uart: None, segs: vec![], vga: None })

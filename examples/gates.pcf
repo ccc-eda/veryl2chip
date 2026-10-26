@@ -1,0 +1,7 @@
+# Gates on an iCEBreaker breadboard lab: inputs on PMOD1B pins 1-2, outputs on PMOD1A pins 1-4
+set_io -nowarn i_a     43
+set_io -nowarn i_b     38
+set_io -nowarn o_and   4
+set_io -nowarn o_or    2
+set_io -nowarn o_xor   47
+set_io -nowarn o_not_a 45

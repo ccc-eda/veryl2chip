@@ -1,0 +1,58 @@
+// 麵包板實驗：邏輯閘
+// 兩個開關（接在 PMOD1B）當輸入 A、B，四顆 LED（接在 PMOD1A）顯示 AND、OR、XOR、NOT A。
+// 沒有時脈：純組合邏輯，輸入一變，輸出馬上跟著變。
+module Gates (
+    i_a    : input  logic,
+    i_b    : input  logic,
+    o_and  : output logic,
+    o_or   : output logic,
+    o_xor  : output logic,
+    o_not_a: output logic,
+) {
+    assign o_and   = i_a & i_b;
+    assign o_or    = i_a | i_b;
+    assign o_xor   = i_a ^ i_b;
+    assign o_not_a = ~i_a;
+}
+
+// 真值表：四種輸入組合逐一檢查（測試用的時脈只用來等一拍）
+#[test(test_gates)]
+module TestGates {
+    inst clk: $tb::clock_gen;
+
+    var a  : logic;
+    var b  : logic;
+    var y0 : logic;
+    var y1 : logic;
+    var y2 : logic;
+    var y3 : logic;
+
+    inst dut: Gates (
+        i_a    : a ,
+        i_b    : b ,
+        o_and  : y0,
+        o_or   : y1,
+        o_xor  : y2,
+        o_not_a: y3,
+    );
+
+    initial {
+        a = 0;
+        b = 0;
+        clk.next();
+        $assert(y0 == 0 && y1 == 0 && y2 == 0 && y3 == 1, "0 0");
+        a = 0;
+        b = 1;
+        clk.next();
+        $assert(y0 == 0 && y1 == 1 && y2 == 1 && y3 == 1, "0 1");
+        a = 1;
+        b = 0;
+        clk.next();
+        $assert(y0 == 0 && y1 == 1 && y2 == 1 && y3 == 0, "1 0");
+        a = 1;
+        b = 1;
+        clk.next();
+        $assert(y0 == 1 && y1 == 1 && y2 == 0 && y3 == 0, "1 1");
+        $finish();
+    }
+}

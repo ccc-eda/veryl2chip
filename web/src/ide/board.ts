@@ -6,6 +6,8 @@
 import type { VFile } from '../api';
 import type { Core } from '../client';
 import { tr } from '../i18n';
+import { Part, solve } from './bbmodel';
+import { Breadboard } from './breadboard';
 
 interface PinInfo { pin: number; name: string; kind: string; level: boolean; input: string | null; output: string | null }
 interface LoadInfo {
@@ -15,6 +17,8 @@ interface LoadInfo {
   mode: 'bitstream' | 'netlist' | 'bin';
   fmax?: number;
   bin?: string;
+  /** the design's port bits (not for an uploaded bitstream) */
+  ports?: { name: string; dir: 'in' | 'out' }[];
 }
 interface RunResult {
   cycle: number; window: number; duty: [number, number][]; evals: number;
@@ -24,7 +28,7 @@ interface RunResult {
 }
 
 /** what is plugged into the board: the USB terminal and a module on each PMOD */
-export interface BoardSetup { uart: boolean; baud: number; pmod1a: string; pmod1b: string }
+export interface BoardSetup { uart: boolean; baud: number; pmod1a: string; pmod1b: string; breadboard?: boolean; bb?: Part[] }
 export const DEFAULT_SETUP: BoardSetup = { uart: false, baud: 115200, pmod1a: '', pmod1b: '' };
 
 /** PMOD pins 1-4, 7-10 */
@@ -64,6 +68,7 @@ export class VirtualBoard {
         <select data-a="mode" title="${tr('燒錄什麼：位元流＝佈局繞線後的真實位元流（解碼回電路模擬）；網表＝映射後的網表（快，不佈局繞線）', 'What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route)')}">
           <option value="bitstream">${tr('位元流（真實）', 'bitstream (real)')}</option><option value="netlist">${tr('網表（快速）', 'netlist (fast)')}</option></select>
         <button class="tb-btn ghost" data-a="upload" title="${tr('載入任何 iCE40UP5K 的 .bin（例如 nextpnr + icepack 做的；也可以拖放到板子上）', 'Load any iCE40UP5K .bin (e.g. from nextpnr + icepack; or drop it on the board)')}">${tr('📂 .bin', '📂 .bin')}</button>
+        <button class="tb-btn ghost" data-a="pins" disabled title="${tr('腳位指定：設計的每個埠接到板子的哪支腳（寫入 pins.pcf）', 'Pin assignment: which board pin each port uses (written to pins.pcf)')}">${tr('📌 腳位', '📌 Pins')}</button>
         <button class="tb-btn ghost hidden" data-a="download" title="${tr('下載這個位元流（iceprog 可以燒進真實的 iCEBreaker）', 'Download this bitstream (iceprog flashes it to a real iCEBreaker)')}">⬇ .bin</button>
         <input type="file" accept=".bin" class="hidden" data-a="file">
         <select data-a="pace" title="${tr('速度', 'Speed')}"><option value="rt">${tr('不超過即時', 'up to real time')}</option><option value="max">${tr('最快', 'fastest')}</option></select>
@@ -76,12 +81,15 @@ export class VirtualBoard {
         <span class="vb-sep">│</span>
         <label class="vb-chk">PMOD1A <select data-a="pmod1a">${MODULES.map(m => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join('')}</select></label>
         <label class="vb-chk">PMOD1B <select data-a="pmod1b">${MODULES.filter(m => m[0] !== 'vga').map(m => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join('')}</select></label>
+        <span class="vb-sep">│</span>
+        <label class="vb-chk"><input type="checkbox" data-a="breadboard"> ${tr('🧪 麵包板', '🧪 Breadboard')}</label>
       </div>
       <div class="vb-main">
-        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg><div class="bb hidden"></div></div>
         <div class="vb-cards"></div>
       </div>
-      <div class="vb-foot"></div>`;
+      <div class="vb-foot"></div>
+      <div class="vb-pins hidden"></div>`;
     this.svg.innerHTML = this.drawing();
     this.q('[data-a=run]').onclick = () => this.setRunning(!this.running);
     this.q('[data-a=power]').onclick = () => this.power();
@@ -89,7 +97,14 @@ export class VirtualBoard {
     this.q('[data-a=upload]').onclick = () => this.q<HTMLInputElement>('[data-a=file]').click();
     this.q<HTMLInputElement>('[data-a=file]').onchange = e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) this.loadBin(f); (e.target as HTMLInputElement).value = ''; };
     this.q('[data-a=download]').onclick = () => this.download();
-    for (const k of ['uart', 'baud', 'pmod1a', 'pmod1b']) this.q(`[data-a=${k}]`).addEventListener('change', () => this.setupFromUi());
+    this.q('[data-a=pins]').onclick = () => this.pinTable();
+    for (const k of ['uart', 'baud', 'pmod1a', 'pmod1b', 'breadboard']) this.q(`[data-a=${k}]`).addEventListener('change', () => this.setupFromUi());
+    this.bb = new Breadboard(this.q<HTMLElement>('.bb'));
+    this.bb.onChange = layout => {
+      if (layout) { this.setup.bb = this.bb.parts.map(p => ({ ...p })); this.onSetup(this.setup); }
+      this.solveBB();
+      if (!this.running) this.tick(0);
+    };
     host.addEventListener('dragover', e => { e.preventDefault(); host.classList.add('drop'); });
     host.addEventListener('dragleave', () => host.classList.remove('drop'));
     host.addEventListener('drop', e => { e.preventDefault(); host.classList.remove('drop'); const f = e.dataTransfer?.files?.[0]; if (f) this.loadBin(f); });
@@ -111,6 +126,9 @@ export class VirtualBoard {
   }
 
   private setup: BoardSetup = { ...DEFAULT_SETUP };
+  private bb!: Breadboard;
+  private duty = new Map<number, number>();
+  private bbIn = new Map<number, number>();
   private vgaSeen = 0;
   private term = '';
   private sendQ = '';
@@ -128,6 +146,12 @@ export class VirtualBoard {
     this.q<HTMLSelectElement>('[data-a=pmod1a]').value = this.setup.pmod1a;
     this.q<HTMLSelectElement>('[data-a=pmod1b]').value = this.setup.pmod1b;
     this.q<HTMLSelectElement>('[data-a=pmod1b]').disabled = this.setup.pmod1a === 'vga';
+    this.q<HTMLInputElement>('[data-a=breadboard]').checked = !!this.setup.breadboard;
+    this.q<HTMLElement>('.bb').classList.toggle('hidden', !this.setup.breadboard);
+    // header pins under a PMOD module cannot take wires
+    this.bb.blocked = new Set([...(this.setup.pmod1a ? SLOT.pmod1a : []), ...(this.setup.pmod1b || this.setup.pmod1a === 'vga' ? SLOT.pmod1b : [])]);
+    this.bb.setParts(this.setup.bb ?? []);
+    this.bbIn.clear();
     this.cards();
     if (this.info) this.attach();
   }
@@ -138,6 +162,8 @@ export class VirtualBoard {
       baud: +this.q<HTMLSelectElement>('[data-a=baud]').value,
       pmod1a: this.q<HTMLSelectElement>('[data-a=pmod1a]').value,
       pmod1b: this.q<HTMLSelectElement>('[data-a=pmod1b]').value,
+      breadboard: this.q<HTMLInputElement>('[data-a=breadboard]').checked,
+      bb: this.bb.parts.map(p => ({ ...p })),
     };
     this.setSetup(s);
     this.onSetup(this.setup);
@@ -280,6 +306,30 @@ export class VirtualBoard {
     }
   }
 
+  /** a new pin file from the pin table (the IDE saves it as pins.pcf and flashes again) */
+  onPins: (pcf: string) => void = () => {};
+
+  /** the pin assignment table: a pin per port bit */
+  private pinTable(): void {
+    const i = this.info;
+    const box = this.q<HTMLElement>('.vb-pins');
+    if (!i?.ports) return;
+    const cur = new Map<string, number>();
+    for (const p of i.pins) { const port = p.input ?? p.output; if (port) cur.set(port, p.pin); }
+    const kind = (k: string) => ({ clock: tr('時脈', 'clock'), button: tr('按鈕', 'button'), led: 'LED', uart_rx: 'UART RX', uart_tx: 'UART TX', pmod: 'PMOD' } as Record<string, string>)[k] ?? k;
+    const opts = (port: string) => `<option value="">—</option>` + i.pins.map(p => `<option value="${p.pin}"${cur.get(port) === p.pin ? ' selected' : ''}>${p.name}（${p.pin}，${kind(p.kind)}）</option>`).join('');
+    box.innerHTML = `<div class="vb-pins-box"><div class="vb-card-h">${tr('腳位指定', 'Pin assignment')}　<span class="vb-dim">${tr('套用後寫入 pins.pcf 並重新燒錄', 'Apply writes pins.pcf and flashes again')}</span></div>
+      <table>${i.ports.map(p => `<tr><td>${esc(p.name)}</td><td class="vb-dim">${p.dir === 'in' ? tr('輸入', 'input') : tr('輸出', 'output')}</td><td><select data-port="${esc(p.name)}">${opts(p.name)}</select></td></tr>`).join('')}</table>
+      <div class="vb-pins-act"><button class="tb-btn primary" data-a="pins-ok">${tr('套用並燒錄', 'Apply and flash')}</button><button class="tb-btn" data-a="pins-no">${tr('取消', 'Cancel')}</button></div></div>`;
+    box.classList.remove('hidden');
+    box.querySelector<HTMLButtonElement>('[data-a=pins-no]')!.onclick = () => box.classList.add('hidden');
+    box.querySelector<HTMLButtonElement>('[data-a=pins-ok]')!.onclick = () => {
+      const lines = [...box.querySelectorAll<HTMLSelectElement>('select[data-port]')].filter(sel => sel.value).map(sel => `set_io -nowarn ${sel.dataset.port} ${sel.value}`);
+      box.classList.add('hidden');
+      this.onPins(`# pins of ${i.top} on the iCEBreaker (written by the pin table)\n${lines.join('\n')}\n`);
+    };
+  }
+
   /** called after an uploaded bitstream is on the board (the IDE shows its warnings) */
   onLoaded: (info: LoadInfo) => void = () => {};
 
@@ -308,7 +358,9 @@ export class VirtualBoard {
     this.q('[data-a=run]').disabled = false;
     this.q('[data-a=power]').disabled = false;
     this.q('[data-a=download]').classList.toggle('hidden', !info.bin);
+    this.q('[data-a=pins]').disabled = !info.ports;
     this.term = '';
+    this.bbIn.clear();
     this.cards();
     this.attach().then(() => this.setRunning(true));
   }
@@ -387,8 +439,27 @@ export class VirtualBoard {
 
   private lastFrame = 0;
 
+  /** the breadboard against the outputs' duties: LED brightness, warnings, the FPGA's input levels */
+  private solveBB(): void {
+    if (!this.setup.breadboard || !this.info) return;
+    const outs = new Map<number, number>(), ins = new Set<number>();
+    for (const p of this.info.pins) {
+      if (this.bb.blocked.has(p.pin)) continue;
+      if (p.output) outs.set(p.pin, this.duty.get(p.pin) ?? 0);
+      if (p.input) ins.add(p.pin);
+    }
+    const r = solve(this.bb.parts, outs, ins, this.bb.pressed, tr);
+    this.bb.setLeds(r.led);
+    this.bb.setWarnings(r.warnings);
+    for (const [pin, v] of r.inputs) {
+      if (this.bbIn.get(pin) !== v) { this.bbIn.set(pin, v); this.pending.push([pin, v]); }
+    }
+  }
+
   /** LED brightness and pin levels from the duty cycles */
   private show(r: RunResult): void {
+    this.duty = new Map(r.duty);
+    this.solveBB();
     this.showPeriph(r);
     for (const [pin, duty] of r.duty) {
       const p = this.info!.pins.find(x => x.pin === pin);

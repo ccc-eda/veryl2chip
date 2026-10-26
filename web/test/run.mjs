@@ -275,6 +275,41 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   }
 }
 
+// breadboard model (src/ide/bbmodel.ts): LEDs, resistors, pull-downs, floating inputs, shorts, buttons
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/bbmodel.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const bp = path.join(tmp, 'bbmodel.cjs');
+  fs.writeFileSync(bp, js);
+  const { solve } = createRequire(import.meta.url)(bp);
+  const problems = [];
+  const P = (id, kind, a, b, extra = {}) => ({ id, kind, a, b, ...extra });
+  // pin 4 (duty 0.5) -> LED -> resistor -> GND rail -> GND
+  let parts = [P(1, 'wire', 'p:4', 'h:2:a'), P(2, 'led', 'h:2:c', 'h:3:c'), P(3, 'res', 'h:3:e', 'r:top-:3'), P(4, 'wire', 'gnd', 'r:top-:1')];
+  let r = solve(parts, new Map([[4, 0.5]]), new Set(), new Set());
+  if (Math.abs(r.led.get(2) - 0.5) > 1e-9 || r.warnings.length) problems.push(`LED with resistor: ${r.led.get(2)} ${r.warnings}`);
+  // the same LED straight to GND: lit, but no current limit
+  r = solve([P(1, 'wire', 'p:4', 'h:2:a'), P(2, 'led', 'h:2:c', 'h:3:c'), P(3, 'wire', 'h:3:e', 'gnd')], new Map([[4, 1]]), new Set(), new Set());
+  if (r.led.get(2) !== 1 || !r.warnings.some((w) => w.includes('LED'))) problems.push('LED without resistor: ' + r.warnings);
+  // switch from 3V3 to input pin 43 with a pull-down
+  const sw = (on, pulldown) => [P(1, 'wire', 'vcc', 'r:top+:30'), P(2, 'sw', 'r:top+:20', 'h:20:a', { on }), P(3, 'wire', 'h:20:b', 'p:43'),
+    ...(pulldown ? [P(4, 'res', 'h:20:e', 'r:top-:21'), P(5, 'wire', 'gnd', 'r:top-:1')] : [])];
+  for (const [on, want] of [[false, 0], [true, 1]]) {
+    r = solve(sw(on, true), new Map(), new Set([43]), new Set());
+    if (r.inputs.get(43) !== want || r.warnings.length) problems.push(`switch ${on}: ${r.inputs.get(43)} ${r.warnings}`);
+  }
+  r = solve(sw(false, false), new Map(), new Set([43]), new Set());
+  if (!r.warnings.some((w) => w.includes('43'))) problems.push('floating input not reported');
+  // a short: output pin 4 wired to GND
+  r = solve([P(1, 'wire', 'p:4', 'h:5:a'), P(2, 'wire', 'h:5:b', 'gnd')], new Map([[4, 1]]), new Set(), new Set());
+  if (!r.warnings.some((w) => /短路|Short/.test(w))) problems.push('short not reported');
+  // a button pulls input 38 up only while it is held
+  const btn = [P(1, 'wire', 'vcc', 'h:8:a'), P(2, 'btn', 'h:8:b', 'h:10:b'), P(3, 'wire', 'h:10:a', 'p:38'), P(4, 'res', 'h:10:e', 'gnd')];
+  if (solve(btn, new Map(), new Set([38]), new Set()).inputs.get(38) !== 0 || solve(btn, new Map(), new Set([38]), new Set([2])).inputs.get(38) !== 1) problems.push('button');
+  if (problems.length) bad++;
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} bb       LED + resistor, missing resistor, pull-down switch, floating input, short, button${problems.length ? ': ' + problems.join(' | ') : ''}`);
+}
+
 // IDE highlighter: lossless (tags removed = source) on every example, and
 // keywords / numbers / comments tagged
 {
@@ -304,9 +339,9 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   fs.writeFileSync(ip, js);
   const { hans } = createRequire(import.meta.url)(ip);
   const srcDir = path.join(dist, '../src');
-  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts'];
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts'];
   const han = /[\u3400-\u9fff]/;
-  const trad = new Set('學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
+  const trad = new Set('極製複貼麵學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
   let pairs = 0, badEn = [], badHans = [];
   for (const f of files) {
     const src = fs.readFileSync(path.join(srcDir, f), 'utf8');
