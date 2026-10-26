@@ -4434,7 +4434,7 @@ ${lines.join("\n")}
     demoLink();
   }
   function demoLink() {
-    $2("demoLink").href = "index.html" + (proj.from ? "#ex=" + proj.from : "");
+    $2("demoLink").href = "demo.html" + (proj.from ? "#ex=" + proj.from : "");
   }
   function openExample(ex) {
     const have = projects.find((p2) => p2.from === ex.id);
@@ -5292,6 +5292,13 @@ int main(void) {
       await check();
       const st = /stage=(\w+)/.exec(hash)?.[1];
       if (st) runSynth(st);
+      else if (/[#&]synth=1/.test(hash)) {
+        if (/[#&]target=asic/.test(hash)) {
+          $2("flowTarget").value = "asic";
+          fillStages();
+        }
+        runSynth();
+      }
       if (/[#&]run=1/.test(hash)) runTests();
       if (/[#&]verify=1/.test(hash)) verifyAll();
       if (/[#&]board=1/.test(hash)) flashBoard();

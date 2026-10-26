@@ -1,7 +1,7 @@
 # veryl2chip
 **English** | [繁體中文](README.tw.md) | [简体中文](README.cn.md)
 
-**Try it online** (no install): [demo page](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html)
+**Try it online** (no install): [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [demo page](https://ccc-eda.github.io/veryl2chip/web/dist/demo.html)
 
 **Tutorial from scratch** (Traditional Chinese, course material): [write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker](tutorial/README.tw.md); **virtual lab course** (no board needed): [8 labs on the virtual iCEBreaker](tutorial/labs.tw.md)
 
@@ -17,7 +17,25 @@ bitstream) and an ASIC flow (standard cells, placement, routing, timing), all wr
 | [`examples/`](examples/) | Veryl project with the example designs, incl. a single-cycle RV32I CPU |
 
 ## Web environment
-Open `web/dist/index.html` in a browser. It needs no server and no install, and also works from `file://`.
+Open `web/dist/index.html` in a browser: a VS Code style IDE. It needs no server and no install, and also works from `file://`.
+
+- activity bar and side bar: project files and module outline, example library, tests, help
+- tabbed editor with Veryl syntax highlighting and live syntax checking (problems panel, gutter markers, squiggles)
+- projects kept in the browser: several projects, new / rename / delete / import files, `.zip` export
+- ▶ tests (RTL or gate-level), ✔ full verification: every testbench on RTL and on the three synthesized netlists
+- synthesis: the title bar's **FPGA / ASIC** and **stage** menus (① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦
+  or ASIC ④–⑨, last the FPGA vs ASIC comparison) show that stage in the flow tab, which has just a breadcrumb and icon buttons
+  (ⓘ about the stage, wires, annealing animation, ⬇ downloads, zoom); the numbers are in the status bar
+- bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)
+- ⚡ **virtual iCEBreaker**: flash the design onto a drawn board; LEDs light (brightness from the duty cycle) and buttons can be pressed, with the same pins as the real board (it runs the real placed-and-routed bitstream, decoded back into a circuit and simulated cycle by cycle, about 0.3–0.4× real time for small designs; any iCE40UP5K `.bin`, e.g. from nextpnr, can be dropped on it); plug in a USB serial terminal and PMOD modules (8 LEDs, 8 switches, a 2-digit 7-segment display, a VGA monitor, a buzzer) and a **breadboard** (LEDs, resistors, buttons, switches, wires on the PMOD pins, with warnings for shorts, missing series resistors and floating inputs); a pin table writes the project's `pins.pcf`; a lab (files, pins, modules, breadboard) can be shared as a link
+- **C programs on your own RISC-V**: `RvSoc` (`examples/src/rvsoc.veryl`, a multi-cycle RV32IMA + Zicsr with interrupts, its registers and 8 KB of memory in block RAM, LEDs, buttons, switches, UART, timer) runs C compiled in the browser by veryl-eda's own compiler (`src/rv/`: a C subset, assembler, instruction-set simulator); ⚡ puts the program into the block RAMs (only the program changes: no synthesis or place and route), the board's CPU mode runs it in real time, the gate-level SoC at about 1%; a VGA text mode (`RvVgaBoard`, 40 × 30 characters); a preemptive multithreading kernel in C (timer interrupts, ecall, atomics); examples in the C programs group
+- interface in Traditional Chinese, Simplified Chinese or English (menu in the title bar; the browser's language by default)
+
+`index.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests, `&board=1` flashes the virtual board.
+The IDE used to be `ide.html`: that page now forwards to `index.html` (with the `#…`), so old links keep working.
+
+### Demo page
+`web/dist/demo.html` is the original, simpler page on the same core (interface in Traditional Chinese only):
 
 - **Source**: example projects (several files each, incl. UART, FIFO and VGA) in an editor; edits are kept in the browser
   (localStorage). Files can be added (with a module + testbench template), deleted or imported, and the project
@@ -33,26 +51,7 @@ Open `web/dist/index.html` in a browser. It needs no server and no install, and 
     ⑧ Timing (STA) → ⑨ Power + IR Drop. Downloads: standard-cell Verilog and DEF.
   - ⇄ FPGA vs ASIC: both placements side by side and a table (cells, area, wiring, Fmax, energy, power).
 
-(The demo page's interface is in Traditional Chinese; the IDE below also has Simplified Chinese and English.)
-
-The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&target=asic`.
-
-### IDE
-`web/dist/ide.html` is a fuller, VS Code style IDE on the same core (the demo page above stays as it is):
-
-- activity bar and side bar: project files and module outline, example library, tests, help
-- tabbed editor with Veryl syntax highlighting and live syntax checking (problems panel, gutter markers, squiggles)
-- projects kept in the browser: several projects, new / rename / delete / import files, `.zip` export
-- ▶ tests (RTL or gate-level), ✔ full verification: every testbench on RTL and on the three synthesized netlists
-- synthesis: the title bar's **FPGA / ASIC** and **stage** menus (① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦
-  or ASIC ④–⑨, last the FPGA vs ASIC comparison) show that stage in the flow tab, which has just a breadcrumb and icon buttons
-  (ⓘ about the stage, wires, annealing animation, ⬇ downloads, zoom); the numbers are in the status bar
-- bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)
-- ⚡ **virtual iCEBreaker**: flash the design onto a drawn board; LEDs light (brightness from the duty cycle) and buttons can be pressed, with the same pins as the real board (it runs the real placed-and-routed bitstream, decoded back into a circuit and simulated cycle by cycle, about 0.3–0.4× real time for small designs; any iCE40UP5K `.bin`, e.g. from nextpnr, can be dropped on it); plug in a USB serial terminal and PMOD modules (8 LEDs, 8 switches, a 2-digit 7-segment display, a VGA monitor, a buzzer) and a **breadboard** (LEDs, resistors, buttons, switches, wires on the PMOD pins, with warnings for shorts, missing series resistors and floating inputs); a pin table writes the project's `pins.pcf`; a lab (files, pins, modules, breadboard) can be shared as a link
-- **C programs on your own RISC-V**: `RvSoc` (`examples/src/rvsoc.veryl`, a multi-cycle RV32IMA + Zicsr with interrupts, its registers and 8 KB of memory in block RAM, LEDs, buttons, switches, UART, timer) runs C compiled in the browser by veryl-eda's own compiler (`src/rv/`: a C subset, assembler, instruction-set simulator); ⚡ puts the program into the block RAMs (only the program changes: no synthesis or place and route), the board's CPU mode runs it in real time, the gate-level SoC at about 1%; a VGA text mode (`RvVgaBoard`, 40 × 30 characters); a preemptive multithreading kernel in C (timer interrupts, ecall, atomics); examples in the C programs group
-- interface in Traditional Chinese, Simplified Chinese or English (menu in the title bar; the browser's language by default)
-
-`ide.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests.
+The URL hash selects an example and stage, e.g. `demo.html#ex=soc&synth=1&target=asic` (the IDE accepts the same hash).
 
 Build and test everything from the repository root:
 

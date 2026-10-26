@@ -8,7 +8,7 @@
 寫 Veryl → testbench 模擬 → 合成 → 佈局繞線 → 位元流 → ⚡ 虛擬板（LED、按鈕、麵包板、終端機、七段、VGA）
 ```
 
-- 線上 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>（不用安裝任何東西，離線也能用：`web/dist/ide.html`）
+- 線上 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>（不用安裝任何東西，離線也能用：`web/dist/index.html`）
 - 每個實驗的「開啟」連結會直接載入範例並燒進虛擬板（網址後面的 `#ex=…&board=1`）。
 - 做完的實驗可以用 **分享實驗** 產生一個連結（程式碼、腳位、麵包板接線都在網址裡），交作業或請助教看都用它。
 
@@ -41,7 +41,7 @@
 
 ## 實驗 1：Blinky
 
-開啟：[第 1 課 Blinky](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=tut_blinky&board=1)　講義：[教學第 2–8 節](README.tw.md#2-第-1-課blinky)
+開啟：[第 1 課 Blinky](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=tut_blinky&board=1)　講義：[教學第 2–8 節](README.tw.md#2-第-1-課blinky)
 
 **檢查點**
 - 擴充板的 5 顆 LED 以二進位往上數，LED5（最高位）大約 0.7 秒亮、0.7 秒暗。
@@ -51,7 +51,7 @@
 
 ## 實驗 2：跑馬燈
 
-開啟：[第 2 課 跑馬燈](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=tut_knight&board=1)　講義：[教學第 9 節](README.tw.md#9-第-2-課跑馬燈)
+開啟：[第 2 課 跑馬燈](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=tut_knight&board=1)　講義：[教學第 9 節](README.tw.md#9-第-2-課跑馬燈)
 
 **檢查點**
 - 一顆燈在 5 顆 LED 之間來回跑。
@@ -61,7 +61,7 @@
 
 ## 實驗 3：邏輯閘（麵包板）
 
-開啟：[邏輯閘](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=lab_gates&board=1)
+開啟：[邏輯閘](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=lab_gates&board=1)
 
 麵包板已經接好：兩個開關（PMOD1B 腳 1、2）各接一個**下拉電阻**到 GND；四顆 LED（PMOD1A 腳 1–4）各串一個**限流電阻**。
 四顆 LED 分別是 A AND B、A OR B、A XOR B、NOT A。
@@ -78,7 +78,7 @@
 
 ## 實驗 4：按一下加一
 
-開啟：[按一下加一](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=lab_counter&board=1)（`examples/src/button_counter.veryl`）
+開啟：[按一下加一](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=lab_counter&board=1)（`examples/src/button_counter.veryl`）
 
 按鈕先經過兩級同步器，再和「上一拍」比較：**這一拍是 1、上一拍是 0** 才算按下（上升緣），只維持一個時脈。
 如果直接寫 `if btn { cnt = cnt + 1; }`，按住 0.1 秒就會加一百二十萬次。
@@ -96,7 +96,7 @@
 
 ## 實驗 5：紅綠燈（有限狀態機）
 
-開啟：[紅綠燈狀態機](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=lab_traffic&board=1)（`examples/src/traffic.veryl`）
+開啟：[紅綠燈狀態機](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=lab_traffic&board=1)（`examples/src/traffic.veryl`）
 
 三個狀態 GREEN → YELLOW → RED → GREEN，各有自己亮幾秒（綠 5、黃 1、紅 4）。
 `tick` 數到一秒（`SEC` 個時脈）就讓 `secs` 加一，`secs` 到了這個狀態的時間就換下一個狀態。
@@ -118,7 +118,7 @@
 
 ## 實驗 6：七段顯示器
 
-開啟：[七段顯示器計數](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=sevenseg&board=1)（`examples/src/sevenseg.veryl`）
+開啟：[七段顯示器計數](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=sevenseg&board=1)（`examples/src/sevenseg.veryl`）
 
 兩位數的七段顯示器只有一組 a–g 腳和一隻「選位數」的腳：設計快速地輪流點亮個位和十位（多工掃描），人眼看起來兩位同時亮。
 
@@ -131,7 +131,7 @@
 
 ## 實驗 7：UART
 
-開啟：[第 3 課 UART 回聲](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=tut_uart&board=1)　講義：[教學第 10 節](README.tw.md#10-第-3-課uart)
+開啟：[第 3 課 UART 回聲](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=tut_uart&board=1)　講義：[教學第 10 節](README.tw.md#10-第-3-課uart)
 
 **檢查點**
 - 終端機先出現 `Hi!`；輸入 `hello, World` 按 Enter，收到 `HELLO, wORLD`。
@@ -141,7 +141,7 @@
 
 ## 實驗 8：VGA
 
-開啟：[VGA 640×480](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=vga&board=1)（`examples/src/vga.veryl`）
+開啟：[VGA 640×480](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=vga&board=1)（`examples/src/vga.veryl`）
 
 VGA 是一個像素接一個像素送出去的：水平計數器數到 800（640 個可見像素 + 遮沒），垂直計數器數到 525。
 HSYNC、VSYNC 在遮沒區間拉低一段時間，螢幕靠它們找到每一行、每一張畫面的開頭。虛擬板的 VGA 螢幕（PMOD1A + 1B）一個時脈收一個像素。
@@ -188,7 +188,7 @@ RV32I 沒有乘除法指令，`*` `/` `%` 由函式庫用軟體做（看組合�
 
 ## C1：Hello
 
-開啟：[C：Hello](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_hello&board=1)
+開啟：[C：Hello](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_hello&board=1)
 
 **檢查點**：終端機出現問候語；LED 每 0.2 秒加一；在終端機打字，收到大寫。
 
@@ -196,7 +196,7 @@ RV32I 沒有乘除法指令，`*` `/` `%` 由函式庫用軟體做（看組合�
 
 ## C2：跑馬燈（軟體版）
 
-開啟：[C：跑馬燈](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_knight&board=1)
+開啟：[C：跑馬燈](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_knight&board=1)
 
 和實驗 2 的硬體跑馬燈做一樣的事，這次用軟體：`LED = 1 << pos`，按鈕的上升緣用 `b & ~prev` 偵測。
 
@@ -204,31 +204,31 @@ RV32I 沒有乘除法指令，`*` `/` `%` 由函式庫用軟體做（看組合�
 
 ## C3：猜數字
 
-開啟：[C：猜數字](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_guess&board=1)
+開啟：[C：猜數字](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_guess&board=1)
 
 **檢查點**：在終端機玩一局。**動手改**：猜太多次（超過 7 次）就公布答案。
 
 ## C4：七段顯示器（軟體掃描）
 
-開啟：[C：七段顯示器](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_sevenseg&board=1)
+開啟：[C：七段顯示器](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_sevenseg&board=1)
 
 和實驗 6 比較：那裡由硬體掃描，這裡由程式每 2 ms 輪流點亮個位和十位。**動手改**：把 `delay_ms(2)` 改成 `delay_ms(200)`，看看會怎樣。
 
 ## C5：蜂鳴器音樂
 
-開啟：[C：蜂鳴器音樂](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_music&board=1)
+開啟：[C：蜂鳴器音樂](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_music&board=1)
 
 一個頻率 f 的聲音 = 每 1/(2f) 秒把腳位反相一次。**動手改**：加上你喜歡的曲子（Do = 262、Re = 294、Mi = 330 Hz …）。
 
 ## C6：開關
 
-開啟：[C：開關](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_switches&board=1)
+開啟：[C：開關](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_switches&board=1)
 
 **檢查點**：撥開關，LED 跟著變，終端機印出二進位與十六進位。**動手改**：把開關的值當成兩個 4 位元的數，在終端機印出相加的結果。
 
 ## C7：VGA 文字模式
 
-開啟：[C：VGA 文字模式](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_vga&board=1)（硬體：`examples/src/rvvga.veryl` 的 **RvVgaBoard**）
+開啟：[C：VGA 文字模式](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_vga&board=1)（硬體：`examples/src/rvvga.veryl` 的 **RvVgaBoard**）
 
 這次的 SoC 多了一個周邊 **VgaText**：40 × 30 個字元的 VGA 畫面。字元和字型都放在 block RAM，
 CPU 用 `vga_init()` 把字型載進去，之後 `vga_goto(欄, 列)`、`vga_puts("...")`、`vga_printf(...)`、`vga_color(前景, 背景)` 就會出現在螢幕上（顏色是 0xRGB，例如 0xff0 黃色）。
@@ -243,7 +243,7 @@ CPU 用 `vga_init()` 把字型載進去，之後 `vga_goto(欄, 列)`、`vga_put
 
 ## C8：多執行緒（搶佔式核心）
 
-開啟：[C：多執行緒](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_threads&board=1)
+開啟：[C：多執行緒](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=c_threads&board=1)
 
 RvCore 不只是 RV32I：它還有乘除法（M）、原子指令（A）、CSR 與 machine mode 的**陷阱**。`threads.c` 用這些做出一個小小的作業系統核心：
 

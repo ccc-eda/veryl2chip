@@ -46,5 +46,5 @@ echo
 echo "== built in $((SECONDS - t0)) s:"
 echo "   veryl-sim/target/release/veryl-sim"
 echo "   veryl-eda/target/release/veryl-eda"
-$WEB && echo "   web/dist/index.html, web/dist/ide.html"
+$WEB && echo "   web/dist/index.html (IDE), web/dist/demo.html"
 exit 0

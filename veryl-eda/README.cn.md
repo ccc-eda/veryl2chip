@@ -6,7 +6,7 @@ Veryl 的逻辑综合、FPGA 与 ASIC 流程（类似 yosys `synth` / `synth_ice
 可再映射成 iCE40 的 `SB_LUT4` / `SB_CARRY` / `SB_DFF*`，再用**自研布局布线**（`--pnr veryl`）或 nextpnr-ice40 产生 `.asc`，icepack 产生比特流；
 或用 `--asic` 映射到自制的 **vlib 标准单元库**，做行式布局、全局布线与静态时序分析。
 
-[veryl2chip](https://github.com/ccc-eda/veryl2chip) 的一部分（在线 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>）。
+[veryl2chip](https://github.com/ccc-eda/veryl2chip) 的一部分（在线 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>）。
 
     cargo install veryl2chip-eda        # 安装 `veryl-eda` 命令
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]

@@ -4,7 +4,7 @@
 An event-driven simulator for [Veryl](https://veryl-lang.org/) testbenches, in the spirit of Icarus Verilog
 (`iverilog` + `vvp`), using [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) as its front end.
 
-Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>).
+Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/index.html>).
 
     cargo install veryl2chip-sim        # installs the `veryl-sim` command
     veryl-sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...

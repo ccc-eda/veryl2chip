@@ -67,7 +67,7 @@ jobs:
           npm run build
           npm test
 
-      # the site keeps the old URL layout: <site>/web/dist/index.html, ide.html
+      # the site keeps the old URL layout: <site>/web/dist/index.html (the IDE), demo.html, ide.html (redirect)
       - name: Pages content
         if: github.event_name != 'pull_request'
         run: |
@@ -76,9 +76,9 @@ jobs:
           cat > _site/index.html <<'HTML'
           <!DOCTYPE html>
           <meta charset="utf-8">
-          <meta http-equiv="refresh" content="0; url=web/dist/ide.html">
+          <meta http-equiv="refresh" content="0; url=web/dist/index.html">
           <title>veryl2chip</title>
-          <a href="web/dist/ide.html">veryl2chip IDE</a> · <a href="web/dist/index.html">demo</a>
+          <a href="web/dist/index.html">veryl2chip IDE</a> · <a href="web/dist/demo.html">demo</a>
           HTML
 
       - name: Setup Pages

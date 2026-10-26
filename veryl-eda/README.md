@@ -7,7 +7,7 @@ elaborates a Veryl design into a **flat gate-level netlist**, which can be mappe
 routed into an `.asc` by **its own place & route** (`--pnr veryl`) or nextpnr-ice40, then packed into a bitstream; or, with `--asic`, mapped to the
 home-made **vlib standard-cell library**, placed in rows, routed and timed.
 
-Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>).
+Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/index.html>).
 
     cargo install veryl2chip-eda        # installs the `veryl-eda` command
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]

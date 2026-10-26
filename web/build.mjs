@@ -4,7 +4,7 @@
 //   app.js       TypeScript UI bundled by esbuild into one classic script
 //   api.cjs      the same core API for the Node tests
 //   ide.js       the IDE page (M11), same core
-//   index.html, style.css, ide.html, ide.css
+//   index.html (the IDE), ide.css, demo.html (the demo page), style.css, ide.html (redirects to index.html)
 // Usage: node build.mjs [--skip-wasm]
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -148,5 +148,5 @@ await esbuild.build({ entryPoints: [path.join(here, 'src/main.ts')], bundle: tru
 await esbuild.build({ entryPoints: [path.join(here, 'src/ide/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'ide.js'), logLevel: 'warning',
   define: { WORKER_SRC: JSON.stringify(workerSrc) } });
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
-for (const f of ['index.html', 'style.css', 'ide.html', 'ide.css']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
-console.log('app.js, ide.js, api.cjs, index.html, style.css, ide.html, ide.css');
+for (const f of ['index.html', 'ide.css', 'demo.html', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
+console.log('app.js, ide.js, api.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');

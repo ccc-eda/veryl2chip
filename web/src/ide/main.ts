@@ -340,7 +340,7 @@ function switchProject(id: string): void {
 }
 
 function demoLink(): void {
-  $<HTMLAnchorElement>('demoLink').href = 'index.html' + (proj.from ? '#ex=' + proj.from : '');
+  $<HTMLAnchorElement>('demoLink').href = 'demo.html' + (proj.from ? '#ex=' + proj.from : '');
 }
 
 function openExample(ex: Example): void {
@@ -1187,6 +1187,11 @@ async function boot(): Promise<void> {
     await check();
     const st = /stage=(\w+)/.exec(hash)?.[1];
     if (st) runSynth(st);
+    // the old demo page's links (index.html#ex=…&synth=1&target=asic)
+    else if (/[#&]synth=1/.test(hash)) {
+      if (/[#&]target=asic/.test(hash)) { $<HTMLSelectElement>('flowTarget').value = 'asic'; fillStages(); }
+      runSynth();
+    }
     if (/[#&]run=1/.test(hash)) runTests();
     if (/[#&]verify=1/.test(hash)) verifyAll();
     if (/[#&]board=1/.test(hash)) flashBoard();

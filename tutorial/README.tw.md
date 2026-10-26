@@ -52,7 +52,7 @@
 
 **路線 A：瀏覽器（免安裝，建議課堂使用）**
 
-打開 veryl2chip IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>
+打開 veryl2chip IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>
 
 所有工具（模擬器、合成、佈局繞線、位元流產生器）都編譯成 WebAssembly 在瀏覽器裡執行，不需要伺服器。
 左邊「📚 範例庫」最上面的「教學」分組就是本教學的兩個設計。

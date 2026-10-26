@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>veryl2chip — Veryl 模擬與 FPGA/ASIC 流程</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>veryl2chip <small>Veryl → Chip</small></h1>
+  <select id="example" title="範例專案"></select>
+  <select id="top" title="模擬的頂層模組（預設：全部 #[test]）"></select>
+  <select id="simMode" title="模擬的對象：RTL，或把範例的合成頂層換成合成後的閘級網表（同一個 testbench）">
+    <option value="rtl">RTL</option>
+    <option value="opt">閘級：通用閘</option>
+    <option value="ice40">閘級：iCE40</option>
+    <option value="asic">閘級：標準元件</option>
+  </select>
+  <button id="run" disabled>▶ 模擬</button>
+  <button id="synth" disabled title="合成 → FPGA / ASIC 流程">⚙ 合成</button>
+  <span id="status">載入 WebAssembly…</span>
+  <a id="ideLink" href="index.html" title="功能完整的 IDE：專案、即時檢查、測試矩陣、各階段檢視">⧉ IDE</a>
+</header>
+<main>
+  <section class="col">
+    <h2>① 來源</h2>
+    <div class="panel grow">
+      <div id="tabs"></div>
+      <div id="edwrap"><pre id="gutter"></pre><textarea id="editor" spellcheck="false" wrap="off"></textarea></div>
+      <div class="row small">
+        <span id="exnote"></span>
+        <span class="spacer"></span>
+        <button id="newFile" class="small" title="新增一個 .veryl 檔（含模組與 testbench 範本）">＋ 新檔</button>
+        <button id="delFile" class="small" title="刪除目前的檔案">🗑 刪除</button>
+        <button id="importBtn" class="small" title="從電腦加入 .veryl 檔">⇪ 匯入</button>
+        <input id="importIn" type="file" accept=".veryl" multiple class="hidden">
+        <button id="zipOut" class="small" title="下載整個專案（Veryl.toml + src/*.veryl），可直接用 veryl build / veryl test">⬇ .zip</button>
+        <button id="revert" class="small" title="捨棄修改，回到範例原始碼">還原範例</button>
+      </div>
+    </div>
+  </section>
+  <section class="col">
+    <h2>② 執行結果</h2>
+    <div id="banner" class="hidden"></div>
+    <div class="panel grow">
+      <div class="rtabs"><button id="tabLog" class="cur">模擬輸出</button><button id="tabWave">波形</button>
+        <select id="waveTop" class="hidden" title="testbench"></select><span class="spacer"></span><span class="small" id="waveHint"></span></div>
+      <pre id="log"></pre>
+      <div id="wavePane" class="hidden">
+        <div id="waveSide"><input id="waveFilter" placeholder="篩選訊號…"><div id="wavePick"></div></div>
+        <div id="waveWrap"><canvas id="waveCanvas"></canvas></div>
+      </div>
+    </div>
+    <div class="panel" id="msgpanel">
+      <h3>錯誤 / 訊息</h3>
+      <pre id="msg"></pre>
+    </div>
+  </section>
+</main>
+<div id="synOverlay" class="hidden">
+  <div id="synBar">
+    <h1 id="synTitle">合成 → FPGA（iCE40UP5K）</h1>
+    <div id="synStats"></div>
+    <span class="spacer"></span>
+    <label class="inl">頂層 <select id="synTop"></select></label>
+    <button id="synClose">關閉 ✕</button>
+  </div>
+  <div id="synPipe">
+    <select id="synTarget" title="後端"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select>
+    <div id="synChips"></div>
+    <span class="spacer"></span>
+    <button id="synAnim" class="hidden">▶ 退火動畫</button>
+    <button id="synAsc" class="hidden" title="下載 IceStorm .asc（icepack 可轉成位元流）">⬇ .asc</button>
+    <button id="synPcf" class="hidden" title="下載腳位指定">⬇ .pcf</button>
+    <button id="synBin" class="hidden" title="下載位元流（iceprog 可燒錄；與 icepack 輸出相同）">⬇ .bin</button>
+    <button id="synV" class="hidden" title="下載標準元件網表（Verilog，含 vlib 元件模型）">⬇ .v</button>
+    <button id="synDef" class="hidden" title="下載佈局（DEF）">⬇ .def</button>
+    <button id="synEdges">⌁ 連線：開</button>
+  </div>
+  <div id="synInfo"></div>
+  <div id="synBody">
+    <div id="synCanvasWrap">
+      <canvas id="synCanvas"></canvas>
+      <div id="synZoom"><button id="synZin">＋</button><button id="synZout">－</button><button id="synZfit">⤢</button></div>
+    </div>
+    <div id="synSide"></div>
+  </div>
+  <div id="synFoot">滾輪縮放、拖曳平移、雙擊重設；點方塊看細節。</div>
+</div>
+<script src="wasm.js"></script>
+<script src="examples.js"></script>
+<script src="chipdb.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

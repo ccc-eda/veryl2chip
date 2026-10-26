@@ -3,7 +3,7 @@
 
 以 [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) 为前端、类似 Icarus Verilog (`iverilog` + `vvp`) 的 Veryl 事件驱动仿真器。
 
-[veryl2chip](https://github.com/ccc-eda/veryl2chip) 的一部分（在线 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>）。
+[veryl2chip](https://github.com/ccc-eda/veryl2chip) 的一部分（在线 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>）。
 
     cargo install veryl2chip-sim        # 安装 `veryl-sim` 命令
     veryl-sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
