@@ -52,6 +52,14 @@ The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&targe
 
 `ide.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests.
 
+Build and test everything from the repository root:
+
+```sh
+./build.sh          # veryl-sim, veryl-eda (release) and web/dist (wasm + pages); --no-web for the Rust tools only
+./test.sh           # veryl-sim, cargo test of veryl-eda, the tutorial's flow, npm test (what CI runs)
+./test.sh --full    # + veryl-eda/test.sh: formal equivalence with yosys, FPGA flows (needs OSS CAD Suite)
+```
+
 Install the command-line tools from crates.io (`veryl-sim`, `veryl-eda`):
 
 ```sh

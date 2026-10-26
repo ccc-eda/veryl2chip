@@ -6,6 +6,11 @@ EDA for Veryl HDL. Root has no build system; the real code lives in two independ
 ## Commands
 
 ```sh
+./build.sh                         # whole project: veryl-sim, veryl-eda (release), web/dist (wasm + TS); --no-web
+./test.sh                          # veryl-sim, cargo test (veryl-eda), tutorial/check.sh, npm test; --full adds veryl-eda/test.sh
+```
+
+```sh
 cd veryl-sim
 cargo build --release
 ./test.sh                          # runs examples/counter.veryl through the simulator
