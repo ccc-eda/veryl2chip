@@ -37,6 +37,6 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M17 | 多週期 RISC-V SoC `RvSoc`（`examples/src/rvsoc.veryl`）：暫存器檔（兩份同步讀取 RAM）與 8 KB 記憶體（四個位元組通道）在 block RAM，記憶體映射的 LED / 按鈕 / 開關 / UART / 計時器，載入埠；`RvBoard` 1844 LUT + 20 BRAM、Fmax 13.3 MHz | `TestRvSoc` 跑 rv32i_test.S（官方 veryl test、veryl-sim、三種閘級模擬）；`RvSocSmall` 形式等價 |
 | M18 | 程式放在 block RAM：`MEM_SLOT`、`bram::set_mem_init`、`--program`、`pnr::patch_ram`（只改寫 `.ram_data`）；wasm `board_program` 換程式不重新合成 | 改寫後的位元流 = 帶程式佈局繞線的位元流，在虛擬板上跑完 ISA 測試 |
 | M19 | C 編譯器（`src/rv/cc.rs`，C 子集 → RV32I 組合語言）、組譯器、指令集模擬器、執行期函式庫（printf…）；CLI `--cc`；IDE：`.c` 檔、C / 組合語言上色、即時錯誤、組合語言分頁、ISS 執行 | 測試程式與主機 C 編譯器輸出相同；C 程式在閘級 RvBoard 上的序列埠輸出與 ISS 相同 |
-| M20 | C 程式範例（Hello、跑馬燈、猜數字、七段、蜂鳴器、開關）、虛擬板的 CPU 模式（ISS 驅動同樣的腳位與周邊，即時速度）、講義第二部分 | npm test：所有 C 範例、網表 / 位元流 / CPU 三種模式的問候、回聲與換程式 |
+| M20 | C 程式範例（Hello、跑馬燈、猜數字、七段、蜂鳴器、開關、VGA）、VGA 文字模式 `VgaText` / `RvVgaBoard`（40 × 30 字元，字型由程式載入 block RAM）、虛擬板的 CPU 模式（ISS 驅動同樣的腳位與周邊，即時速度）、講義第二部分 | npm test：所有 C 範例、網表 / 位元流 / CPU 三種模式的問候、回聲與換程式、VGA 畫面；cargo test：閘級 RvVgaBoard 的 VGA 畫面與 CPU 模式逐像素相同 |
 
 每個 M 完成就 commit。

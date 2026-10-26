@@ -63,6 +63,8 @@ the bitstream therefore only proves the instructions this program uses.
 (two `SyncRam` copies for two read ports) and memory are synchronous-read RAMs, so they become `SB_RAM40_4K`. `RvSoc` adds an 8 KB
 memory of four byte lanes (`RvMem`), memory-mapped peripherals (LEDs 0x1000_0000, buttons + switches 0x…04, UART data / status 0x…08 / 0x…0C, a cycle timer 0x…10)
 and a loader port for testbenches; `RvBoard` is the iCEBreaker top (`examples/rvsoc.pcf`): 1844 LUTs + 20 block RAMs, Fmax 13.3 MHz.
+`VgaText` (`examples/src/rvvga.veryl`) adds a 40 × 30 character VGA screen on the SoC's external write bus (characters and font in block RAM, a two-cycle pipeline);
+`RvVgaBoard` = 1961 LUTs + 26 block RAMs. Block RAM inference accepts memories whose unused data bits were already removed.
 `TestRvSoc` loads `rv32i_test.S` (data at 0x300, `examples/src/rvsoc_rom.veryl` from `examples/sw/build.sh`), runs it and checks its 41 results;
 `veryl-eda/examples/rvsoc_small.veryl` (a 64-byte memory) is proven equivalent to `veryl build` by `test.sh`.
 

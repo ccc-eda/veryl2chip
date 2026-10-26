@@ -138,6 +138,22 @@ impl Vga {
     }
 }
 
+/// The frame VgaText (examples/src/rvvga.veryl) shows, laid out like the monitor records the
+/// hardware's (800 × 525 from the HSYNC / VSYNC edges: the visible 640 × 480 at x 144, y 35)
+pub fn text_frame(vram: &[u8], font: &[u8], colors: u32) -> (usize, usize, Vec<u16>) {
+    let (w, h) = (800usize, 525usize);
+    let (fg, bg) = ((colors & 0xfff) as u16, ((colors >> 16) & 0xfff) as u16);
+    let mut px = vec![0u16; w * h];
+    for y in 0..480 {
+        for x in 0..640 {
+            let c = vram[(y / 16) * 40 + x / 16] as usize & 127;
+            let bits = font[c * 8 + (y / 2) % 8];
+            px[(y + 35) * w + x + 144] = if (bits << ((x / 2) % 8)) & 0x80 != 0 { fg } else { bg };
+        }
+    }
+    (w, h, px)
+}
+
 /// run-length encoding of 12-bit pixels: (color, count) pairs as little-endian u16s
 pub fn rle(px: &[u16]) -> Vec<u8> {
     let mut out = vec![];

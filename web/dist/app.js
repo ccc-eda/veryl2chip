@@ -1125,6 +1125,7 @@
   }
 
   // src/synth/model.ts
+  var cellCount = (nl) => nl.n ?? nl.cells.length;
   var OUTS = /* @__PURE__ */ new Set(["Y", "Q", "O", "CO"]);
   var isOut = (pin) => OUTS.has(pin) || pin.startsWith("RDATA");
   var isFF = (t) => t.includes("DFF") || t === "SB_RAM40_4K";
@@ -1623,7 +1624,7 @@
       const lev = this.netView("map").lev;
       const items = [
         `${tr("\u9802\u5C64", "Top")} <b>${r.top}</b>`,
-        `${tr("\u9598", "Gates")} <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`,
+        `${tr("\u9598", "Gates")} <b>${cellCount(r.raw)}</b> \u2192 <b>${cellCount(r.opt)}</b>`,
         `LUT4 <b>${luts}</b>`,
         `CARRY <b>${carry}</b>`,
         `DFF <b>${ffs}</b>`,
@@ -1645,7 +1646,7 @@
     }
     asicStats(ms) {
       const r = this.res;
-      const items = [`${tr("\u9802\u5C64", "Top")} <b>${r.top}</b>`, `${tr("\u9598", "Gates")} <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`];
+      const items = [`${tr("\u9802\u5C64", "Top")} <b>${r.top}</b>`, `${tr("\u9598", "Gates")} <b>${cellCount(r.raw)}</b> \u2192 <b>${cellCount(r.opt)}</b>`];
       const a = this.asic;
       if (a) {
         const ffs = a.map.cells.filter((c) => c.t.includes("DFF")).length;
@@ -1712,6 +1713,22 @@
         this.drawAsic(true);
         this.info(this.asicReport(key));
         this.side(this.asicSide(key));
+        return;
+      }
+      if ((key === "raw" || key === "opt") && r[key].n !== void 0) {
+        const nl = r[key];
+        this.view.set({ boxes: [], lines: [], texts: [] });
+        this.side(document.createElement("div"));
+        const types = Object.entries(nl.types ?? {}).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${shortType(t)} ${n}`).join("  ");
+        this.info([
+          key === "raw" ? "\u2461 Logic Netlist" : tr("\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09", "\u2462 Tech-indep Syn (technology-independent optimization)"),
+          tr(
+            `${nl.n} \u500B\u5143\u4EF6\uFF0C\u592A\u591A\u4E86\uFF0C\u4E0D\u756B\u51FA\u4F86\uFF1A\u5728\u9019\u500B\u968E\u6BB5\u8A18\u61B6\u9AD4\u9084\u662F\u4E00\u500B\u500B\u6B63\u53CD\u5668\u548C\u8B80\u53D6\u591A\u5DE5\u5668\uFF0C\u5230\u4E86 \u2463 \u624D\u8B8A\u6210 block RAM\uFF08SB_RAM40_4K\uFF09\u3002`,
+            `${nl.n} cells: too many to draw. At this stage the memories are still flip-flops and read multiplexers; \u2463 turns them into block RAM (SB_RAM40_4K).`
+          ),
+          "",
+          types
+        ]);
         return;
       }
       if (isNet(key)) {
@@ -2217,14 +2234,15 @@
         tr(`\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64\uFF0CDFF ${ffs} \u500B ${big}`, `combinational depth ${v.lev.depth}, ${ffs} DFFs ${big}`)
       ];
       if (key === "opt") {
-        const d = r.raw.cells.length - r.opt.cells.length;
-        const rf = r.raw.cells.filter((c) => c.t.includes("DFF")).length;
+        const nraw = cellCount(r.raw);
+        const d = nraw - r.opt.cells.length;
+        const rf = r.raw.n !== void 0 ? Object.entries(r.raw.types ?? {}).filter(([t]) => t.includes("DFF")).reduce((x, [, n]) => x + n, 0) : r.raw.cells.filter((c) => c.t.includes("DFF")).length;
         return [
           tr("\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09", "\u2462 Tech-indep Syn (technology-independent optimization)"),
           tr("\u4F9D\u62D3\u64B2\u9806\u5E8F\u91CD\u5EFA\u6574\u500B\u7DB2\u8868\uFF1A\u5E38\u6578\u50B3\u64AD\u3001structural hashing\u3001x&!x \u7B49\u5316\u7C21\u3001\u7D44\u5408\u8FF4\u8DEF\u6AA2\u67E5\u3001\u79FB\u9664\u4E0D\u5F71\u97FF\u8F38\u51FA\u7684\u908F\u8F2F\uFF1B", "The whole netlist is rebuilt in topological order: constant propagation, structural hashing, simplifications such as x&!x, combinational loop check, removal of logic that does not reach an output;"),
           tr("\u53CD\u8986\u300C\u8B49\u660E\u5E38\u6578\u7BC0\u9EDE\u300D\uFF08\u96A8\u6A5F\u6A21\u64EC\u627E\u5019\u9078\u3001\u5C0D \u226416 \u500B\u8F38\u5165\u7AAE\u8209\u8B49\u660E\uFF09\u4E26\u79FB\u9664\u5361\u5728 0 \u7684\u66AB\u5B58\u5668\u3002", "repeatedly proving constant nodes (candidates from random simulation, exhaustive proof over \u226416 inputs) and removing registers stuck at 0."),
           "",
-          tr(`${r.raw.cells.length} \u2192 ${v.nl.cells.length} \u500B\u5143\u4EF6\uFF08\u5C11\u4E86 ${d}\uFF0C${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%\uFF09\uFF1BDFF ${rf} \u2192 ${ffs}`, `${r.raw.cells.length} \u2192 ${v.nl.cells.length} cells (${d} fewer, ${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%); DFF ${rf} \u2192 ${ffs}`),
+          tr(`${nraw} \u2192 ${v.nl.cells.length} \u500B\u5143\u4EF6\uFF08\u5C11\u4E86 ${d}\uFF0C${(100 * d / Math.max(1, nraw)).toFixed(1)}%\uFF09\uFF1BDFF ${rf} \u2192 ${ffs}`, `${nraw} \u2192 ${v.nl.cells.length} cells (${d} fewer, ${(100 * d / Math.max(1, nraw)).toFixed(1)}%); DFF ${rf} \u2192 ${ffs}`),
           `${types}`,
           tr(`\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`, `combinational depth ${v.lev.depth} ${big}`)
         ];

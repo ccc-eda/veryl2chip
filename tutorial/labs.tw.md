@@ -24,7 +24,7 @@
 | 6 | 七段顯示器 | 時序 → 七段顯示器計數 | 七段顯示器模組 | 多工掃描、解碼器 |
 | 7 | UART | 教學 → 第 3 課 | USB 終端機 | 序列通訊、移位暫存器 |
 | 8 | VGA | 周邊 → VGA | VGA 螢幕 | 視訊時序、計數器比較 |
-| C1–C6 | C 程式（第二部分） | C 程式 → … | 終端機、LED、按鈕、開關、七段、蜂鳴器 | 在自己做的 RISC-V 上跑 C |
+| C1–C7 | C 程式（第二部分） | C 程式 → … | 終端機、LED、按鈕、開關、七段、蜂鳴器、VGA | 在自己做的 RISC-V 上跑 C |
 
 每個實驗都照同樣的四步走，**順序不能跳**：
 
@@ -181,7 +181,7 @@ C 程式 → 編譯器（veryl-eda 自己寫的，在瀏覽器裡）→ RISC-V �
 | `UART_DATA` / `UART_STATUS` | 0x1000_0008 / 0C | 序列埠（通常用 `putchar` / `getchar` / `printf`） |
 | `TIMER` | 0x1000_0010 | 重設後經過的時脈數（12 MHz） |
 
-函式：`printf`（`%d %u %x %c %s`，可設寬度）、`putchar`、`getchar`、`kbhit`、`puts`、`read_line`、`delay_ms`、`delay_us`、`millis`、`rand`、`srand`、`abs`、`atoi`、`strlen`、`strcmp`、`strcpy`、`memset`、`memcpy`。
+函式：`printf` / `sprintf`（`%d %u %x %c %s`，可設寬度）、`putchar`、`getchar`、`kbhit`、`puts`、`read_line`、`delay_ms`、`delay_us`、`millis`、`rand`、`srand`、`abs`、`atoi`、`strlen`、`strcmp`、`strcpy`、`memset`、`memcpy`；VGA（RvVgaBoard）：`vga_init`、`vga_clear`、`vga_color`、`vga_goto`、`vga_putc`、`vga_puts`、`vga_printf`。
 C 的子集：`char`（無號）/ `short` / `int` / `unsigned`、指標、陣列、所有運算子、`if` / `while` / `for` / `do` / `switch`；沒有 `struct`、浮點數。
 RV32I 沒有乘除法指令，`*` `/` `%` 由函式庫用軟體做（看組合語言就會看到 `call __mulsi3`）。
 
@@ -224,6 +224,19 @@ RV32I 沒有乘除法指令，`*` `/` `%` 由函式庫用軟體做（看組合�
 開啟：[C：開關](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_switches&board=1)
 
 **檢查點**：撥開關，LED 跟著變，終端機印出二進位與十六進位。**動手改**：把開關的值當成兩個 4 位元的數，在終端機印出相加的結果。
+
+## C7：VGA 文字模式
+
+開啟：[C：VGA 文字模式](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html#ex=c_vga&board=1)（硬體：`examples/src/rvvga.veryl` 的 **RvVgaBoard**）
+
+這次的 SoC 多了一個周邊 **VgaText**：40 × 30 個字元的 VGA 畫面。字元和字型都放在 block RAM，
+CPU 用 `vga_init()` 把字型載進去，之後 `vga_goto(欄, 列)`、`vga_puts("...")`、`vga_printf(...)`、`vga_color(前景, 背景)` 就會出現在螢幕上（顏色是 0xRGB，例如 0xff0 黃色）。
+
+**檢查點**：螢幕上有框和標題；開機時間每秒更新；在終端機打的字出現在畫面下半部。
+
+**動手改**：做一個「打字練習」：畫面上方出現一個字，在終端機打對了就換下一個並計分。
+
+**思考題**：VgaText 讀字元 RAM、再讀字型 RAM，各要一拍，所以 HSYNC、VSYNC 也要延遲兩拍（看 `rvvga.veryl` 的 `hs1`、`hs2`）。如果不延遲，畫面會怎樣？
 
 **進階**：打開 **C：檢視組合語言**，找出 `printf` 被呼叫的地方，數數看一個 `for` 迴圈編成了幾道指令。再把 RvSoc 的硬體改一改（例如加一個暫存器），用 ⚡ 位元流模式確認程式還是能跑。
 

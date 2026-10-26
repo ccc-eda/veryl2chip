@@ -1,0 +1,265 @@
+// ==========================================
+// VGA 文字模式：40×30 個字元（8×8 字型放大兩倍成 16×16，畫面 640×480），
+// 字元、字型與顏色都由 CPU 寫入 block RAM。需要 vga.veryl（VgaTiming）與 sync_ram.veryl。
+//
+// 寫入（RvSoc 的外部匯流排，i_waddr = 位元組位址的 bit 15..2）：
+//   0x1000_2000 + 4·i       第 i 格的字元（i = 列 × 40 + 欄）
+//   0x1000_4000 + 4·(c·8+r) 字元 c 的第 r 列（bit 7 在左）
+//   0x1000_6000             顏色：bit 11..0 = 前景 RGB（各 4 bit），bit 27..16 = 背景
+// 管線：x、y → 字元 RAM（1 拍）→ 字型 RAM（1 拍）→ 像素，所以同步訊號也延遲 2 拍。
+// ==========================================
+module VgaText #(
+    param H_VIS : u32 = 640,
+    param H_FP  : u32 = 16 ,
+    param H_SYNC: u32 = 96 ,
+    param H_BP  : u32 = 48 ,
+    param V_VIS : u32 = 480,
+    param V_FP  : u32 = 10 ,
+    param V_SYNC: u32 = 2  ,
+    param V_BP  : u32 = 33 ,
+) (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    i_we   : input  logic    ,
+    i_waddr: input  logic<14>,
+    i_wdata: input  logic<32>,
+    o_hsync: output logic    ,
+    o_vsync: output logic    ,
+    o_r    : output logic<4> ,
+    o_g    : output logic<4> ,
+    o_b    : output logic<4> ,
+) {
+    var hs   : logic    ;
+    var vs   : logic    ;
+    var video: logic    ;
+    var x    : logic<10>;
+    var y    : logic<10>;
+
+    inst t: VgaTiming #(
+        H_VIS : H_VIS ,
+        H_FP  : H_FP  ,
+        H_SYNC: H_SYNC,
+        H_BP  : H_BP  ,
+        V_VIS : V_VIS ,
+        V_FP  : V_FP  ,
+        V_SYNC: V_SYNC,
+        V_BP  : V_BP  ,
+    ) (
+        i_clk  : i_clk,
+        i_rst  : i_rst,
+        o_hsync: hs   ,
+        o_vsync: vs   ,
+        o_video: video,
+        o_x    : x    ,
+        o_y    : y    ,
+        o_rgb  : _    ,
+    );
+
+    let sel: logic<3> = i_waddr[13:11];
+
+    // 第幾格：列 × 40 + 欄（40 = 32 + 8）
+    let col : logic<6>  = x[9:4];
+    let row : logic<5>  = y[8:4];
+    let cidx: logic<11> = {1'b0, row, 5'd0} + {3'd0, row, 3'd0} + {5'd0, col};
+
+    var ch  : logic<8>;
+    var bits: logic<8>;
+    var y1  : logic<3>; // 字型的第幾列（延遲 1 拍，配合字元 RAM）
+    var x1  : logic<3>;
+    var x2  : logic<3>; // 字型的第幾行（延遲 2 拍）
+    var v1  : logic   ;
+    var v2  : logic   ;
+    var hs1 : logic   ;
+    var hs2 : logic   ;
+    var vs1 : logic   ;
+    var vs2 : logic   ;
+    var fg  : logic<12>;
+    var bg  : logic<12>;
+
+    inst u_chars: SyncRam #(ADDR_W: 11, DATA_W: 8) (
+        i_clk  : i_clk                   ,
+        i_we   : i_we && sel == 3'd1      ,
+        i_waddr: i_waddr[10:0]           ,
+        i_wdata: i_wdata[7:0]            ,
+        i_re   : 1'b1                    ,
+        i_raddr: cidx                    ,
+        o_rdata: ch                      ,
+    );
+    inst u_font: SyncRam #(ADDR_W: 10, DATA_W: 8) (
+        i_clk  : i_clk                   ,
+        i_we   : i_we && sel == 3'd2      ,
+        i_waddr: i_waddr[9:0]            ,
+        i_wdata: i_wdata[7:0]            ,
+        i_re   : 1'b1                    ,
+        i_raddr: {ch[6:0], y1}           ,
+        o_rdata: bits                    ,
+    );
+
+    always_ff {
+        if_reset {
+            y1  = 0;
+            x1  = 0;
+            x2  = 0;
+            v1  = 0;
+            v2  = 0;
+            hs1 = 1;
+            hs2 = 1;
+            vs1 = 1;
+            vs2 = 1;
+            fg  = 12'hfff;
+            bg  = 12'h000;
+        } else {
+            y1  = y[3:1];
+            x1  = x[3:1];
+            x2  = x1;
+            v1  = video;
+            v2  = v1;
+            hs1 = hs;
+            hs2 = hs1;
+            vs1 = vs;
+            vs2 = vs1;
+            if i_we && sel == 3'd3 {
+                fg = i_wdata[11:0];
+                bg = i_wdata[27:16];
+            }
+        }
+    }
+
+    let shifted: logic<8>  = bits << x2;
+    let color  : logic<12> = if shifted[7] ? fg : bg;
+
+    assign o_hsync = hs2;
+    assign o_vsync = vs2;
+    assign o_r     = if v2 ? color[11:8] : 4'd0;
+    assign o_g     = if v2 ? color[7:4] : 4'd0;
+    assign o_b     = if v2 ? color[3:0] : 4'd0;
+}
+
+// FPGA 頂層：RvSoc + VGA 文字模式（PMOD1A + 1B 的 VGA 模組），LED 用擴充板的 LED1–5
+module RvVgaBoard (
+    i_clk  : input  clock   ,
+    i_rst  : input  reset   ,
+    i_btn  : input  logic<3>,
+    i_rx   : input  logic   ,
+    o_tx   : output logic   ,
+    o_led  : output logic<5>,
+    o_hsync: output logic   ,
+    o_vsync: output logic   ,
+    o_r    : output logic<4>,
+    o_g    : output logic<4>,
+    o_b    : output logic<4>,
+) {
+    var led  : logic<8> ;
+    var xwe  : logic    ;
+    var xaddr: logic<14>;
+    var xdata: logic<32>;
+
+    inst u_soc: RvSoc (
+        i_clk     : i_clk,
+        i_rst     : i_rst,
+        i_ld      : 1'b0 ,
+        i_ld_we   : 1'b0 ,
+        i_ld_addr : 11'd0,
+        i_ld_wdata: 32'd0,
+        o_ld_rdata: _    ,
+        i_btn     : i_btn,
+        i_sw      : 8'd0 ,
+        i_rx      : i_rx ,
+        o_tx      : o_tx ,
+        o_led     : led  ,
+        o_xwe     : xwe  ,
+        o_xaddr   : xaddr,
+        o_xdata   : xdata,
+    );
+    assign o_led = led[4:0];
+
+    inst u_vga: VgaText (
+        i_clk  : i_clk  ,
+        i_rst  : i_rst  ,
+        i_we   : xwe    ,
+        i_waddr: xaddr  ,
+        i_wdata: xdata  ,
+        o_hsync: o_hsync,
+        o_vsync: o_vsync,
+        o_r    : o_r    ,
+        o_g    : o_g    ,
+        o_b    : o_b    ,
+    );
+}
+
+// 測試：縮小的畫面（32×16 可見，總共 40×20，也就是 2 × 1 個字元格）；
+// 兩格都放 'A'，前景紅、背景藍：一張畫面裡紅色像素 = 'A' 的點數 × 4 × 2，其餘可見像素是藍色
+// （寫入畫面用到的每一格和整個字型：模擬時沒寫過的 RAM 是 x，FPGA 上則是 0）
+#[test(test_vga_text)]
+module TestVgaText {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var we   : logic    ;
+    var waddr: logic<14>;
+    var wdata: logic<32>;
+    var hs   : logic    ;
+    var vs   : logic    ;
+    var r    : logic<4> ;
+    var g    : logic<4> ;
+    var b    : logic<4> ;
+    var nred : logic<16>;
+    var nblue: logic<16>;
+
+    inst dut: VgaText #(
+        H_VIS : 32,
+        H_FP  : 2 ,
+        H_SYNC: 2 ,
+        H_BP  : 4 ,
+        V_VIS : 16,
+        V_FP  : 1 ,
+        V_SYNC: 1 ,
+        V_BP  : 2 ,
+    ) (
+        i_clk  : clk  ,
+        i_rst  : rst  ,
+        i_we   : we   ,
+        i_waddr: waddr,
+        i_wdata: wdata,
+        o_hsync: hs   ,
+        o_vsync: vs   ,
+        o_r    : r    ,
+        o_g    : g    ,
+        o_b    : b    ,
+    );
+
+    initial {
+        we = 0;
+        rst.assert();
+        // 'A' (65) 的字型：.###. / #...# ×2 / ##### / #...# ×3
+        we    = 1;
+        waddr = 14'h1000 + 14'd520; wdata = 32'h38; clk.next();
+        waddr = 14'h1000 + 14'd521; wdata = 32'h44; clk.next();
+        waddr = 14'h1000 + 14'd522; wdata = 32'h44; clk.next();
+        waddr = 14'h1000 + 14'd523; wdata = 32'h7c; clk.next();
+        waddr = 14'h1000 + 14'd524; wdata = 32'h44; clk.next();
+        waddr = 14'h1000 + 14'd525; wdata = 32'h44; clk.next();
+        waddr = 14'h1000 + 14'd526; wdata = 32'h44; clk.next();
+        waddr = 14'h1000 + 14'd527; wdata = 32'h00; clk.next();
+        waddr = 14'h0800;           wdata = 32'd65; clk.next();
+        waddr = 14'h0801;           wdata = 32'd65; clk.next();
+        waddr = 14'h1800;           wdata = 32'h000f_0f00; clk.next();
+        we    = 0;
+        // 等下一張畫面開始，再數一整張
+        clk.next(800);
+        nred  = 0;
+        nblue = 0;
+        for _i in 0..800 {
+            clk.next();
+            if r == 4'd15 && b == 4'd0 {
+                nred = nred + 16'd1;
+            }
+            if b == 4'd15 && r == 4'd0 {
+                nblue = nblue + 16'd1;
+            }
+        }
+        $assert(nred == 16'd144, "red pixels = 18 dots of 'A' x 4 x 2 cells");
+        $assert(nblue == 16'd368, "blue = the rest of the 32 x 16 visible pixels");
+        $finish();
+    }
+}

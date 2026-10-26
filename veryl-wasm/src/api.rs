@@ -48,6 +48,19 @@ fn bit(b: &Bit) -> Value {
 
 fn dir(d: Dir) -> &'static str { if d == Dir::In { "in" } else { "out" } }
 
+/// a netlist too big to draw (e.g. an 8 KB memory still as flip-flops before mapping)
+/// goes to the page as its ports and cell count only: { ports, cells: [], nets: [], n, types }
+const DRAW_LIMIT: usize = 60_000;
+fn netlist_json_limited(nl: &Netlist) -> Value {
+    if nl.cells.len() <= DRAW_LIMIT { return netlist_json(nl); }
+    let mut types: std::collections::BTreeMap<&str, usize> = Default::default();
+    for c in &nl.cells { *types.entry(c.typ.as_str()).or_default() += 1; }
+    json!({
+        "ports": nl.ports.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "bits": p.bits.iter().map(bit).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "cells": [], "nets": [], "n": nl.cells.len(), "types": types,
+    })
+}
+
 /// netlist as JSON: cells are {t: type, c: [[pin, bit]..], p: {param: value}}
 pub fn netlist_json(nl: &Netlist) -> Value {
     json!({
@@ -627,8 +640,8 @@ fn synth(v: &Value) -> R<Value> {
         "hier": st.insts.iter().map(|(p, m)| json!({ "path": p, "module": m })).collect::<Vec<_>>(),
         "ports": st.ports.iter().map(|(n, d, w)| json!({ "name": n, "dir": dir(*d), "width": w })).collect::<Vec<_>>(),
         "signals": st.signals.iter().map(|(n, w)| json!({ "name": n, "width": w })).collect::<Vec<_>>(),
-        "raw": netlist_json(&st.raw),
-        "opt": netlist_json(&st.opt),
+        "raw": netlist_json_limited(&st.raw),
+        "opt": netlist_json_limited(&st.opt),
         "map": netlist_json(&mapped),
     }))
 }

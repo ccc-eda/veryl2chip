@@ -9,7 +9,7 @@ import { tr } from '../i18n';
 import { saveAs } from '../zip';
 import { compareRows, compareScene } from './compare';
 import { cellColor, edgeCount, hierScene, NetLayout, netLines, netScene, shortType } from './layouts';
-import { bitName, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
+import { bitName, cellCount, countTypes, isFF, isOut, JNetlist, levelize, Leveled, lutBits, lutInputs, netNames, SynthResult } from './model';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -268,7 +268,7 @@ export class SynthOverlay {
     const lev = this.netView('map').lev;
     const items = [
       `${tr('頂層', 'Top')} <b>${r.top}</b>`,
-      `${tr('閘', 'Gates')} <b>${r.raw.cells.length}</b> → <b>${r.opt.cells.length}</b>`,
+      `${tr('閘', 'Gates')} <b>${cellCount(r.raw)}</b> → <b>${cellCount(r.opt)}</b>`,
       `LUT4 <b>${luts}</b>`,
       `CARRY <b>${carry}</b>`,
       `DFF <b>${ffs}</b>`,
@@ -286,7 +286,7 @@ export class SynthOverlay {
 
   private asicStats(ms: number): void {
     const r = this.res!;
-    const items = [`${tr('頂層', 'Top')} <b>${r.top}</b>`, `${tr('閘', 'Gates')} <b>${r.raw.cells.length}</b> → <b>${r.opt.cells.length}</b>`];
+    const items = [`${tr('頂層', 'Top')} <b>${r.top}</b>`, `${tr('閘', 'Gates')} <b>${cellCount(r.raw)}</b> → <b>${cellCount(r.opt)}</b>`];
     const a = this.asic;
     if (a) {
       const ffs = a.map.cells.filter(c => c.t.includes("DFF")).length;
@@ -342,6 +342,21 @@ export class SynthOverlay {
       this.drawAsic(true);
       this.info(this.asicReport(key));
       this.side(this.asicSide(key));
+      return;
+    }
+    if ((key === 'raw' || key === 'opt') && r[key].n !== undefined) {
+      // too big to draw: the counts only
+      const nl = r[key];
+      this.view.set({ boxes: [], lines: [], texts: [] });
+      this.side(document.createElement('div'));
+      const types = Object.entries(nl.types ?? {}).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${shortType(t)} ${n}`).join('  ');
+      this.info([
+        key === 'raw' ? '② Logic Netlist' : tr('③ Tech-indep Syn（與技術無關的最佳化）', '③ Tech-indep Syn (technology-independent optimization)'),
+        tr(`${nl.n} 個元件，太多了，不畫出來：在這個階段記憶體還是一個個正反器和讀取多工器，到了 ④ 才變成 block RAM（SB_RAM40_4K）。`,
+          `${nl.n} cells: too many to draw. At this stage the memories are still flip-flops and read multiplexers; ④ turns them into block RAM (SB_RAM40_4K).`),
+        '',
+        types,
+      ]);
       return;
     }
     if (isNet(key)) {
@@ -774,14 +789,15 @@ export class SynthOverlay {
       tr(`組合邏輯深度 ${v.lev.depth} 層，DFF ${ffs} 個 ${big}`, `combinational depth ${v.lev.depth}, ${ffs} DFFs ${big}`),
     ];
     if (key === 'opt') {
-      const d = r.raw.cells.length - r.opt.cells.length;
-      const rf = r.raw.cells.filter(c => c.t.includes("DFF")).length;
+      const nraw = cellCount(r.raw);
+      const d = nraw - r.opt.cells.length;
+      const rf = r.raw.n !== undefined ? Object.entries(r.raw.types ?? {}).filter(([t]) => t.includes('DFF')).reduce((x, [, n]) => x + n, 0) : r.raw.cells.filter(c => c.t.includes("DFF")).length;
       return [
         tr('③ Tech-indep Syn（與技術無關的最佳化）', '③ Tech-indep Syn (technology-independent optimization)'),
         tr('依拓撲順序重建整個網表：常數傳播、structural hashing、x&!x 等化簡、組合迴路檢查、移除不影響輸出的邏輯；', 'The whole netlist is rebuilt in topological order: constant propagation, structural hashing, simplifications such as x&!x, combinational loop check, removal of logic that does not reach an output;'),
         tr('反覆「證明常數節點」（隨機模擬找候選、對 ≤16 個輸入窮舉證明）並移除卡在 0 的暫存器。', 'repeatedly proving constant nodes (candidates from random simulation, exhaustive proof over ≤16 inputs) and removing registers stuck at 0.'),
         '',
-        tr(`${r.raw.cells.length} → ${v.nl.cells.length} 個元件（少了 ${d}，${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%）；DFF ${rf} → ${ffs}`, `${r.raw.cells.length} → ${v.nl.cells.length} cells (${d} fewer, ${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%); DFF ${rf} → ${ffs}`),
+        tr(`${nraw} → ${v.nl.cells.length} 個元件（少了 ${d}，${(100 * d / Math.max(1, nraw)).toFixed(1)}%）；DFF ${rf} → ${ffs}`, `${nraw} → ${v.nl.cells.length} cells (${d} fewer, ${(100 * d / Math.max(1, nraw)).toFixed(1)}%); DFF ${rf} → ${ffs}`),
         `${types}`,
         tr(`組合邏輯深度 ${v.lev.depth} 層 ${big}`, `combinational depth ${v.lev.depth} ${big}`),
       ];

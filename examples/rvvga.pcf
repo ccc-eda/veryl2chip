@@ -1,0 +1,29 @@
+# RvVgaBoard (examples/src/rvvga.veryl) on an iCEBreaker: the VGA module on PMOD1A + PMOD1B
+# (PmodVGA layout: 1A pins 1-4 = R0-R3, 7-10 = B0-B3; 1B pins 1-4 = G0-G3, 7 = HS, 8 = VS),
+# LED1-5 of the break-off section, BTN1-3, BTN_N resets, the USB serial port
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn i_btn[0] 20
+set_io -nowarn i_btn[1] 19
+set_io -nowarn i_btn[2] 18
+set_io -nowarn i_rx     6
+set_io -nowarn o_tx     9
+set_io -nowarn o_led[0] 26
+set_io -nowarn o_led[1] 27
+set_io -nowarn o_led[2] 25
+set_io -nowarn o_led[3] 23
+set_io -nowarn o_led[4] 21
+set_io -nowarn o_r[0]   4
+set_io -nowarn o_r[1]   2
+set_io -nowarn o_r[2]   47
+set_io -nowarn o_r[3]   45
+set_io -nowarn o_b[0]   3
+set_io -nowarn o_b[1]   48
+set_io -nowarn o_b[2]   46
+set_io -nowarn o_b[3]   44
+set_io -nowarn o_g[0]   43
+set_io -nowarn o_g[1]   38
+set_io -nowarn o_g[2]   34
+set_io -nowarn o_g[3]   31
+set_io -nowarn o_hsync  42
+set_io -nowarn o_vsync  36

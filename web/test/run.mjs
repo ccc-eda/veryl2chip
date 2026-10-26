@@ -71,10 +71,10 @@ for (const ex of HW) {
       const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
       const count = (args) => +/cells: (\d+)/.exec(execFileSync(cli, ['--top', ex.synth, ...args, ...paths], { encoding: 'utf8' }))[1];
       const [o, m] = [count([]), count(['--ice40'])];
-      if (o !== r.opt.cells.length || m !== r.map.cells.length) { bad++; note = ` MISMATCH cli opt ${o} map ${m}`; }
+      if (o !== (r.opt.n ?? r.opt.cells.length) || m !== r.map.cells.length) { bad++; note = ` MISMATCH cli opt ${o} map ${m}`; }
       else note = ' = CLI';
     }
-    console.log(`${note.includes('MISMATCH') ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} synth ${r.top}: gates ${r.raw.cells.length} -> ${r.opt.cells.length}, iCE40 cells ${r.map.cells.length}${note}  (${Date.now() - t0} ms)`);
+    console.log(`${note.includes('MISMATCH') ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} synth ${r.top}: gates ${r.raw.n ?? r.raw.cells.length} -> ${r.opt.n ?? r.opt.cells.length}${r.opt.n ? ' (not sent: too big to draw)' : ''}, iCE40 cells ${r.map.cells.length}${note}  (${Date.now() - t0} ms)`);
   } catch (e) {
     bad++;
     console.log(`FAIL ${ex.id.padEnd(9)} synth ${e.message}`);
@@ -342,13 +342,21 @@ for (const ex of HW) {
   if (fl.mode !== 'bitstream' || fl.cells.ram !== 20) problems.push(`flash ${fl.mode}, ${fl.cells.ram} RAMs`);
   onBoard('bitstream', fl);
   onBoard('cpu', core.call({ cmd: 'board_load_cpu', program: hello.bin, pcf: b.pcf, top: 'RvBoard' }));
+  // VGA text mode in the CPU mode: the title in yellow on dark blue
+  const v = ex('c_vga');
+  core.call({ cmd: 'board_load_cpu', program: prog('c_vga').bin, pcf: v.pcf, top: 'RvVgaBoard' });
+  core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 104 }, vga: { hs: 42, vs: 36, r: [45, 47, 2, 4], g: [31, 34, 38, 43], b: [44, 46, 48, 3] } });
+  const vf2 = core.call({ cmd: 'board_run', cycles: 1_400_000, inputs: [], vga_seen: 0 }).vga;
+  let yellow = 0;
+  if (vf2?.rle) { const raw = Buffer.from(vf2.rle, 'base64'); for (let i = 0; i + 3 < raw.length; i += 4) if (raw.readUInt16LE(i) === 0xff0) yellow += raw.readUInt16LE(i + 2); }
+  if (vf2?.w !== 800 || vf2?.h !== 525 || yellow < 2000) problems.push(`VGA text: ${vf2?.w}x${vf2?.h}, ${yellow} yellow pixels`);
   // the CPU board's speed (the instruction-set simulator): virtual seconds per second
   core.call({ cmd: 'board_load_cpu', program: prog('c_knight').bin, pcf: b.pcf, top: 'RvBoard' });
   const tc = Date.now();
   core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
   const cpuSpeed = 0.5 / ((Date.now() - tc) / 1000);
   if (problems.length) bad++;
-  console.log(`${problems.length ? 'FAIL' : 'ok  '} c        ${sizes.join(', ')} bytes; ISS; RvBoard netlist + bitstream (Fmax ${fl.fmax?.toFixed(1)} MHz, ${((Date.now() - tb) / 1000).toFixed(0)} s) + CPU mode (${cpuSpeed.toFixed(1)}x real time): hello + echo, program swapped to switches${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} c        ${sizes.join(', ')} bytes; ISS; RvBoard netlist + bitstream (Fmax ${fl.fmax?.toFixed(1)} MHz, ${((Date.now() - tb) / 1000).toFixed(0)} s) + CPU mode (${cpuSpeed.toFixed(1)}x real time): hello + echo, program swapped to switches; VGA text mode${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
 }
 
 // breadboard model (src/ide/bbmodel.ts): LEDs, resistors, pull-downs, floating inputs, shorts, buttons

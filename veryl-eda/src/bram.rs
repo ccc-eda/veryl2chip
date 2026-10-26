@@ -67,10 +67,12 @@ pub fn find_mems(nl: &Netlist) -> (Netlist, Vec<Mem>) {
         let abits = bits_for(depth);
         if depth != 1 << abits || wa.len() != abits { continue; }
         let plain_ff = |i: usize| nl.cells[i].typ == "$_DFF_P_" && nl.cells[i].port("C") == Some(clk);
-        // the storage: rising-edge flip-flops on the write clock
+        // the storage: rising-edge flip-flops on the write clock; a data bit no read
+        // uses has lost its flip-flops already (dead logic): only those may be missing
         let mut elems = vec![];
-        for b in &store {
-            match q_cell.get(b) { Some(&i) if plain_ff(i) => elems.push(i), _ => continue 'mem }
+        let mut missing = vec![false; width];
+        for (k, b) in store.iter().enumerate() {
+            match q_cell.get(b) { Some(&i) if plain_ff(i) => elems.push(i), Some(_) => continue 'mem, None => missing[k % width] = true }
         }
         let mut reads = vec![];
         let mut gone_all = vec![];
@@ -108,6 +110,7 @@ pub fn find_mems(nl: &Netlist) -> (Netlist, Vec<Mem>) {
             reads.push(ReadPort { addr: ra[..abits.min(ra.len())].to_vec(), en: en.unwrap_or(Bit::C1), data });
         }
         if reads.is_empty() { continue; }
+        if (0..width).any(|j| missing[j] && reads.iter().any(|r| r.data[j].is_some())) { continue; }
         for i in elems.into_iter().chain(gone_all) { dead[i] = true; }
         mems.push(Mem { name: q.clone(), depth, width, clk, we, waddr: wa, wdata: wd, reads });
     }

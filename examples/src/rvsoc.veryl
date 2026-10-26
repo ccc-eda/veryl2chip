@@ -18,6 +18,7 @@
 //   0x1000_0008  UART     寫：送出一個位元組；讀：收到的位元組（讀了就清掉 RXV）
 //   0x1000_000C  UART_ST  讀：bit 0 = TX 忙碌，bit 1 = RXV（有收到的位元組）
 //   0x1000_0010  TIMER    讀：重設後經過的時脈數
+//   0x1000_2000 以上     寫到外部匯流排 o_x*（例如 VgaText：0x1000_2000 字元、0x1000_4000 字型、0x1000_6000 顏色）
 
 module RvCore (
     i_clk  : input  clock    ,
@@ -293,6 +294,9 @@ module RvSoc #(
     i_rx      : input  logic        ,
     o_tx      : output logic        ,
     o_led     : output logic<8>     ,
+    o_xwe     : output logic        , // 寫到 0x1000_2000 以上：給外加的周邊
+    o_xaddr   : output logic<14>    , // 位址的 bit 15..2
+    o_xdata   : output logic<32>    ,
 ) {
     var raddr: logic<32>;
     var re   : logic    ;
@@ -360,7 +364,11 @@ module RvSoc #(
         o_data : rx_d   ,
     );
 
-    let wr_io: logic = !i_ld && io_w && wstrb != 4'd0;
+    let wr_any: logic = !i_ld && io_w && wstrb != 4'd0;
+    let wr_io : logic = wr_any && waddr[15:13] == 3'd0;
+    assign o_xwe   = wr_any && waddr[15:13] != 3'd0;
+    assign o_xaddr = waddr[15:2];
+    assign o_xdata = wdata;
     let rd_io: logic = !i_ld && re && io_r;
 
     always_ff {
@@ -441,6 +449,9 @@ module RvBoard (
         i_rx      : i_rx ,
         o_tx      : o_tx ,
         o_led     : o_led,
+        o_xwe     : _    ,
+        o_xaddr   : _    ,
+        o_xdata   : _    ,
     );
 }
 
@@ -477,6 +488,9 @@ module TestRvSoc {
         i_rx      : 1'b1    ,
         o_tx      : tx      ,
         o_led     : led     ,
+        o_xwe     : _       ,
+        o_xaddr   : _       ,
+        o_xdata   : _       ,
     );
 
     initial {

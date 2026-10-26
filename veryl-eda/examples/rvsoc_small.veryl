@@ -27,5 +27,8 @@ module RvSocSmall (
         i_rx      : i_rx      ,
         o_tx      : o_tx      ,
         o_led     : o_led     ,
+        o_xwe     : _         ,
+        o_xaddr   : _         ,
+        o_xdata   : _         ,
     );
 }

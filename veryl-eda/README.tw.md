@@ -60,6 +60,8 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 與記憶體都是同步讀取的 RAM，所以會變成 `SB_RAM40_4K`。`RvSoc` 加上 8 KB、四個位元組通道的記憶體（`RvMem`）、記憶體映射的周邊
 （LED 0x1000_0000、按鈕 + 開關 0x…04、UART 資料 / 狀態 0x…08 / 0x…0C、時脈計數器 0x…10）和給 testbench 用的載入埠；
 `RvBoard` 是 iCEBreaker 的頂層（`examples/rvsoc.pcf`）：1844 LUT + 20 個 block RAM，Fmax 13.3 MHz。
+`VgaText`（`examples/src/rvvga.veryl`）在 SoC 的外部寫入匯流排上加一個 40 × 30 字元的 VGA 畫面（字元與字型在 block RAM，兩拍管線）；
+`RvVgaBoard` = 1961 LUT + 26 個 block RAM。Block RAM 推論也接受有些資料位元沒被讀、已經被刪掉的記憶體。
 `TestRvSoc` 載入 `rv32i_test.S`（資料在 0x300，`examples/sw/build.sh` 產生的 `examples/src/rvsoc_rom.veryl`），執行後檢查 41 個結果；
 `veryl-eda/examples/rvsoc_small.veryl`（64 位元組記憶體）由 `test.sh` 證明與 `veryl build` 等價。
 

@@ -1123,3 +1123,31 @@ fn cpu_board() {
     b.run(12_000_000);
     println!("CPU board: {:.1} x real time", 1.0 / t0.elapsed().as_secs_f64());
 }
+
+/// VGA text mode: the C example on the gate-level RvVgaBoard (the monitor sampling its pins)
+/// shows the same 640 × 480 picture as the CPU board renders from the ISS's screen memory
+#[test]
+fn vga_text_on_board() {
+    let prog = c_example("vga");
+    let pcf = std::fs::read_to_string(format!("{}/../examples/rvvga.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let files = ["examples/src/rv32i.veryl", "examples/src/sync_ram.veryl", "examples/src/uart.veryl", "examples/src/rvsoc.veryl", "examples/src/vga.veryl", "examples/src/rvvga.veryl"];
+    let mut nl = ice40_of(&files, "RvVgaBoard", &[]);
+    assert_eq!(nl.cells.iter().filter(|c| c.typ == "SB_RAM40_4K").count(), 26);
+    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &prog).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
+    let frame = |b: &mut crate::board::Board| {
+        b.attach_vga(42, 36, &[45, 47, 2, 4], &[31, 34, 38, 43], &[44, 46, 48, 3]);
+        b.run(1_400_000);
+        let (w, h, px) = b.vga.as_ref().unwrap().frame.clone().expect("a frame");
+        assert_eq!((w, h), (800, 525));
+        (0..480).flat_map(|y| (0..640).map(move |x| (x, y))).map(|(x, y)| px[(y + 35) * w + x + 144]).collect::<Vec<u16>>()
+    };
+    let mut g = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    assert!(g.warnings.is_empty(), "{:?}", g.warnings);
+    let hw = frame(&mut g);
+    let mut c = crate::board::Board::cpu(&prog, 8192, &pcf, 35).unwrap();
+    let sw = frame(&mut c);
+    // yellow on dark blue, the title in the box
+    assert!(hw.iter().filter(|p| **p == 0xff0).count() > 2000 && hw.iter().filter(|p| **p == 0x00a).count() > 200_000);
+    let diff = hw.iter().zip(&sw).filter(|(a, b)| a != b).count();
+    assert_eq!(diff, 0, "{} pixels differ", diff);
+}

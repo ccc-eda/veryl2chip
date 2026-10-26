@@ -411,6 +411,8 @@ pub struct Cpu {
     next_rx: u64,
     /// the CPU cycle up to which the outputs are accounted (an instruction can run past a window)
     acct: u64,
+    /// when the VGA monitor gets the next frame of the text screen
+    next_frame: u64,
     pub error: Option<String>,
 }
 
@@ -477,7 +479,7 @@ impl Board {
         if let Some(rx) = input("i_rx") { b.eng.v[rx as usize] = 1; }
         iss.tx_cycles = 0;
         let acct = iss.cycles;
-        b.cpu = Some(Box::new(Cpu { iss, led, ins, rst, next_rx: 0, acct, error: None }));
+        b.cpu = Some(Box::new(Cpu { iss, led, ins, rst, next_rx: 0, acct, next_frame: 0, error: None }));
         Ok(b)
     }
 
@@ -529,6 +531,14 @@ impl Board {
             Self::account(&mut self.pin_out, &mut self.prev, &mut self.edges, &mut self.eng.v, &mut self.segs, &c.led, c.iss.led, d);
             c.acct = c0 + d;
             left -= d;
+            // the VGA text screen: a frame every 800 × 525 cycles, as the hardware sends them
+            if let Some(g) = self.vga.as_mut() {
+                if c.iss.cycles >= c.next_frame {
+                    g.frame = Some(periph::text_frame(&c.iss.vram, &c.iss.font, c.iss.colors));
+                    g.frames += 1;
+                    c.next_frame = c.iss.cycles + 800 * 525;
+                }
+            }
             if !c.iss.tx.is_empty() {
                 let t = std::mem::take(&mut c.iss.tx);
                 if let Some(u) = self.uart.as_mut() { u.received.extend(t); }

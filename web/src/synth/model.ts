@@ -4,7 +4,13 @@ export type JBit = number | '0' | '1';
 export interface JPort { name: string; dir: 'in' | 'out'; bits: JBit[] }
 export interface JCell { t: string; c: [string, JBit][]; p?: Record<string, string> }
 export interface JNet { name: string; bits: JBit[] }
-export interface JNetlist { ports: JPort[]; cells: JCell[]; nets: JNet[] }
+export interface JNetlist {
+  ports: JPort[]; cells: JCell[]; nets: JNet[];
+  /** a netlist too big to draw: its cell count and cells per type (cells is empty) */
+  n?: number; types?: Record<string, number>;
+}
+/** the number of cells, drawn or not */
+export const cellCount = (nl: JNetlist) => nl.n ?? nl.cells.length;
 
 export interface SynthResult {
   top: string;

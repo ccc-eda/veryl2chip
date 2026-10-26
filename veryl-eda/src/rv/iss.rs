@@ -11,6 +11,10 @@ pub const BTN: u32 = IO_BASE + 4;
 pub const UART: u32 = IO_BASE + 8;
 pub const UART_ST: u32 = IO_BASE + 12;
 pub const TIMER: u32 = IO_BASE + 16;
+/// VgaText (examples/src/rvvga.veryl): characters, font rows, colors
+pub const VGA_TEXT: u32 = IO_BASE + 0x2000;
+pub const VGA_FONT: u32 = IO_BASE + 0x4000;
+pub const VGA_COLOR: u32 = IO_BASE + 0x6000;
 
 pub struct Iss {
     pub pc: u32,
@@ -27,6 +31,10 @@ pub struct Iss {
     /// clock cycles to send one byte (0: at once); the status register says busy meanwhile
     pub tx_cycles: u64,
     tx_busy_until: u64,
+    /// VgaText's memories: 40 × 30 characters (2048 entries), the font (128 × 8 rows), fg | bg << 16
+    pub vram: Vec<u8>,
+    pub font: Vec<u8>,
+    pub colors: u32,
 }
 
 impl Iss {
@@ -34,7 +42,7 @@ impl Iss {
     pub fn new(image: &[u8], mem_size: usize) -> Iss {
         let mut mem = vec![0u8; mem_size];
         mem[..image.len().min(mem_size)].copy_from_slice(&image[..image.len().min(mem_size)]);
-        Iss { pc: 0, x: [0; 32], mem, led: 0, btn: 0, tx: vec![], rx: VecDeque::new(), cycles: 1, instret: 0, tx_cycles: 0, tx_busy_until: 0 }
+        Iss { pc: 0, x: [0; 32], mem, led: 0, btn: 0, tx: vec![], rx: VecDeque::new(), cycles: 1, instret: 0, tx_cycles: 0, tx_busy_until: 0, vram: vec![0; 2048], font: vec![0; 1024], colors: 0xfff }
     }
 
     /// the reset button: the CPU and the peripherals start over, the memory keeps its contents
@@ -44,6 +52,7 @@ impl Iss {
         self.led = 0;
         self.cycles = 1;
         self.tx_busy_until = 0;
+        self.colors = 0xfff;
     }
 
     fn word_addr(&self, a: u32) -> usize { (a as usize) & (self.mem.len() - 1) & !3 }
@@ -65,6 +74,13 @@ impl Iss {
 
     fn store(&mut self, a: u32, v: u32, strb: u32) {
         if a & IO_BASE != 0 {
+            match (a >> 13) & 7 {
+                0 => {}
+                1 => { self.vram[((a >> 2) & 2047) as usize] = v as u8; return; }
+                2 => { self.font[((a >> 2) & 1023) as usize] = v as u8; return; }
+                3 => { self.colors = v; return; }
+                _ => return,
+            }
             match (a >> 2) & 7 {
                 0 => self.led = v & 0xff,
                 2 => { self.tx.push(v as u8); self.tx_busy_until = self.cycles + self.tx_cycles; }

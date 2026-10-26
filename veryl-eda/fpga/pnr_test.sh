@@ -22,7 +22,7 @@ sync_ram:SyncRam:i_clk sync_ram+bram_tests:Bram2048x2:i_clk sync_ram+bram_tests:
 fifo:Fifo:i_clk:i_rst:0 uart:UartLoop:i_clk:i_rst:0 vga:VgaTiming:i_clk:i_rst:0
 vga:VgaDemo:i_clk:i_rst:0 sevenseg:SevenSeg:i_clk:i_rst:0
 button_counter:ButtonCounter:i_clk:i_rst:0 traffic:TrafficLight:i_clk:i_rst:0
-rv32i+sync_ram+uart+rvsoc:RvBoard:i_clk:i_rst:0"}
+rv32i+sync_ram+uart+rvsoc:RvBoard:i_clk:i_rst:0 rv32i+sync_ram+uart+rvsoc+vga+rvvga:RvVgaBoard:i_clk:i_rst:0"}
 fail=0
 for d in $DESIGNS; do
     IFS=: read -r f m clk rst act <<< "$d"
