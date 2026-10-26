@@ -62,6 +62,8 @@ export class SynthOverlay {
   private anim = 0;
   private gen = 0;
   private target: 'fpga' | 'asic' = 'fpga';
+  /** the ASIC technology: the educational vlib or SkyWater's SKY130 */
+  private pdk: 'vlib' | 'sky130' = 'vlib';
   private asic: AsicResult | null = null;
   private asicErr: string | null = null;
   private asicBusy = false;
@@ -80,7 +82,13 @@ export class SynthOverlay {
     $('synAsc').onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
     $('synPcf').onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
     $('synBin').onclick = () => this.pnr && download(`${this.pnr.top}.bin`, fromBase64(this.pnr.bin));
-    $('synV').onclick = () => this.asic && download(`${this.asic.top}_vlib.v`, this.asic.verilog);
+    $('synV').onclick = () => this.asic && download(`${this.asic.top}_${this.pdk}.v`, this.asic.verilog);
+    const gds = document.getElementById('synGds');
+    if (gds) gds.onclick = async () => {
+      if (!this.asic) return;
+      const r = await this.core.call<{ gds: string; top: string }>({ cmd: 'asic_gds' });
+      download(`${r.top}.gds`, fromBase64(r.gds));
+    };
     $('synDef').onclick = () => this.asic && download(`${this.asic.top}.def`, this.asic.def);
     $<HTMLSelectElement>('synTarget').onchange = () => this.setTarget($<HTMLSelectElement>('synTarget').value as 'fpga' | 'asic');
     $<HTMLSelectElement>('synTop').onchange = () => this.run($<HTMLSelectElement>('synTop').value);
@@ -177,10 +185,21 @@ export class SynthOverlay {
   private pnrMs = 0;
   private synMs = 0;
 
+  /** the ASIC technology (a change runs the ASIC flow again) */
+  setPdk(p: 'vlib' | 'sky130'): void {
+    if (p === this.pdk) return;
+    this.pdk = p;
+    this.asic = null;
+    this.asicErr = null;
+    if (this.target === 'asic') this.setTarget('asic', false);
+    if (this.res && (ASIC.has(this.stage) || this.stage === 'cmp')) this.show(this.stage);
+  }
+
   private setTarget(t: 'fpga' | 'asic', show = true): void {
     this.target = t;
     $<HTMLSelectElement>('synTarget').value = t;
-    $('synTitle').textContent = t === 'fpga' ? tr('合成 → FPGA（iCE40UP5K）', 'Synthesis → FPGA (iCE40UP5K)') : tr('合成 → ASIC（vlib 標準元件）', 'Synthesis → ASIC (vlib standard cells)');
+    $('synTitle').textContent = t === 'fpga' ? tr('合成 → FPGA（iCE40UP5K）', 'Synthesis → FPGA (iCE40UP5K)')
+      : this.pdk === 'sky130' ? tr('合成 → ASIC（SkyWater SKY130 標準元件）', 'Synthesis → ASIC (SkyWater SKY130 standard cells)') : tr('合成 → ASIC（vlib 標準元件）', 'Synthesis → ASIC (vlib standard cells)');
     this.chips();
     const cur = ASIC.has(this.stage) !== (t === 'asic') && OTHER[this.stage] ? OTHER[this.stage] : this.stage;
     if (this.res) this.stats(this.synMs);
@@ -190,23 +209,26 @@ export class SynthOverlay {
   private async runAsic(): Promise<void> {
     if (!this.res || this.asic || this.asicBusy) return;
     const gen = this.gen;
+    const pdk = this.pdk;
     this.asicBusy = true;
     const t0 = performance.now();
     const tick = setInterval(() => {
       if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC 流程中：標準元件對應 → 列式佈局退火 → 全域繞線 → STA…（${((performance.now() - t0) / 1000).toFixed(1)} s）`, `ASIC flow: standard-cell mapping → row placement → global routing → STA… (${((performance.now() - t0) / 1000).toFixed(1)} s)`));
     }, 200);
     try {
-      const r = await this.core.call<AsicResult>({ cmd: 'asic', files: this.files, top: this.res.top, seed: 1 });
-      if (gen !== this.gen) return;
+      const r = await this.core.call<AsicResult>({ cmd: 'asic', files: this.files, top: this.res.top, seed: 1, pdk });
+      if (gen !== this.gen || pdk !== this.pdk) return;
       this.asic = r;
       this.asicMs = performance.now() - t0;
     } catch (e) {
-      if (gen !== this.gen) return;
+      if (gen !== this.gen || pdk !== this.pdk) return;
       this.asicErr = String((e as Error).message ?? e);
     } finally {
       clearInterval(tick);
       this.asicBusy = false;
     }
+    // (the technology changed meanwhile: run it for the new one)
+    if (pdk !== this.pdk) { if (ASIC.has(this.stage) || this.stage === 'cmp') this.show(this.stage); return; }
     this.stats(this.synMs);
     this.buttons();
     if (ASIC.has(this.stage) || this.stage === 'cmp') this.show(this.stage);
@@ -242,6 +264,8 @@ export class SynthOverlay {
     $<HTMLButtonElement>('synAnim').disabled = a ? !this.asic : !this.pnr;
     for (const id of ['synAsc', 'synPcf', 'synBin']) { $(id).classList.toggle('hidden', !p); $<HTMLButtonElement>(id).disabled = !this.pnr; }
     for (const id of ['synV', 'synDef']) { $(id).classList.toggle('hidden', !a); $<HTMLButtonElement>(id).disabled = !this.asic; }
+    const gds = document.getElementById('synGds') as HTMLButtonElement | null;
+    if (gds) { gds.classList.toggle('hidden', !a || this.pdk !== 'sky130'); gds.disabled = !this.asic?.drc; }
     $('synEdges').classList.toggle('hidden', this.stage === 'place' || this.stage === 'aplace' || this.stage === 'cmp');
   }
 
@@ -289,10 +313,14 @@ export class SynthOverlay {
     const items = [`${tr('頂層', 'Top')} <b>${r.top}</b>`, `${tr('閘', 'Gates')} <b>${cellCount(r.raw)}</b> → <b>${cellCount(r.opt)}</b>`];
     const a = this.asic;
     if (a) {
-      const ffs = a.map.cells.filter(c => c.t.includes("DFF")).length;
+      const ffs = a.map.cells.filter(c => c.t.includes('DFF') || /__df[a-z]+_\d/.test(c.t)).length;
       items.push(tr(`標準元件 <b>${a.map.cells.length}</b>（DFF ${ffs}）`, `Cells <b>${a.map.cells.length}</b> (DFF ${ffs})`), `${tr('面積', 'Area')} <b>${fmtArea(a.area)}</b>`,
         tr(`晶粒 <b>${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)}</b> µm（${a.die.rows} 列，利用率 ${(a.die.util * 100).toFixed(0)}%）`, `Die <b>${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)}</b> µm (${a.die.rows} rows, ${(a.die.util * 100).toFixed(0)}% utilization)`),
         `${tr('線長', 'Wirelength')} <b>${(a.route.wirelength / 1000).toFixed(2)}</b> mm`, `F<sub>max</sub> <b>${a.timing.fmax.toFixed(1)}</b> MHz`);
+      if (a.drc) {
+        const v = a.drc.shorts + a.drc.spacing + a.drc.area + a.drc.opens;
+        items.push(`DRC <b>${v === 0 ? '✓ 0' : v}</b>`);
+      }
     }
     items.push(`${tr('合成', 'Synthesis')} <b>${ms.toFixed(0)}</b> ms` + (a ? `${tr('，ASIC 流程', ', ASIC flow')} <b>${(this.asicMs / 1000).toFixed(1)}</b> s` : ''));
     $('synStats').innerHTML = items.join('<span class="sep">│</span>');
@@ -626,16 +654,27 @@ export class SynthOverlay {
     if (key === 'adetail') {
       const d = a.detail;
       const um = (x: number) => (x / 1000).toFixed(2) + ' mm';
-      return [
-        tr(`A ⑦ Detail Routing（軌道格點：每 ${(a.die.row_h / d.tracks).toFixed(1)} µm 一條，${d.nx} × ${d.ny} × 4 層；M2/M4 水平、M3/M5 垂直）`, `A ⑦ Detail Routing (track grid: one every ${(a.die.row_h / d.tracks).toFixed(1)} µm, ${d.nx} × ${d.ny} × 4 layers; M2/M4 horizontal, M3/M5 vertical)`),
-        tr('每條 net 只在全域繞線選的 gcell 走廊內（外加一圈）以 A* 找路：端點依 Prim 順序連到已建好的樹，換層一個 via 成本較高；每個格點只能屬於一條 net（所以沒有短路），重疊以 PathFinder 協商重繞，卡住的 net 走廊會加寬。元件腳位從 M1 經 via 上來，SRAM 巨集上方擋住 M2/M3，IO 腳在 M5。',
-          'Each net is routed with A* only inside the gcell corridor chosen by global routing (plus one ring): pins join the tree in Prim order, a layer change (via) costs more; every grid point belongs to one net at most (so no shorts), overlaps are renegotiated with PathFinder and a stuck net\'s corridor widens. Cell pins come up from M1 through vias, SRAM macros block M2/M3 above them, IO pins are on M5.'),
+      const L = a.layers ?? ['M2', 'M3', 'M4', 'M5'];
+      const drc = a.drc;
+      const sky = drc ? [
         '',
+        tr(`SkyWater SKY130：元件腳位在 li1，經 L1M1_PR 上 ${L[0]}；${L[0]} 水平、${L[1]} 垂直、${L[2]} 水平（隔一條軌道）、${L[3]} 垂直（隔一條軌道），電源軌 met1、電源帶 ${L[3]}；每列每 20 µm 一個 well tap（共 ${drc.taps} 個）。`,
+          `SkyWater SKY130: cell pins on li1, up to ${L[0]} through L1M1_PR; ${L[0]} horizontal, ${L[1]} vertical, ${L[2]} horizontal (every other track), ${L[3]} vertical (every other track); rails on met1, straps on ${L[3]}; a well tap every 20 µm of each row (${drc.taps}).`),
+        tr(`DRC（tech LEF 的規則，含元件自己的形狀，${drc.shapes} 個形狀）：短路 ${drc.shorts}、間距 ${drc.spacing}、最小面積 ${drc.area}、斷路 ${drc.opens}。GDS：${drc.instances} 個元件實例、${(drc.gds_bytes / 1024).toFixed(0)} KB（⬇ 下載 .gds，可用 KLayout 開啟）。`,
+          `DRC (the tech LEF's rules, with the cells' own shapes, ${drc.shapes} shapes): ${drc.shorts} shorts, ${drc.spacing} spacing, ${drc.area} min-area, ${drc.opens} opens. GDS: ${drc.instances} cell instances, ${(drc.gds_bytes / 1024).toFixed(0)} KB (⬇ download the .gds; it opens in KLayout).`),
+        ...drc.details.slice(0, 5),
+      ] : [];
+      return [
+        tr(`A ⑦ Detail Routing（軌道格點：每 ${(a.die.row_h / d.tracks).toFixed(2)} µm 一條，${d.nx} × ${d.ny} × 4 層；${L[0]}/${L[2]} 水平、${L[1]}/${L[3]} 垂直）`, `A ⑦ Detail Routing (track grid: one every ${(a.die.row_h / d.tracks).toFixed(2)} µm, ${d.nx} × ${d.ny} × 4 layers; ${L[0]}/${L[2]} horizontal, ${L[1]}/${L[3]} vertical)`),
+        tr('每條 net 只在全域繞線選的 gcell 走廊內（外加一圈）以 A* 找路：端點依 Prim 順序連到已建好的樹，換層一個 via 成本較高；每個格點只能屬於一條 net（所以沒有短路），重疊以 PathFinder 協商重繞，卡住的 net 走廊會加寬。',
+          'Each net is routed with A* only inside the gcell corridor chosen by global routing (plus one ring): pins join the tree in Prim order, a layer change (via) costs more; every grid point belongs to one net at most (so no shorts), overlaps are renegotiated with PathFinder and a stuck net\'s corridor widens.'),
+        ...(drc ? [] : [tr('元件腳位從 M1 經 via 上來，SRAM 巨集上方擋住 M2/M3，IO 腳在 M5。', 'Cell pins come up from M1 through vias, SRAM macros block M2/M3 above them, IO pins are on M5.'), '',
         tr(`電源網路：每條列邊界一條 M1 電源軌（VSS / VDD 交替，共 ${a.pdn.rails} 條），M5 垂直電源帶 ${a.pdn.straps.length} 條（VDD / VSS 成對，每 40 µm 一對），${a.pdn.vias} 個 via 疊把帶子接到同名的軌；繞線器避開帶子與 via 疊。空位補上 ${a.pdn.fillers.length / 3} 個填充元件（FILL8/4/2/1，深灰），讓井與電源軌連續。`,
-          `Power grid: an M1 rail on every row boundary (VSS / VDD alternating, ${a.pdn.rails} rails), ${a.pdn.straps.length} vertical M5 straps (VDD / VSS pairs, one pair every 40 µm), ${a.pdn.vias} via stacks tie the straps to the rails of the same net; the router avoids straps and via stacks. ${a.pdn.fillers.length / 3} filler cells (FILL8/4/2/1, dark gray) fill the gaps so wells and rails are continuous.`),
-        tr(`線長 ${um(d.wirelength)}（M2 ${um(d.per_layer[0])}、M3 ${um(d.per_layer[1])}、M4 ${um(d.per_layer[2])}、M5 ${um(d.per_layer[3])}），via ${d.vias} 個；衝突 ${d.conflicts}、未接通 ${d.opens}；每輪衝突：${d.iters.join(' → ')}`,
-          `Wirelength ${um(d.wirelength)} (M2 ${um(d.per_layer[0])}, M3 ${um(d.per_layer[1])}, M4 ${um(d.per_layer[2])}, M5 ${um(d.per_layer[3])}), ${d.vias} vias; ${d.conflicts} conflicts, ${d.opens} opens; conflicts per iteration: ${d.iters.join(' → ')}`),
-        d.nets.length ? tr('顏色：藍 M2、紅 M3、綠 M4、黃 M5；側欄可切換層、點 net 高亮。這一步的線長也回饋給 STA。', 'Colors: blue M2, red M3, green M4, yellow M5; switch layers in the side panel, click a net to highlight it. These wire lengths also feed the STA.') : tr(`（共 ${d.segments} 段線，太多不畫，只列統計）`, `(${d.segments} segments: too many to draw, statistics only)`),
+          `Power grid: an M1 rail on every row boundary (VSS / VDD alternating, ${a.pdn.rails} rails), ${a.pdn.straps.length} vertical M5 straps (VDD / VSS pairs, one pair every 40 µm), ${a.pdn.vias} via stacks tie the straps to the rails of the same net; the router avoids straps and via stacks. ${a.pdn.fillers.length / 3} filler cells (FILL8/4/2/1, dark gray) fill the gaps so wells and rails are continuous.`)]),
+        tr(`線長 ${um(d.wirelength)}（${L[0]} ${um(d.per_layer[0])}、${L[1]} ${um(d.per_layer[1])}、${L[2]} ${um(d.per_layer[2])}、${L[3]} ${um(d.per_layer[3])}），via ${d.vias} 個；衝突 ${d.conflicts}、未接通 ${d.opens}；每輪衝突：${d.iters.join(' → ')}`,
+          `Wirelength ${um(d.wirelength)} (${L[0]} ${um(d.per_layer[0])}, ${L[1]} ${um(d.per_layer[1])}, ${L[2]} ${um(d.per_layer[2])}, ${L[3]} ${um(d.per_layer[3])}), ${d.vias} vias; ${d.conflicts} conflicts, ${d.opens} opens; conflicts per iteration: ${d.iters.join(' → ')}`),
+        d.nets.length ? tr(`顏色：藍 ${L[0]}、紅 ${L[1]}、綠 ${L[2]}、黃 ${L[3]}；側欄可切換層、點 net 高亮。這一步的線長也回饋給 STA。`, `Colors: blue ${L[0]}, red ${L[1]}, green ${L[2]}, yellow ${L[3]}; switch layers in the side panel, click a net to highlight it. These wire lengths also feed the STA.`) : tr(`（共 ${d.segments} 段線，太多不畫，只列統計）`, `(${d.segments} segments: too many to draw, statistics only)`),
+        ...sky,
       ];
     }
     const t = a.timing;
@@ -687,7 +726,8 @@ export class SynthOverlay {
       pcb.onchange = () => { this.power = pcb.checked; this.drawAsic(false); };
       pw.append(pcb, tr(' 電源網路（紅 VDD、藍 VSS）', ' power grid (red VDD, blue VSS)'));
       div.appendChild(pw);
-      [tr('M2 水平', 'M2 horizontal'), tr('M3 垂直', 'M3 vertical'), tr('M4 水平', 'M4 horizontal'), tr('M5 垂直', 'M5 vertical')].forEach((name, l) => {
+      const L = a.layers ?? ['M2', 'M3', 'M4', 'M5'];
+      [`${L[0]} ${tr('水平', 'horizontal')}`, `${L[1]} ${tr('垂直', 'vertical')}`, `${L[2]} ${tr('水平', 'horizontal')}`, `${L[3]} ${tr('垂直', 'vertical')}`].forEach((name, l) => {
         const lab = document.createElement('label');
         lab.style.display = 'block';
         const cb = document.createElement('input');

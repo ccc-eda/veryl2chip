@@ -23,7 +23,7 @@ Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一
 - 分頁編輯器：Veryl 語法上色、即時語法檢查（問題面板、行號旁標記、波浪底線）
 - 專案存在瀏覽器：可有多個專案，新增 / 改名 / 刪除 / 匯入檔案，匯出 `.zip`
 - ▶ 測試（RTL 或閘級）；✔ 全面驗證：每個 testbench 都在 RTL 與三種合成後網表上跑一遍
-- 合成：標題列的 **FPGA / ASIC** 與**階段**選單（① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn，接著 FPGA ④–⑦
+- 合成：標題列的後端（**FPGA**、**ASIC · vlib** 或 **ASIC · SKY130**：SkyWater 的開源 PDK，有 DRC，可下載 GDS）與**階段**選單（① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn，接著 FPGA ④–⑦
   或 ASIC ④–⑨，最後一項是 FPGA vs ASIC 比較），選了就在「合成流程」分頁顯示該階段；分頁只有一行麵包屑與圖示按鈕
   （ⓘ 階段說明、連線、退火動畫、⬇ 下載、縮放），數字在狀態列
 - 下方面板（問題、輸出、測試結果、波形）、狀態列、命令選單（Ctrl/⌘+Shift+P）、快速開檔（Ctrl/⌘+P）

@@ -37,6 +37,10 @@ export interface AsicResult {
   timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
   verilog: string;
   def: string;
+  /** the technology ("vlib", "sky130_fd_sc_hd"), its four routing layers, and (a PDK) the design rule check */
+  pdk?: string;
+  layers?: string[];
+  drc?: { shapes: number; shorts: number; spacing: number; area: number; opens: number; taps: number; tap_viol: number; gds_bytes: number; instances: number; details: string[] } | null;
 }
 
 /** world units per µm */

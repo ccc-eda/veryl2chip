@@ -148,6 +148,39 @@ for (const ex of HW) {
   }
 }
 
+// the ASIC flow on SkyWater SKY130 (pdk: 'sky130'): library cell names, a clean DRC, the GDS
+// (asic_gds) with its header and the same counts as the CLI's --gds
+for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
+  const ex = ctx.VERYL_EXAMPLES.find((e) => e.id === id);
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'asic', files: ex.files, top: ex.synth, seed: 1, pdk: 'sky130' });
+    const problems = [];
+    const d = r.drc;
+    if (r.pdk !== 'sky130_fd_sc_hd' || r.layers[0] !== 'met1') problems.push(`pdk ${r.pdk} ${r.layers}`);
+    if (!d || d.shorts + d.spacing + d.area + d.opens) problems.push(`DRC ${JSON.stringify(d)}`);
+    if (!r.verilog.includes('sky130_fd_sc_hd__dfrtp_1') && !r.verilog.includes('sky130_fd_sc_hd__dfxtp_1')) problems.push('no SKY130 flip-flop in the Verilog');
+    if (!r.def.includes('unithd') || !r.def.includes('L1M1_PR')) problems.push('DEF without unithd / L1M1_PR');
+    const g = core.call({ cmd: 'asic_gds' });
+    const bytes = Buffer.from(g.gds, 'base64');
+    if (bytes.length !== d.gds_bytes || bytes.readUInt16BE(2) !== 0x0002) problems.push(`GDS ${bytes.length} bytes`);
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const gp = path.join(tmp, 'x.gds');
+      const out = execFileSync(cli, ['--top', ex.synth, '--asic', '--pdk', 'sky130', '--gds', gp, ...paths], { encoding: 'utf8' });
+      const m = /wrote .*\((\d+) bytes: (\d+) cell instances/.exec(out);
+      if (!m || +m[1] !== bytes.length || +m[2] !== d.instances || !fs.readFileSync(gp).equals(bytes)) problems.push(`CLI: ${m && m[0]}`);
+      else note = ' = CLI';
+    }
+    if (problems.length) bad++;
+    console.log(`${problems.length ? 'FAIL' : 'ok  '} ${id.padEnd(9)} sky130 ${r.top}: ${r.map.cells.length} cells, DRC ${d ? d.shorts + d.spacing + d.area + d.opens : '?'}, GDS ${bytes.length} bytes${note}${problems.length ? ' ' + problems.slice(0, 3).join('; ') : ''}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL ${id.padEnd(9)} sky130 ${e.message}`);
+  }
+}
+
 // virtual board (board_load / board_run / board_reset): the tutorial designs
 // on the iCEBreaker's pins and the RISC-V SoC's LEDs on PMOD1A
 {

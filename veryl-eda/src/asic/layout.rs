@@ -154,7 +154,8 @@ pub fn build(o: &Output) -> Result<Layout, String> {
     for name in &tech.layers {
         let li = li(name)?;
         let sp = lef.layer(name).map(|l| nm(l.spacing)).unwrap_or(0);
-        let mut by_net: HashMap<usize, Vec<Shape>> = HashMap::new();
+        // (in net order: the same layout gives the same file)
+        let mut by_net: std::collections::BTreeMap<usize, Vec<Shape>> = Default::default();
         for sh in shapes.iter().filter(|q| q.layer == li && q.net >= 2) { by_net.entry(sh.net).or_default().push(*sh); }
         for (_, v) in by_net {
             for a in 0..v.len() {

@@ -201,6 +201,8 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
   （`a21o_1`、`o21a_1`：加法器的进位只要一个单元，不是一个 AND 加一个 OR），这些是 vlib 没有的逻辑单元
   （`asic::lib::EXTRA`）。Alu：68 → 114 MHz、面积少 16 %；RiscvSoc：53 → 63 MHz、面积少 7 %。详细布线不干净时，
   流程换更大的裸片与新的布局种子再试（最多四次）。
+- 网页 IDE（v1.9）标题列的后端菜单在 ASIC · vlib 旁多了 **ASIC · SKY130**（`index.html#…&pdk=sky130`）：同样的阶段改用
+  SKY130 的单元与层，⑦ 有 DRC 摘要，可下载 .v / .def / .gds（wasm 的 `asic` 命令接受 `pdk: "sky130"`，`asic_gds` 传回上一次的 GDS）。
 - `--gatesim sky130` 在 SKY130 网表上跑 testbench；`test.sh` 用 yosys 从 PDK 自己的 Liberty 档创建的单元模型（`read_liberty`），
   证明每个设计的 SKY130 网表与 `veryl build` 的输出等价。`cargo test` 把 DEF 读回来对照 LEF 检查（单元在列与 site 上、
   不重叠、每个 site 都有东西、tap 距离）。

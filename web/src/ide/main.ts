@@ -786,6 +786,7 @@ function runSynth(stage?: string): void {
   openFile(FLOW_TAB);
   // the chip views need the room on small screens; the panel comes back with the next run
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
+  synth.setPdk(flowPdk());
   if (key !== synthKey || !synth.synthesized) {
     synthKey = key;
     const target = stage && isAsicStage(stage) ? 'asic' : stage && isFpgaStage(stage) ? 'fpga' : undefined;
@@ -793,7 +794,9 @@ function runSynth(stage?: string): void {
   } else if (stage) synth.showStage(stage);
 }
 
-const flowTarget = () => $<HTMLSelectElement>('flowTarget').value as 'fpga' | 'asic';
+/** the title bar's back end: FPGA, or ASIC on vlib / SKY130 */
+const flowTarget = (): 'fpga' | 'asic' => $<HTMLSelectElement>('flowTarget').value === 'fpga' ? 'fpga' : 'asic';
+const flowPdk = (): 'vlib' | 'sky130' => $<HTMLSelectElement>('flowTarget').value === 'sky130' ? 'sky130' : 'vlib';
 
 /** the title bar's stage menu: the back end's stages, then the comparison; "⚙ Synthesize" while the flow tab is not shown */
 function fillStages(): void {
@@ -811,7 +814,7 @@ function syncStage(): void {
   sel.value = [...sel.options].some(o => o.value === k) ? k : '';
   const label = sel.value ? sel.selectedOptions[0].textContent! : '';
   $('synCrumb').innerHTML = `<span class="c" data-c="synthTop">${esc(synthTop())}</span><span class="sep">›</span>`
-    + (k === 'cmp' ? '' : `<span class="c" data-c="flowTarget">${flowTarget() === 'asic' ? 'ASIC' : 'FPGA'}</span><span class="sep">›</span>`)
+    + (k === 'cmp' ? '' : `<span class="c" data-c="flowTarget">${flowTarget() === 'asic' ? (flowPdk() === 'sky130' ? 'ASIC · SKY130' : 'ASIC') : 'FPGA'}</span><span class="sep">›</span>`)
     + `<span class="c last" data-c="flowStage">${esc(label)}</span>`;
   // the download menu only where there is something to download
   $('synDl').classList.toggle('hidden', ![...$('synDlMenu').children].some(b => !b.classList.contains('hidden')));
@@ -1181,10 +1184,12 @@ async function boot(): Promise<void> {
       embedded: true,
       onStage: k => {
         const t = isAsicStage(k) ? 'asic' : isFpgaStage(k) ? 'fpga' : flowTarget();
-        if (t !== flowTarget()) { $<HTMLSelectElement>('flowTarget').value = t; fillStages(); } else syncStage();
+        if (t !== flowTarget()) { $<HTMLSelectElement>('flowTarget').value = t === 'asic' && flowPdk() === 'sky130' ? 'sky130' : t; fillStages(); } else syncStage();
       },
     });
     await check();
+    // #…&pdk=sky130: the ASIC flow on SkyWater SKY130
+    if (/[#&]pdk=sky130/.test(hash)) { $<HTMLSelectElement>('flowTarget').value = 'sky130'; fillStages(); }
     const st = /stage=(\w+)/.exec(hash)?.[1];
     if (st) runSynth(st);
     // the old demo page's links (index.html#ex=…&synth=1&target=asic)

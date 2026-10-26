@@ -23,7 +23,7 @@ Open `web/dist/index.html` in a browser: a VS Code style IDE. It needs no server
 - tabbed editor with Veryl syntax highlighting and live syntax checking (problems panel, gutter markers, squiggles)
 - projects kept in the browser: several projects, new / rename / delete / import files, `.zip` export
 - ▶ tests (RTL or gate-level), ✔ full verification: every testbench on RTL and on the three synthesized netlists
-- synthesis: the title bar's **FPGA / ASIC** and **stage** menus (① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦
+- synthesis: the title bar's back end (**FPGA**, **ASIC · vlib** or **ASIC · SKY130**: SkyWater's open PDK, with a DRC and a downloadable GDS) and **stage** menus (① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦
   or ASIC ④–⑨, last the FPGA vs ASIC comparison) show that stage in the flow tab, which has just a breadcrumb and icon buttons
   (ⓘ about the stage, wires, annealing animation, ⬇ downloads, zoom); the numbers are in the status bar
 - bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)

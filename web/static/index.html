@@ -22,7 +22,7 @@
     <button id="cmdVerify" class="tb-btn" disabled title="RTL + 三種閘級網表全部跑一遍（驗證矩陣）" data-en-title="Run RTL and all three gate-level netlists (verification matrix)" data-en="✔ Verify all">✔ 全面驗證</button>
   </div>
   <div class="tb-group">
-    <select id="flowTarget" disabled title="合成的後端" data-en-title="Synthesis back end"><option value="fpga">FPGA</option><option value="asic">ASIC</option></select>
+    <select id="flowTarget" disabled title="合成的後端" data-en-title="Synthesis back end"><option value="fpga">FPGA</option><option value="asic">ASIC · vlib</option><option value="sky130">ASIC · SKY130</option></select>
     <select id="flowStage" disabled title="合成並檢視這個階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view this stage (Ctrl/⌘+Shift+B)"></select>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
     <button id="cmdBoard" class="tb-btn" disabled title="合成並燒錄到虛擬 iCEBreaker 開發板" data-en-title="Synthesize and flash to a virtual iCEBreaker board" data-en="⚡ Virtual board">⚡ 虛擬板</button>
@@ -116,6 +116,7 @@
               <button id="synBin" class="hidden" title="位元流（iceprog 可燒錄）" data-en-title="Bitstream (flash it with iceprog)">.bin</button>
               <button id="synV" class="hidden" title="標準元件網表（Verilog）" data-en-title="Standard-cell netlist (Verilog)">.v</button>
               <button id="synDef" class="hidden" title="佈局（DEF）" data-en-title="Layout (DEF)">.def</button>
+              <button id="synGds" class="hidden" title="版圖（GDSII，SKY130）" data-en-title="Layout (GDSII, SKY130)">.gds</button>
             </span></span>
           <span id="synZoom"><button id="synZin" class="icon" title="放大" data-en-title="Zoom in">＋</button><button id="synZout" class="icon" title="縮小" data-en-title="Zoom out">－</button><button id="synZfit" class="icon" title="符合視窗" data-en-title="Fit">⤢</button></span>
         </div>

@@ -23,7 +23,7 @@ Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一
 - 标签页编辑器：Veryl 语法高亮、实时语法检查（问题面板、行号旁标记、波浪下划线）
 - 项目保存在浏览器：可有多个项目，新建 / 重命名 / 删除 / 导入文件，导出 `.zip`
 - ▶ 测试（RTL 或门级）；✔ 全面验证：每个 testbench 都在 RTL 与三种综合后网表上运行一遍
-- 综合：标题栏的 **FPGA / ASIC** 与**阶段**菜单（① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn，然后 FPGA ④–⑦
+- 综合：标题栏的后端（**FPGA**、**ASIC · vlib** 或 **ASIC · SKY130**：SkyWater 的开源 PDK，有 DRC，可下载 GDS）与**阶段**菜单（① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn，然后 FPGA ④–⑦
   或 ASIC ④–⑨，最后一项是 FPGA vs ASIC 比较），选了就在“综合流程”标签页显示该阶段；标签页只有一行面包屑与图标按钮
   （ⓘ 阶段说明、连线、退火动画、⬇ 下载、缩放），数字在状态栏
 - 下方面板（问题、输出、测试结果、波形）、状态栏、命令面板（Ctrl/⌘+Shift+P）、快速打开文件（Ctrl/⌘+P）

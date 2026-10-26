@@ -210,6 +210,9 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   AO21 / OA21 (`a21o_1`, `o21a_1`: one cell for an adder's carry instead of an AND and an OR), logical cells vlib leaves out
   (`asic::lib::EXTRA`). Alu: 68 → 114 MHz and 16 % less area; RiscvSoc 53 → 63 MHz, 7 % less area. When the detailed routing
   is not clean the flow tries a bigger die with a new placement seed (up to four times).
+- in the web IDE (v1.9) the title bar's back end menu has **ASIC · SKY130** next to ASIC · vlib (`index.html#…&pdk=sky130`):
+  the same stages on SKY130's cells and layers, the DRC summary in ⑦, and ⬇ .v / .def / .gds (the wasm `asic` command takes
+  `pdk: "sky130"`, `asic_gds` returns the last GDS).
 - `--gatesim sky130` runs the testbenches on the SKY130 netlist; `test.sh` proves every design's SKY130 netlist equivalent to
   `veryl build`'s output with the cell models yosys builds from the PDK's own Liberty file (`read_liberty`). The `cargo test`
   checks read the DEF back against the LEF (cells on the rows and sites, no overlaps, every site covered, tap distances).

@@ -1434,6 +1434,8 @@
       __publicField(this, "anim", 0);
       __publicField(this, "gen", 0);
       __publicField(this, "target", "fpga");
+      /** the ASIC technology: the educational vlib or SkyWater's SKY130 */
+      __publicField(this, "pdk", "vlib");
       __publicField(this, "asic", null);
       __publicField(this, "asicErr", null);
       __publicField(this, "asicBusy", false);
@@ -1460,7 +1462,13 @@
       $("synAsc").onclick = () => this.pnr && download(`${this.pnr.top}.asc`, this.pnr.asc);
       $("synPcf").onclick = () => this.pnr && download(`${this.pnr.top}.pcf`, this.pnr.pcf);
       $("synBin").onclick = () => this.pnr && download(`${this.pnr.top}.bin`, fromBase64(this.pnr.bin));
-      $("synV").onclick = () => this.asic && download(`${this.asic.top}_vlib.v`, this.asic.verilog);
+      $("synV").onclick = () => this.asic && download(`${this.asic.top}_${this.pdk}.v`, this.asic.verilog);
+      const gds = document.getElementById("synGds");
+      if (gds) gds.onclick = async () => {
+        if (!this.asic) return;
+        const r = await this.core.call({ cmd: "asic_gds" });
+        download(`${r.top}.gds`, fromBase64(r.gds));
+      };
       $("synDef").onclick = () => this.asic && download(`${this.asic.top}.def`, this.asic.def);
       $("synTarget").onchange = () => this.setTarget($("synTarget").value);
       $("synTop").onchange = () => this.run($("synTop").value);
@@ -1557,10 +1565,19 @@
       this.buttons();
       if (PNR.has(this.stage) || this.stage === "cmp") this.show(this.stage);
     }
+    /** the ASIC technology (a change runs the ASIC flow again) */
+    setPdk(p) {
+      if (p === this.pdk) return;
+      this.pdk = p;
+      this.asic = null;
+      this.asicErr = null;
+      if (this.target === "asic") this.setTarget("asic", false);
+      if (this.res && (ASIC.has(this.stage) || this.stage === "cmp")) this.show(this.stage);
+    }
     setTarget(t, show = true) {
       this.target = t;
       $("synTarget").value = t;
-      $("synTitle").textContent = t === "fpga" ? tr("\u5408\u6210 \u2192 FPGA\uFF08iCE40UP5K\uFF09", "Synthesis \u2192 FPGA (iCE40UP5K)") : tr("\u5408\u6210 \u2192 ASIC\uFF08vlib \u6A19\u6E96\u5143\u4EF6\uFF09", "Synthesis \u2192 ASIC (vlib standard cells)");
+      $("synTitle").textContent = t === "fpga" ? tr("\u5408\u6210 \u2192 FPGA\uFF08iCE40UP5K\uFF09", "Synthesis \u2192 FPGA (iCE40UP5K)") : this.pdk === "sky130" ? tr("\u5408\u6210 \u2192 ASIC\uFF08SkyWater SKY130 \u6A19\u6E96\u5143\u4EF6\uFF09", "Synthesis \u2192 ASIC (SkyWater SKY130 standard cells)") : tr("\u5408\u6210 \u2192 ASIC\uFF08vlib \u6A19\u6E96\u5143\u4EF6\uFF09", "Synthesis \u2192 ASIC (vlib standard cells)");
       this.chips();
       const cur2 = ASIC.has(this.stage) !== (t === "asic") && OTHER[this.stage] ? OTHER[this.stage] : this.stage;
       if (this.res) this.stats(this.synMs);
@@ -1570,22 +1587,27 @@
     async runAsic() {
       if (!this.res || this.asic || this.asicBusy) return;
       const gen = this.gen;
+      const pdk = this.pdk;
       this.asicBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
         if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`));
       }, 200);
       try {
-        const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1 });
-        if (gen !== this.gen) return;
+        const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1, pdk });
+        if (gen !== this.gen || pdk !== this.pdk) return;
         this.asic = r;
         this.asicMs = performance.now() - t0;
       } catch (e) {
-        if (gen !== this.gen) return;
+        if (gen !== this.gen || pdk !== this.pdk) return;
         this.asicErr = String(e.message ?? e);
       } finally {
         clearInterval(tick);
         this.asicBusy = false;
+      }
+      if (pdk !== this.pdk) {
+        if (ASIC.has(this.stage) || this.stage === "cmp") this.show(this.stage);
+        return;
       }
       this.stats(this.synMs);
       this.buttons();
@@ -1630,6 +1652,11 @@
       for (const id of ["synV", "synDef"]) {
         $(id).classList.toggle("hidden", !a);
         $(id).disabled = !this.asic;
+      }
+      const gds = document.getElementById("synGds");
+      if (gds) {
+        gds.classList.toggle("hidden", !a || this.pdk !== "sky130");
+        gds.disabled = !this.asic?.drc;
       }
       $("synEdges").classList.toggle("hidden", this.stage === "place" || this.stage === "aplace" || this.stage === "cmp");
     }
@@ -1683,7 +1710,7 @@
       const items = [`${tr("\u9802\u5C64", "Top")} <b>${r.top}</b>`, `${tr("\u9598", "Gates")} <b>${cellCount(r.raw)}</b> \u2192 <b>${cellCount(r.opt)}</b>`];
       const a = this.asic;
       if (a) {
-        const ffs = a.map.cells.filter((c) => c.t.includes("DFF")).length;
+        const ffs = a.map.cells.filter((c) => c.t.includes("DFF") || /__df[a-z]+_\d/.test(c.t)).length;
         items.push(
           tr(`\u6A19\u6E96\u5143\u4EF6 <b>${a.map.cells.length}</b>\uFF08DFF ${ffs}\uFF09`, `Cells <b>${a.map.cells.length}</b> (DFF ${ffs})`),
           `${tr("\u9762\u7A4D", "Area")} <b>${fmtArea(a.area)}</b>`,
@@ -1691,6 +1718,10 @@
           `${tr("\u7DDA\u9577", "Wirelength")} <b>${(a.route.wirelength / 1e3).toFixed(2)}</b> mm`,
           `F<sub>max</sub> <b>${a.timing.fmax.toFixed(1)}</b> MHz`
         );
+        if (a.drc) {
+          const v = a.drc.shorts + a.drc.spacing + a.drc.area + a.drc.opens;
+          items.push(`DRC <b>${v === 0 ? "\u2713 0" : v}</b>`);
+        }
       }
       items.push(`${tr("\u5408\u6210", "Synthesis")} <b>${ms.toFixed(0)}</b> ms` + (a ? `${tr("\uFF0CASIC \u6D41\u7A0B", ", ASIC flow")} <b>${(this.asicMs / 1e3).toFixed(1)}</b> s` : ""));
       $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
@@ -2062,22 +2093,40 @@
       if (key === "adetail") {
         const d = a.detail;
         const um = (x) => (x / 1e3).toFixed(2) + " mm";
-        return [
-          tr(`A \u2466 Detail Routing\uFF08\u8ECC\u9053\u683C\u9EDE\uFF1A\u6BCF ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m \u4E00\u689D\uFF0C${d.nx} \xD7 ${d.ny} \xD7 4 \u5C64\uFF1BM2/M4 \u6C34\u5E73\u3001M3/M5 \u5782\u76F4\uFF09`, `A \u2466 Detail Routing (track grid: one every ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m, ${d.nx} \xD7 ${d.ny} \xD7 4 layers; M2/M4 horizontal, M3/M5 vertical)`),
-          tr(
-            "\u6BCF\u689D net \u53EA\u5728\u5168\u57DF\u7E5E\u7DDA\u9078\u7684 gcell \u8D70\u5ECA\u5167\uFF08\u5916\u52A0\u4E00\u5708\uFF09\u4EE5 A* \u627E\u8DEF\uFF1A\u7AEF\u9EDE\u4F9D Prim \u9806\u5E8F\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF0C\u63DB\u5C64\u4E00\u500B via \u6210\u672C\u8F03\u9AD8\uFF1B\u6BCF\u500B\u683C\u9EDE\u53EA\u80FD\u5C6C\u65BC\u4E00\u689D net\uFF08\u6240\u4EE5\u6C92\u6709\u77ED\u8DEF\uFF09\uFF0C\u91CD\u758A\u4EE5 PathFinder \u5354\u5546\u91CD\u7E5E\uFF0C\u5361\u4F4F\u7684 net \u8D70\u5ECA\u6703\u52A0\u5BEC\u3002\u5143\u4EF6\u8173\u4F4D\u5F9E M1 \u7D93 via \u4E0A\u4F86\uFF0CSRAM \u5DE8\u96C6\u4E0A\u65B9\u64CB\u4F4F M2/M3\uFF0CIO \u8173\u5728 M5\u3002",
-            "Each net is routed with A* only inside the gcell corridor chosen by global routing (plus one ring): pins join the tree in Prim order, a layer change (via) costs more; every grid point belongs to one net at most (so no shorts), overlaps are renegotiated with PathFinder and a stuck net's corridor widens. Cell pins come up from M1 through vias, SRAM macros block M2/M3 above them, IO pins are on M5."
-          ),
+        const L = a.layers ?? ["M2", "M3", "M4", "M5"];
+        const drc = a.drc;
+        const sky = drc ? [
           "",
           tr(
-            `\u96FB\u6E90\u7DB2\u8DEF\uFF1A\u6BCF\u689D\u5217\u908A\u754C\u4E00\u689D M1 \u96FB\u6E90\u8ECC\uFF08VSS / VDD \u4EA4\u66FF\uFF0C\u5171 ${a.pdn.rails} \u689D\uFF09\uFF0CM5 \u5782\u76F4\u96FB\u6E90\u5E36 ${a.pdn.straps.length} \u689D\uFF08VDD / VSS \u6210\u5C0D\uFF0C\u6BCF 40 \xB5m \u4E00\u5C0D\uFF09\uFF0C${a.pdn.vias} \u500B via \u758A\u628A\u5E36\u5B50\u63A5\u5230\u540C\u540D\u7684\u8ECC\uFF1B\u7E5E\u7DDA\u5668\u907F\u958B\u5E36\u5B50\u8207 via \u758A\u3002\u7A7A\u4F4D\u88DC\u4E0A ${a.pdn.fillers.length / 3} \u500B\u586B\u5145\u5143\u4EF6\uFF08FILL8/4/2/1\uFF0C\u6DF1\u7070\uFF09\uFF0C\u8B93\u4E95\u8207\u96FB\u6E90\u8ECC\u9023\u7E8C\u3002`,
-            `Power grid: an M1 rail on every row boundary (VSS / VDD alternating, ${a.pdn.rails} rails), ${a.pdn.straps.length} vertical M5 straps (VDD / VSS pairs, one pair every 40 \xB5m), ${a.pdn.vias} via stacks tie the straps to the rails of the same net; the router avoids straps and via stacks. ${a.pdn.fillers.length / 3} filler cells (FILL8/4/2/1, dark gray) fill the gaps so wells and rails are continuous.`
+            `SkyWater SKY130\uFF1A\u5143\u4EF6\u8173\u4F4D\u5728 li1\uFF0C\u7D93 L1M1_PR \u4E0A ${L[0]}\uFF1B${L[0]} \u6C34\u5E73\u3001${L[1]} \u5782\u76F4\u3001${L[2]} \u6C34\u5E73\uFF08\u9694\u4E00\u689D\u8ECC\u9053\uFF09\u3001${L[3]} \u5782\u76F4\uFF08\u9694\u4E00\u689D\u8ECC\u9053\uFF09\uFF0C\u96FB\u6E90\u8ECC met1\u3001\u96FB\u6E90\u5E36 ${L[3]}\uFF1B\u6BCF\u5217\u6BCF 20 \xB5m \u4E00\u500B well tap\uFF08\u5171 ${drc.taps} \u500B\uFF09\u3002`,
+            `SkyWater SKY130: cell pins on li1, up to ${L[0]} through L1M1_PR; ${L[0]} horizontal, ${L[1]} vertical, ${L[2]} horizontal (every other track), ${L[3]} vertical (every other track); rails on met1, straps on ${L[3]}; a well tap every 20 \xB5m of each row (${drc.taps}).`
           ),
           tr(
-            `\u7DDA\u9577 ${um(d.wirelength)}\uFF08M2 ${um(d.per_layer[0])}\u3001M3 ${um(d.per_layer[1])}\u3001M4 ${um(d.per_layer[2])}\u3001M5 ${um(d.per_layer[3])}\uFF09\uFF0Cvia ${d.vias} \u500B\uFF1B\u885D\u7A81 ${d.conflicts}\u3001\u672A\u63A5\u901A ${d.opens}\uFF1B\u6BCF\u8F2A\u885D\u7A81\uFF1A${d.iters.join(" \u2192 ")}`,
-            `Wirelength ${um(d.wirelength)} (M2 ${um(d.per_layer[0])}, M3 ${um(d.per_layer[1])}, M4 ${um(d.per_layer[2])}, M5 ${um(d.per_layer[3])}), ${d.vias} vias; ${d.conflicts} conflicts, ${d.opens} opens; conflicts per iteration: ${d.iters.join(" \u2192 ")}`
+            `DRC\uFF08tech LEF \u7684\u898F\u5247\uFF0C\u542B\u5143\u4EF6\u81EA\u5DF1\u7684\u5F62\u72C0\uFF0C${drc.shapes} \u500B\u5F62\u72C0\uFF09\uFF1A\u77ED\u8DEF ${drc.shorts}\u3001\u9593\u8DDD ${drc.spacing}\u3001\u6700\u5C0F\u9762\u7A4D ${drc.area}\u3001\u65B7\u8DEF ${drc.opens}\u3002GDS\uFF1A${drc.instances} \u500B\u5143\u4EF6\u5BE6\u4F8B\u3001${(drc.gds_bytes / 1024).toFixed(0)} KB\uFF08\u2B07 \u4E0B\u8F09 .gds\uFF0C\u53EF\u7528 KLayout \u958B\u555F\uFF09\u3002`,
+            `DRC (the tech LEF's rules, with the cells' own shapes, ${drc.shapes} shapes): ${drc.shorts} shorts, ${drc.spacing} spacing, ${drc.area} min-area, ${drc.opens} opens. GDS: ${drc.instances} cell instances, ${(drc.gds_bytes / 1024).toFixed(0)} KB (\u2B07 download the .gds; it opens in KLayout).`
           ),
-          d.nets.length ? tr("\u984F\u8272\uFF1A\u85CD M2\u3001\u7D05 M3\u3001\u7DA0 M4\u3001\u9EC3 M5\uFF1B\u5074\u6B04\u53EF\u5207\u63DB\u5C64\u3001\u9EDE net \u9AD8\u4EAE\u3002\u9019\u4E00\u6B65\u7684\u7DDA\u9577\u4E5F\u56DE\u994B\u7D66 STA\u3002", "Colors: blue M2, red M3, green M4, yellow M5; switch layers in the side panel, click a net to highlight it. These wire lengths also feed the STA.") : tr(`\uFF08\u5171 ${d.segments} \u6BB5\u7DDA\uFF0C\u592A\u591A\u4E0D\u756B\uFF0C\u53EA\u5217\u7D71\u8A08\uFF09`, `(${d.segments} segments: too many to draw, statistics only)`)
+          ...drc.details.slice(0, 5)
+        ] : [];
+        return [
+          tr(`A \u2466 Detail Routing\uFF08\u8ECC\u9053\u683C\u9EDE\uFF1A\u6BCF ${(a.die.row_h / d.tracks).toFixed(2)} \xB5m \u4E00\u689D\uFF0C${d.nx} \xD7 ${d.ny} \xD7 4 \u5C64\uFF1B${L[0]}/${L[2]} \u6C34\u5E73\u3001${L[1]}/${L[3]} \u5782\u76F4\uFF09`, `A \u2466 Detail Routing (track grid: one every ${(a.die.row_h / d.tracks).toFixed(2)} \xB5m, ${d.nx} \xD7 ${d.ny} \xD7 4 layers; ${L[0]}/${L[2]} horizontal, ${L[1]}/${L[3]} vertical)`),
+          tr(
+            "\u6BCF\u689D net \u53EA\u5728\u5168\u57DF\u7E5E\u7DDA\u9078\u7684 gcell \u8D70\u5ECA\u5167\uFF08\u5916\u52A0\u4E00\u5708\uFF09\u4EE5 A* \u627E\u8DEF\uFF1A\u7AEF\u9EDE\u4F9D Prim \u9806\u5E8F\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF0C\u63DB\u5C64\u4E00\u500B via \u6210\u672C\u8F03\u9AD8\uFF1B\u6BCF\u500B\u683C\u9EDE\u53EA\u80FD\u5C6C\u65BC\u4E00\u689D net\uFF08\u6240\u4EE5\u6C92\u6709\u77ED\u8DEF\uFF09\uFF0C\u91CD\u758A\u4EE5 PathFinder \u5354\u5546\u91CD\u7E5E\uFF0C\u5361\u4F4F\u7684 net \u8D70\u5ECA\u6703\u52A0\u5BEC\u3002",
+            "Each net is routed with A* only inside the gcell corridor chosen by global routing (plus one ring): pins join the tree in Prim order, a layer change (via) costs more; every grid point belongs to one net at most (so no shorts), overlaps are renegotiated with PathFinder and a stuck net's corridor widens."
+          ),
+          ...drc ? [] : [
+            tr("\u5143\u4EF6\u8173\u4F4D\u5F9E M1 \u7D93 via \u4E0A\u4F86\uFF0CSRAM \u5DE8\u96C6\u4E0A\u65B9\u64CB\u4F4F M2/M3\uFF0CIO \u8173\u5728 M5\u3002", "Cell pins come up from M1 through vias, SRAM macros block M2/M3 above them, IO pins are on M5."),
+            "",
+            tr(
+              `\u96FB\u6E90\u7DB2\u8DEF\uFF1A\u6BCF\u689D\u5217\u908A\u754C\u4E00\u689D M1 \u96FB\u6E90\u8ECC\uFF08VSS / VDD \u4EA4\u66FF\uFF0C\u5171 ${a.pdn.rails} \u689D\uFF09\uFF0CM5 \u5782\u76F4\u96FB\u6E90\u5E36 ${a.pdn.straps.length} \u689D\uFF08VDD / VSS \u6210\u5C0D\uFF0C\u6BCF 40 \xB5m \u4E00\u5C0D\uFF09\uFF0C${a.pdn.vias} \u500B via \u758A\u628A\u5E36\u5B50\u63A5\u5230\u540C\u540D\u7684\u8ECC\uFF1B\u7E5E\u7DDA\u5668\u907F\u958B\u5E36\u5B50\u8207 via \u758A\u3002\u7A7A\u4F4D\u88DC\u4E0A ${a.pdn.fillers.length / 3} \u500B\u586B\u5145\u5143\u4EF6\uFF08FILL8/4/2/1\uFF0C\u6DF1\u7070\uFF09\uFF0C\u8B93\u4E95\u8207\u96FB\u6E90\u8ECC\u9023\u7E8C\u3002`,
+              `Power grid: an M1 rail on every row boundary (VSS / VDD alternating, ${a.pdn.rails} rails), ${a.pdn.straps.length} vertical M5 straps (VDD / VSS pairs, one pair every 40 \xB5m), ${a.pdn.vias} via stacks tie the straps to the rails of the same net; the router avoids straps and via stacks. ${a.pdn.fillers.length / 3} filler cells (FILL8/4/2/1, dark gray) fill the gaps so wells and rails are continuous.`
+            )
+          ],
+          tr(
+            `\u7DDA\u9577 ${um(d.wirelength)}\uFF08${L[0]} ${um(d.per_layer[0])}\u3001${L[1]} ${um(d.per_layer[1])}\u3001${L[2]} ${um(d.per_layer[2])}\u3001${L[3]} ${um(d.per_layer[3])}\uFF09\uFF0Cvia ${d.vias} \u500B\uFF1B\u885D\u7A81 ${d.conflicts}\u3001\u672A\u63A5\u901A ${d.opens}\uFF1B\u6BCF\u8F2A\u885D\u7A81\uFF1A${d.iters.join(" \u2192 ")}`,
+            `Wirelength ${um(d.wirelength)} (${L[0]} ${um(d.per_layer[0])}, ${L[1]} ${um(d.per_layer[1])}, ${L[2]} ${um(d.per_layer[2])}, ${L[3]} ${um(d.per_layer[3])}), ${d.vias} vias; ${d.conflicts} conflicts, ${d.opens} opens; conflicts per iteration: ${d.iters.join(" \u2192 ")}`
+          ),
+          d.nets.length ? tr(`\u984F\u8272\uFF1A\u85CD ${L[0]}\u3001\u7D05 ${L[1]}\u3001\u7DA0 ${L[2]}\u3001\u9EC3 ${L[3]}\uFF1B\u5074\u6B04\u53EF\u5207\u63DB\u5C64\u3001\u9EDE net \u9AD8\u4EAE\u3002\u9019\u4E00\u6B65\u7684\u7DDA\u9577\u4E5F\u56DE\u994B\u7D66 STA\u3002`, `Colors: blue ${L[0]}, red ${L[1]}, green ${L[2]}, yellow ${L[3]}; switch layers in the side panel, click a net to highlight it. These wire lengths also feed the STA.`) : tr(`\uFF08\u5171 ${d.segments} \u6BB5\u7DDA\uFF0C\u592A\u591A\u4E0D\u756B\uFF0C\u53EA\u5217\u7D71\u8A08\uFF09`, `(${d.segments} segments: too many to draw, statistics only)`),
+          ...sky
         ];
       }
       const t = a.timing;
@@ -2144,7 +2193,8 @@
         };
         pw.append(pcb, tr(" \u96FB\u6E90\u7DB2\u8DEF\uFF08\u7D05 VDD\u3001\u85CD VSS\uFF09", " power grid (red VDD, blue VSS)"));
         div.appendChild(pw);
-        [tr("M2 \u6C34\u5E73", "M2 horizontal"), tr("M3 \u5782\u76F4", "M3 vertical"), tr("M4 \u6C34\u5E73", "M4 horizontal"), tr("M5 \u5782\u76F4", "M5 vertical")].forEach((name, l) => {
+        const L = a.layers ?? ["M2", "M3", "M4", "M5"];
+        [`${L[0]} ${tr("\u6C34\u5E73", "horizontal")}`, `${L[1]} ${tr("\u5782\u76F4", "vertical")}`, `${L[2]} ${tr("\u6C34\u5E73", "horizontal")}`, `${L[3]} ${tr("\u5782\u76F4", "vertical")}`].forEach((name, l) => {
           const lab = document.createElement("label");
           lab.style.display = "block";
           const cb = document.createElement("input");
@@ -4864,13 +4914,15 @@ int main(void) {
     const key = JSON.stringify([files, top, pcfOf(proj)]);
     openFile(FLOW_TAB);
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
+    synth.setPdk(flowPdk());
     if (key !== synthKey || !synth.synthesized) {
       synthKey = key;
       const target = stage && isAsicStage(stage) ? "asic" : stage && isFpgaStage(stage) ? "fpga" : void 0;
       synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage);
     } else if (stage) synth.showStage(stage);
   }
-  var flowTarget = () => $2("flowTarget").value;
+  var flowTarget = () => $2("flowTarget").value === "fpga" ? "fpga" : "asic";
+  var flowPdk = () => $2("flowTarget").value === "sky130" ? "sky130" : "vlib";
   function fillStages() {
     const sel = $2("flowStage");
     sel.innerHTML = `<option value="" hidden>${tr("\u2699 \u5408\u6210", "\u2699 Synthesize")}</option>` + flow(flowTarget() === "asic").map(([k, l]) => `<option value="${k}">${esc4(l)}</option>`).join("") + `<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option><option value="cmp">${tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC")}</option>`;
@@ -4881,7 +4933,7 @@ int main(void) {
     const sel = $2("flowStage");
     sel.value = [...sel.options].some((o) => o.value === k) ? k : "";
     const label = sel.value ? sel.selectedOptions[0].textContent : "";
-    $2("synCrumb").innerHTML = `<span class="c" data-c="synthTop">${esc4(synthTop())}</span><span class="sep">\u203A</span>` + (k === "cmp" ? "" : `<span class="c" data-c="flowTarget">${flowTarget() === "asic" ? "ASIC" : "FPGA"}</span><span class="sep">\u203A</span>`) + `<span class="c last" data-c="flowStage">${esc4(label)}</span>`;
+    $2("synCrumb").innerHTML = `<span class="c" data-c="synthTop">${esc4(synthTop())}</span><span class="sep">\u203A</span>` + (k === "cmp" ? "" : `<span class="c" data-c="flowTarget">${flowTarget() === "asic" ? flowPdk() === "sky130" ? "ASIC \xB7 SKY130" : "ASIC" : "FPGA"}</span><span class="sep">\u203A</span>`) + `<span class="c last" data-c="flowStage">${esc4(label)}</span>`;
     $2("synDl").classList.toggle("hidden", ![...$2("synDlMenu").children].some((b) => !b.classList.contains("hidden")));
   }
   function synthStatus() {
@@ -5284,12 +5336,16 @@ int main(void) {
         onStage: (k) => {
           const t = isAsicStage(k) ? "asic" : isFpgaStage(k) ? "fpga" : flowTarget();
           if (t !== flowTarget()) {
-            $2("flowTarget").value = t;
+            $2("flowTarget").value = t === "asic" && flowPdk() === "sky130" ? "sky130" : t;
             fillStages();
           } else syncStage();
         }
       });
       await check();
+      if (/[#&]pdk=sky130/.test(hash)) {
+        $2("flowTarget").value = "sky130";
+        fillStages();
+      }
       const st = /stage=(\w+)/.exec(hash)?.[1];
       if (st) runSynth(st);
       else if (/[#&]synth=1/.test(hash)) {

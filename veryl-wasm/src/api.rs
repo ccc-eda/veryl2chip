@@ -91,9 +91,29 @@ fn net_names(nls: &[&Netlist]) -> std::collections::HashMap<Bit, String> {
     m
 }
 
-/// the ASIC flow on the vlib standard cells
+thread_local! {
+    /// the last ASIC flow's GDS (a library technology), for `asic_gds`
+    static LAST_GDS: std::cell::RefCell<Option<(String, Vec<u8>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// the GDS of the last `asic` run with a PDK, base64
+fn asic_gds(_v: &Value) -> R<Value> {
+    LAST_GDS.with(|g| match &*g.borrow() {
+        Some((top, bytes)) => Ok(json!({ "ok": true, "top": top, "gds": base64(bytes), "bytes": bytes.len() })),
+        None => Err("no GDS: run the ASIC flow with a PDK (sky130) first".into()),
+    })
+}
+
+/// the ASIC flow on the vlib standard cells, or a PDK's (`pdk`: "sky130")
 fn asic(v: &Value) -> R<Value> {
+    let pdk = v.get("pdk").and_then(|p| p.as_str()).unwrap_or("vlib").to_string();
+    let tech = veryl_eda::pdk::by_name(&pdk)?;
+    veryl_eda::pdk::with_tech(tech, || asic_in(v))
+}
+
+fn asic_in(v: &Value) -> R<Value> {
     use veryl_eda::asic;
+    let tech = veryl_eda::pdk::tech();
     let (top, (st, _)) = synth_netlists(v)?;
     let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1);
     let o = asic::flow(&st.opt, seed)?;
@@ -106,8 +126,37 @@ fn asic(v: &Value) -> R<Value> {
     let maxf = if n > 3000 { 20 } else { 30 };
     let hl = pl.history.len();
     let frames: Vec<usize> = if hl <= maxf { (0..hl).collect() } else { (0..maxf).map(|i| i * (hl - 1) / (maxf - 1)).collect() };
-    let mut verilog = veryl_eda::output::to_verilog(&o.mapped);
-    verilog += &asic::lib::verilog_models();
+    let lib_nl = veryl_eda::pdk::to_library(&o.mapped);
+    let mut verilog = veryl_eda::output::to_verilog(&lib_nl);
+    verilog += &veryl_eda::pdk::verilog_models();
+    // a library technology: design rules and the GDS
+    let drc_json = if tech.is_vlib() { Value::Null } else {
+        let l = asic::layout::build(&o)?;
+        let d = asic::drc::check(&l, &o.mapped);
+        let g = asic::gds::write(&l, &o.mapped.name, veryl_eda::pdk::SKY130_GDS)?;
+        let out = json!({ "shapes": d.shapes, "shorts": d.shorts, "spacing": d.spacing, "area": d.area, "opens": d.opens,
+            "taps": o.pdn.taps.len(), "tap_viol": o.pdn.tap_viol, "gds_bytes": g.len(), "instances": l.insts.len(), "details": d.details });
+        LAST_GDS.with(|x| *x.borrow_mut() = Some((top.clone(), g)));
+        out
+    };
+    // the library's view of a cell: its name, pins, width, area, a nominal delay (50 ps in, 5 fF out) and function
+    let lib_json: Vec<Value> = if tech.is_vlib() {
+        asic::lib::LIB.iter().map(|c| json!({ "name": c.name, "ins": c.ins, "width": c.width, "delay": c.delay, "load": c.load, "setup": c.setup, "area": asic::lib::area(c.name), "verilog": c.verilog })).collect()
+    } else {
+        let mut names: Vec<&String> = tech.cells.keys().collect();
+        names.sort();
+        names.into_iter().filter_map(|n| {
+            let b = &tech.cells[n];
+            let lc = tech.lib_cell(n)?;
+            let ins: Vec<String> = lc.inputs().map(|p| p.name.clone()).collect();
+            let first = asic::lib::cell(n).ins.first().copied().unwrap_or("A");
+            let d = tech.arc(n, first, 0.05, 0.005).map(|x| x.0).unwrap_or(0.0);
+            let f = lc.outputs().filter_map(|p| p.function.as_ref().map(|f| format!("{} = {}", p.name, f))).collect::<Vec<_>>().join(", ");
+            let f = if let Some(ff) = &lc.ff { format!("ff: next {} on {}{}", ff.next_state, ff.clocked_on, ff.clear.as_ref().map(|c| format!(", clear {}", c)).unwrap_or_default()) } else { f };
+            Some(json!({ "name": b.cell, "ins": ins, "width": b.width, "delay": (d * 1000.0).round() / 1000.0, "load": 0.0, "setup": 0.0, "area": b.area, "verilog": f }))
+        }).collect()
+    };
+    let counts: Vec<(String, usize)> = o.counts.iter().map(|(n, k)| (tech.cell_name(n).to_string(), *k)).collect();
     let power_json = {
             let p = &o.power;
             json!({ "freq": p.freq_mhz, "e_nets": p.e_nets, "e_clock": p.e_clock, "e_internal": p.e_internal, "e_sram": p.e_sram,
@@ -132,9 +181,12 @@ fn asic(v: &Value) -> R<Value> {
     Ok(json!({
         "ok": true,
         "top": top,
-        "map": netlist_json(&o.mapped),
-        "lib": asic::lib::LIB.iter().map(|c| json!({ "name": c.name, "ins": c.ins, "width": c.width, "delay": c.delay, "load": c.load, "setup": c.setup, "area": asic::lib::area(c.name), "verilog": c.verilog })).collect::<Vec<_>>(),
-        "counts": o.counts,
+        "pdk": tech.name,
+        "layers": tech.layers,
+        "drc": drc_json,
+        "map": netlist_json(&lib_nl),
+        "lib": lib_json,
+        "counts": counts,
         "area": o.area,
         "die": { "w": pl.w, "h": pl.h, "rows": pl.rows, "sites": pl.sites, "util": pl.util, "max_density": pl.max_density, "target_density": pl.target_density, "row_h": asic::lib::row_h(), "site_w": asic::lib::site_w() },
         "cells": o.mapped.cells.iter().enumerate().map(|(i, c)| { let (w, h) = asic::lib::dims(c); json!([pl.pos[i].0, pl.pos[i].1, w, (tm.arrival[i] * 1000.0).round() / 1000.0, crit.contains(&i) as u8, h]) }).collect::<Vec<_>>(),
@@ -696,6 +748,7 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "synth" => synth(v),
         "pnr" => pnr(v),
         "asic" => asic(v),
+        "asic_gds" => asic_gds(v),
         "board_load" => board_load(v),
         "board_flash" => board_flash(v),
         "board_load_bin" => board_load_bin(v),
