@@ -1,5 +1,6 @@
 // Scenes for the synthesis stages: instance hierarchy and levelized netlists.
 
+import { tr } from '../i18n';
 import type { Box, Line, Scene, Text } from '../view/canvas';
 import { stdColor } from './asic';
 import { isFF, isOut, JNetlist, Leveled, lutInputs } from './model';
@@ -80,7 +81,7 @@ export function netScene(nl: JNetlist, lev: Leveled): NetLayout {
       const sx = Math.floor(k / rows), sy = k % rows;
       pos[id] = [x + sx * (w + 4), sy * (BH + RG)];
     });
-    const label = ci === 0 ? '輸入' : ci === 1 ? 'DFF' : ci === last ? '輸出' : `L${ci - 1}`;
+    const label = ci === 0 ? tr('輸入', 'inputs') : ci === 1 ? 'DFF' : ci === last ? tr('輸出', 'outputs') : `L${ci - 1}`;
     texts.push({ x: x, y: -12, s: label, color: '#9fb2c8', size: 11 });
     x += sub * (w + 4) + CG;
   });
@@ -147,7 +148,7 @@ export function hierScene(hier: { path: string; module: string }[], counts: Map<
     const name = h.path === '' ? h.module : h.path.split('.').pop()!;
     const n = counts.get(h.path) ?? 0;
     boxes.push({ id: i, x, y, w: W, h: H, fill: depth === 0 ? '#3d6ea0' : '#2c3e55', stroke: '#6aa1d4', label: `${name} : ${h.module}` });
-    texts.push({ x: x + W + 10, y: y + H / 2, s: `${n} 個訊號`, color: '#9fb2c8', size: 11 });
+    texts.push({ x: x + W + 10, y: y + H / 2, s: tr(`${n} 個訊號`, `${n} signals`), color: '#9fb2c8', size: 11 });
     if (parent !== null && ypos.has(parent)) {
       const [px, py] = ypos.get(parent)!;
       lines.push({ pts: [px + 14, py + H, px + 14, y + H / 2, x, y + H / 2], color: '#6aa1d4', width: 1.5 });

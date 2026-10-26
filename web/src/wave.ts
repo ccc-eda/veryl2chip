@@ -1,5 +1,7 @@
 // Waveform viewer for the VCD that veryl-sim records.
 
+import { tr } from './i18n';
+
 export interface VcdSignal { id: string; name: string; width: number; changes: [number, string][] }
 export interface Vcd { signals: VcdSignal[]; end: number }
 
@@ -124,7 +126,7 @@ export class WaveView {
     g.fillStyle = '#171c24'; g.fillRect(0, 0, r.width, h);
     g.font = '11px ui-monospace, Menlo, monospace';
     g.textBaseline = 'middle';
-    if (!this.vcd) { g.fillStyle = '#9fb2c8'; g.fillText('按「▶ 模擬」後顯示波形', 12, 20); return; }
+    if (!this.vcd) { g.fillStyle = '#9fb2c8'; g.fillText(tr('按「▶ 模擬」後顯示波形', 'Run a simulation (▶) to see the waveform'), 12, 20); return; }
     const W = r.width - NAME_W;
     const X = (t: number) => NAME_W + (t - this.t0) * this.scale;
     const t1 = this.t0 + W / this.scale;

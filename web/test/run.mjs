@@ -200,6 +200,33 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   console.log(`${lossy || !tagged ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files${lossy ? ': changes ' + lossy : ''}${tagged ? '' : ': tokens not tagged'}`);
 }
 
+// interface languages: every tr('繁體', 'English') pair in the sources has
+// Chinese-free English, and its Simplified form keeps no Traditional-only character
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/i18n.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const ip = path.join(tmp, 'i18n.cjs');
+  fs.writeFileSync(ip, js);
+  const { hans } = createRequire(import.meta.url)(ip);
+  const srcDir = path.join(dist, '../src');
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts'];
+  const han = /[\u3400-\u9fff]/;
+  const trad = new Set('並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
+  let pairs = 0, badEn = [], badHans = [];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(srcDir, f), 'utf8');
+    for (const m of src.matchAll(/tr\((['`])((?:(?!\1)[^\\]|\\.)*)\1,\s*(['`])((?:(?!\3)[^\\]|\\.)*)\3\)/g)) {
+      pairs++;
+      if (han.test(m[4])) badEn.push(m[4].slice(0, 40));
+      const h = hans(m[2]);
+      if ([...h].some((c) => trad.has(c))) badHans.push(h.slice(0, 40));
+    }
+  }
+  const ok = pairs > 150 && !badEn.length && !badHans.length;
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} i18n     ${pairs} tr() pairs${badEn.length ? '; Chinese in English: ' + badEn.slice(0, 3).join(' | ') : ''}${badHans.length ? '; not simplified: ' + badHans.slice(0, 3).join(' | ') : ''}; ${hans('檔案總管：模擬退火後繞線')}`);
+}
+
 // a broken source must come back as a message, not crash the core
 try { core.simulate([{ name: 'x.veryl', src: 'module X ( a: input logic ) { assign b = ; }' }]); bad++; console.log('FAIL parse error not reported'); }
 catch (e) { console.log(`ok   parse error reported: ${e.message}`); }

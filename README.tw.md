@@ -1,0 +1,63 @@
+# veryl2chip
+[English](README.md) | **繁體中文** | [简体中文](README.cn.md)
+
+Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一路到位元流）與 ASIC 流程
+（標準元件、佈局、繞線、時序分析），全部用 Rust 寫成。
+
+| | |
+|---|---|
+| [`veryl-sim/`](veryl-sim/) | Veryl testbench 的事件驅動模擬器（`$tb::clock_gen`、`$assert`、VCD） |
+| [`veryl-eda/`](veryl-eda/) | 合成成閘級網表、iCE40 對應、自製佈局繞線 + 位元流、ASIC 後端（`--asic`） |
+| [`veryl-wasm/`](veryl-wasm/) | 兩個 crate 編譯成 WebAssembly，以 JSON API 呼叫 |
+| [`web/`](web/) | 純前端的網頁環境（TypeScript） |
+| [`examples/`](examples/) | 範例設計的 Veryl 專案，含一顆單週期 RV32I CPU |
+
+## 網頁環境
+用瀏覽器開啟 `web/dist/index.html` 即可，不需要伺服器、不需要安裝，從 `file://` 開也能用。
+
+- **原始碼**：範例專案（每個可有多個檔案，含 UART、FIFO、VGA）放在編輯器裡；修改存在瀏覽器（localStorage）。
+  可以新增檔案（附模組 + testbench 範本）、刪除、匯入，也能把專案下載成 `.zip`（`Veryl.toml` + `src/`），
+  官方的 `veryl build` / `veryl test` 可以直接使用。
+- **▶ 模擬**：在 WebAssembly 裡執行所有 `#[test]` testbench，有輸出記錄、可點的錯誤位置與波形檢視。
+  旁邊的選單可切到**合成後模擬**：把範例的設計模組換成合成出來的網表（通用閘、iCE40 LUT / block RAM、
+  或標準元件），用同一個 testbench 跑。
+- **⚙ 合成**：合成檢視。每個階段都有報告、可縮放的圖與細節側欄：
+  - 共用：① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn
+  - FPGA：④ LUT4 Techmap → ⑤ Placement（退火動畫）→ ⑥ Global+Detail Routing → ⑦ Timing (STA)。
+    可下載 `.asc`、`.pcf` 與 `.bin`；`.bin` 與 icepack 的輸出逐位元組相同，可用 `iceprog` 燒錄。
+  - ASIC：④ Standard Cell Map → ⑤ Row Placement（動畫）→ ⑥ CTS + Global Routing → ⑦ Detail Routing →
+    ⑧ Timing (STA) → ⑨ Power + IR Drop。可下載標準元件 Verilog 與 DEF。
+  - ⇄ FPGA vs ASIC：兩種佈局並排，加上比較表（元件、面積、繞線、Fmax、能量、功耗）。
+
+（展示頁的介面是繁體中文；簡體中文或英文介面請用下面的 IDE。）
+
+網址的 hash 可以指定範例與階段，例如 `index.html#ex=soc&synth=1&target=asic`。
+
+### IDE
+`web/dist/ide.html` 是建在同一個核心上、功能更完整的 VS Code 風格 IDE（上面的展示頁保持不變）：
+
+- 活動列與側欄：專案檔案與模組大綱、範例庫、合成流程各階段、測試、說明
+- 分頁編輯器：Veryl 語法上色、即時語法檢查（問題面板、行號旁標記、波浪底線）
+- 專案存在瀏覽器：可有多個專案，新增 / 改名 / 刪除 / 匯入檔案，匯出 `.zip`
+- ▶ 測試（RTL 或閘級）；✔ 全面驗證：每個 testbench 都在 RTL 與三種合成後網表上跑一遍
+- ⚙ 合成流程是一個編輯器分頁：共用 ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn，接著 FPGA ④–⑦
+  或 ASIC ④–⑨，以及 FPGA vs ASIC
+- 下方面板（問題、輸出、測試結果、波形）、狀態列、命令選單（Ctrl/⌘+Shift+P）、快速開檔（Ctrl/⌘+P）
+- 介面可用繁體中文、簡體中文或英文（標題列的選單切換；預設依瀏覽器語言）
+
+`ide.html#ex=fifo&stage=place` 會開啟某個範例並跳到某個階段；加上 `&run=1` / `&verify=1` 會直接開始測試。
+
+重新建置（需要 Rust + wasm32 target、Node.js）：
+
+```sh
+cd web
+npm install
+npm run build
+npm test
+```
+
+`npm run build` 重建 `web/dist`。`npm test` 用建好的 `dist/` 把每個範例跑過一遍：模擬、合成、FPGA 佈局繞線
+（`.asc` 與 CLI 相同，`.bin` 與 icepack 相同）、ASIC 流程（結果與 CLI 相同）、每個範例的閘級模擬、
+解開匯出的專案 `.zip` 並以 `veryl test` 檢查，以及介面翻譯。
+
+指令與架構見 [AGENTS.md](AGENTS.md)；各 crate 的 README（繁體中文）有更多細節。

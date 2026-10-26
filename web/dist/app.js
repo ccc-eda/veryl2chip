@@ -82,6 +82,379 @@
     return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
+  // src/i18n_hans.ts
+  var HANS_PHRASES = {
+    "\u6A94\u6848\u7E3D\u7BA1": "\u8D44\u6E90\u7BA1\u7406\u5668",
+    "\u6A94\u6848": "\u6587\u4EF6",
+    "\u6A94\u540D": "\u6587\u4EF6\u540D",
+    "\u5FEB\u901F\u958B\u6A94": "\u5FEB\u901F\u6253\u5F00\u6587\u4EF6",
+    "\u66AB\u5B58\u5668\u6A94": "\u5BC4\u5B58\u5668\u5806",
+    "\u6A94": "\u6587\u4EF6",
+    "\u53EF\u7A0B\u5F0F": "\u53EF\u7F16\u7A0B",
+    "\u7A0B\u5F0F\u78BC": "\u4EE3\u7801",
+    "\u539F\u59CB\u78BC": "\u6E90\u4EE3\u7801",
+    "\u7A0B\u5F0F": "\u7A0B\u5E8F",
+    "\u4ECB\u9762": "\u754C\u9762",
+    "\u6A21\u64EC\u9000\u706B": "\u6A21\u62DF\u9000\u706B",
+    "\u6A21\u64EC": "\u4EFF\u771F",
+    "\u4F4D\u5143\u6D41": "\u6BD4\u7279\u6D41",
+    "\u4F4D\u5143": "\u4F4D",
+    "\u9810\u8A2D": "\u9ED8\u8BA4",
+    "\u8A18\u61B6\u9AD4\u7DE8\u8B6F\u5668": "\u5B58\u50A8\u5668\u7F16\u8BD1\u5668",
+    "\u8A18\u61B6\u9AD4": "\u5B58\u50A8\u5668",
+    "\u8CC7\u6599\u5EAB": "\u6570\u636E\u5E93",
+    "\u8CC7\u6599": "\u6570\u636E",
+    "\u8A0A\u865F": "\u4FE1\u53F7",
+    "\u8A2D\u5B9A": "\u8BBE\u7F6E",
+    "\u80CC\u666F\u57F7\u884C\u7DD2": "\u540E\u53F0\u7EBF\u7A0B",
+    "\u57F7\u884C\u7DD2": "\u7EBF\u7A0B",
+    "\u57F7\u884C": "\u8FD0\u884C",
+    "\u8F09\u5165": "\u52A0\u8F7D",
+    "\u5132\u5B58": "\u4FDD\u5B58",
+    "\u532F\u5165": "\u5BFC\u5165",
+    "\u532F\u51FA": "\u5BFC\u51FA",
+    "\u5C08\u6848": "\u9879\u76EE",
+    "\u7BC4\u4F8B": "\u793A\u4F8B",
+    "\u547D\u4EE4\u9078\u55AE": "\u547D\u4EE4\u9762\u677F",
+    "\u9078\u55AE": "\u83DC\u5355",
+    "\u7DB2\u8DEF": "\u7F51\u7EDC",
+    "\u7E5E\u7DDA": "\u5E03\u7EBF",
+    "\u91CD\u7E5E": "\u91CD\u65B0\u5E03\u7EBF",
+    "\u7E5E\u4E0D\u901A": "\u5E03\u4E0D\u901A",
+    "\u7E5E\u5F97\u901A": "\u5E03\u5F97\u901A",
+    "\u4F48\u5C40": "\u5E03\u5C40",
+    "\u6A19\u6E96\u5143\u4EF6": "\u6807\u51C6\u5355\u5143",
+    "\u586B\u5145\u5143\u4EF6": "\u586B\u5145\u5355\u5143",
+    "\u5143\u4EF6\u5EAB": "\u5355\u5143\u5E93",
+    "\u5143\u4EF6": "\u5355\u5143",
+    "\u6676\u7247": "\u82AF\u7247",
+    "\u6676\u7C92": "\u88F8\u7247",
+    "\u786C\u9AD4": "\u786C\u4EF6",
+    "\u6B63\u53CD\u5668": "\u89E6\u53D1\u5668",
+    "\u66AB\u5B58\u5668": "\u5BC4\u5B58\u5668",
+    "\u6642\u8108": "\u65F6\u949F",
+    "\u786C\u5DE8\u96C6": "\u786C\u5B8F",
+    "\u5DE8\u96C6": "\u5B8F",
+    "\u5BEB\u5165\u57E0": "\u5199\u5165\u7AEF\u53E3",
+    "\u8B80\u53D6\u57E0": "\u8BFB\u53D6\u7AEF\u53E3",
+    "\u8F38\u5165\u57E0": "\u8F93\u5165\u7AEF\u53E3",
+    "\u57E0": "\u7AEF\u53E3",
+    "\u5BE6\u4F5C": "\u5B9E\u73B0",
+    "\u51FD\u5F0F": "\u51FD\u6570",
+    "\u7D44\u5408\u8FF4\u8DEF": "\u7EC4\u5408\u73AF\u8DEF",
+    "\u8FF4\u8DEF\u6E2C\u8A66": "\u73AF\u56DE\u6D4B\u8BD5",
+    "\u8FF4\u8DEF": "\u73AF\u56DE",
+    "\u905E\u8FF4": "\u9012\u5F52",
+    "\u53EA\u5217\u7D71\u8A08": "\u53EA\u5217\u7EDF\u8BA1",
+    "\u5074\u6B04": "\u4FA7\u680F",
+    "\u6B04": "\u5217",
+    "\u5217": "\u884C",
+    "\u9078\u53D6": "\u9009\u4E2D",
+    "\u652F\u63F4": "\u652F\u6301",
+    "\u6700\u4F73\u5316": "\u4F18\u5316",
+    "\u96FB\u6676\u9AD4": "\u6676\u4F53\u7BA1",
+    "\u5E73\u884C": "\u5E76\u884C",
+    "\u4E95\u8207": "\u9631\u4E0E",
+    "\u63A5\u8173": "\u5F15\u811A",
+    "\u8173\u4F4D": "\u5F15\u811A",
+    "\u8173": "\u5F15\u811A",
+    "\u8A3B\u89E3": "\u6CE8\u91CA",
+    "\u53CD\u7E2E\u6392": "\u53CD\u7F29\u8FDB",
+    "\u7E2E\u6392": "\u7F29\u8FDB",
+    "\u65B0\u589E": "\u65B0\u5EFA",
+    "\u91CD\u65B0\u547D\u540D": "\u91CD\u547D\u540D",
+    "\u6536\u5408": "\u6298\u53E0",
+    "\u4F3A\u670D\u5668": "\u670D\u52A1\u5668",
+    "\u8CA0\u7DE3": "\u4E0B\u964D\u6CBF",
+    "\u6B63\u7DE3": "\u4E0A\u5347\u6CBF",
+    "\u908A\u7DE3": "\u8FB9\u6CBF",
+    "\u975E\u540C\u6B65": "\u5F02\u6B65",
+    "\u4F4E\u614B\u6709\u6548": "\u4F4E\u7535\u5E73\u6709\u6548",
+    "\u5206\u4F48": "\u5206\u5E03",
+    "\u9918\u88D5": "\u88D5\u91CF",
+    "\u9598\u7D1A": "\u95E8\u7EA7",
+    "\u6524\u5E73": "\u5C55\u5E73",
+    "\u5373\u6642": "\u5B9E\u65F6",
+    "\u5C55\u793A\u7248": "\u6F14\u793A\u7248",
+    "\u532F": "\u6C47",
+    "\u54C1\u8CEA": "\u8D28\u91CF",
+    "\u7269\u4EF6": "\u5BF9\u8C61",
+    "\u5F71\u7247": "\u89C6\u9891",
+    "\u9810\u89BD": "\u9884\u89C8",
+    "\u5217\u5F0F": "\u884C\u5F0F"
+  };
+  var HANS_CHARS = {
+    "\u4E26": "\u5E76",
+    "\u4F48": "\u5E03",
+    "\u4F54": "\u5360",
+    "\u4F75": "\u5E76",
+    "\u4F86": "\u6765",
+    "\u500B": "\u4E2A",
+    "\u5074": "\u4FA7",
+    "\u50B3": "\u4F20",
+    "\u50F9": "\u4EF7",
+    "\u5100": "\u4EEA",
+    "\u5104": "\u4EBF",
+    "\u512A": "\u4F18",
+    "\u5132": "\u50A8",
+    "\u5167": "\u5185",
+    "\u5169": "\u4E24",
+    "\u5225": "\u522B",
+    "\u522A": "\u5220",
+    "\u5247": "\u5219",
+    "\u5275": "\u521B",
+    "\u5283": "\u5212",
+    "\u52D5": "\u52A8",
+    "\u532F": "\u6C47",
+    "\u5354": "\u534F",
+    "\u53C3": "\u53C2",
+    "\u54E1": "\u5458",
+    "\u554F": "\u95EE",
+    "\u555F": "\u542F",
+    "\u55AE": "\u5355",
+    "\u56B4": "\u4E25",
+    "\u570D": "\u56F4",
+    "\u5716": "\u56FE",
+    "\u57F7": "\u6267",
+    "\u584A": "\u5757",
+    "\u58D3": "\u538B",
+    "\u5BE6": "\u5B9E",
+    "\u5BEB": "\u5199",
+    "\u5BEC": "\u5BBD",
+    "\u5C08": "\u4E13",
+    "\u5C0D": "\u5BF9",
+    "\u5C0E": "\u5BFC",
+    "\u5C64": "\u5C42",
+    "\u5C6C": "\u5C5E",
+    "\u5E2B": "\u5E08",
+    "\u5E36": "\u5E26",
+    "\u5EAB": "\u5E93",
+    "\u5EE3": "\u5E7F",
+    "\u5F48": "\u5F39",
+    "\u5F8C": "\u540E",
+    "\u5F91": "\u5F84",
+    "\u5F9E": "\u4ECE",
+    "\u5FB5": "\u5F81",
+    "\u614B": "\u6001",
+    "\u61B6": "\u5FC6",
+    "\u61C9": "\u5E94",
+    "\u61F2": "\u60E9",
+    "\u6368": "\u820D",
+    "\u63DB": "\u6362",
+    "\u647A": "\u6298",
+    "\u64B2": "\u6251",
+    "\u64C1": "\u62E5",
+    "\u64C7": "\u62E9",
+    "\u64CB": "\u6321",
+    "\u64E0": "\u6324",
+    "\u64EC": "\u62DF",
+    "\u6524": "\u644A",
+    "\u6557": "\u8D25",
+    "\u6578": "\u6570",
+    "\u65B7": "\u65AD",
+    "\u65BC": "\u4E8E",
+    "\u6642": "\u65F6",
+    "\u66AB": "\u6682",
+    "\u66F8": "\u4E66",
+    "\u6703": "\u4F1A",
+    "\u689D": "\u6761",
+    "\u68C4": "\u5F03",
+    "\u6A02": "\u4E50",
+    "\u6A19": "\u6807",
+    "\u6A23": "\u6837",
+    "\u6A39": "\u6811",
+    "\u6A5F": "\u673A",
+    "\u6A94": "\u6863",
+    "\u6AA2": "\u68C0",
+    "\u6B0A": "\u6743",
+    "\u6B61": "\u6B22",
+    "\u6B77": "\u5386",
+    "\u6B78": "\u5F52",
+    "\u6C7A": "\u51B3",
+    "\u6C92": "\u6CA1",
+    "\u6CC1": "\u51B5",
+    "\u6DFA": "\u6D45",
+    "\u6E1B": "\u51CF",
+    "\u6E2C": "\u6D4B",
+    "\u6E96": "\u51C6",
+    "\u6EAB": "\u6E29",
+    "\u6EFE": "\u6EDA",
+    "\u6EFF": "\u6EE1",
+    "\u6F22": "\u6C49",
+    "\u700F": "\u6D4F",
+    "\u70BA": "\u4E3A",
+    "\u7121": "\u65E0",
+    "\u71B1": "\u70ED",
+    "\u71D2": "\u70E7",
+    "\u72C0": "\u72B6",
+    "\u73FE": "\u73B0",
+    "\u74B0": "\u73AF",
+    "\u7522": "\u4EA7",
+    "\u756B": "\u753B",
+    "\u758A": "\u53E0",
+    "\u767C": "\u53D1",
+    "\u76E4": "\u76D8",
+    "\u78BC": "\u7801",
+    "\u790E": "\u7840",
+    "\u7A2E": "\u79CD",
+    "\u7A31": "\u79F0",
+    "\u7A4D": "\u79EF",
+    "\u7AAE": "\u7A77",
+    "\u7BC0": "\u8282",
+    "\u7BC4": "\u8303",
+    "\u7BE9": "\u7B5B",
+    "\u7C21": "\u7B80",
+    "\u7C3D": "\u7B7E",
+    "\u7C64": "\u7B7E",
+    "\u7D04": "\u7EA6",
+    "\u7D05": "\u7EA2",
+    "\u7D1A": "\u7EA7",
+    "\u7D30": "\u7EC6",
+    "\u7D42": "\u7EC8",
+    "\u7D44": "\u7EC4",
+    "\u7D50": "\u7ED3",
+    "\u7D66": "\u7ED9",
+    "\u7D71": "\u7EDF",
+    "\u7D93": "\u7ECF",
+    "\u7D9C": "\u7EFC",
+    "\u7DA0": "\u7EFF",
+    "\u7DB2": "\u7F51",
+    "\u7DD2": "\u7EEA",
+    "\u7DDA": "\u7EBF",
+    "\u7DE3": "\u7F18",
+    "\u7DE8": "\u7F16",
+    "\u7DE9": "\u7F13",
+    "\u7E2E": "\u7F29",
+    "\u7E3D": "\u603B",
+    "\u7E5E": "\u7ED5",
+    "\u7E8C": "\u7EED",
+    "\u7F70": "\u7F5A",
+    "\u806F": "\u8054",
+    "\u8108": "\u8109",
+    "\u8166": "\u8111",
+    "\u8173": "\u811A",
+    "\u81E8": "\u4E34",
+    "\u8207": "\u4E0E",
+    "\u8209": "\u4E3E",
+    "\u84CB": "\u76D6",
+    "\u85CD": "\u84DD",
+    "\u862D": "\u5170",
+    "\u8655": "\u5904",
+    "\u865F": "\u53F7",
+    "\u8853": "\u672F",
+    "\u885D": "\u51B2",
+    "\u88DC": "\u8865",
+    "\u88E1": "\u91CC",
+    "\u898F": "\u89C4",
+    "\u8996": "\u89C6",
+    "\u89BD": "\u89C8",
+    "\u8A08": "\u8BA1",
+    "\u8A0A": "\u8BAF",
+    "\u8A18": "\u8BB0",
+    "\u8A2D": "\u8BBE",
+    "\u8A3B": "\u6CE8",
+    "\u8A66": "\u8BD5",
+    "\u8A72": "\u8BE5",
+    "\u8A9E": "\u8BED",
+    "\u8AA4": "\u8BEF",
+    "\u8AAA": "\u8BF4",
+    "\u8ABF": "\u8C03",
+    "\u8ACB": "\u8BF7",
+    "\u8B49": "\u8BC1",
+    "\u8B6F": "\u8BD1",
+    "\u8B80": "\u8BFB",
+    "\u8B8A": "\u53D8",
+    "\u8B93": "\u8BA9",
+    "\u8CA0": "\u8D1F",
+    "\u8CC7": "\u8D44",
+    "\u8ECC": "\u8F68",
+    "\u8F03": "\u8F83",
+    "\u8F09": "\u8F7D",
+    "\u8F2A": "\u8F6E",
+    "\u8F2F": "\u8F91",
+    "\u8F38": "\u8F93",
+    "\u8F49": "\u8F6C",
+    "\u8FF4": "\u56DE",
+    "\u9019": "\u8FD9",
+    "\u9023": "\u8FDE",
+    "\u9031": "\u5468",
+    "\u9032": "\u8FDB",
+    "\u904E": "\u8FC7",
+    "\u9054": "\u8FBE",
+    "\u9055": "\u8FDD",
+    "\u905E": "\u9012",
+    "\u9060": "\u8FDC",
+    "\u9072": "\u8FDF",
+    "\u9078": "\u9009",
+    "\u9084": "\u8FD8",
+    "\u908A": "\u8FB9",
+    "\u908F": "\u903B",
+    "\u9304": "\u5F55",
+    "\u932F": "\u9519",
+    "\u9375": "\u952E",
+    "\u93C8": "\u94FE",
+    "\u9418": "\u949F",
+    "\u9577": "\u957F",
+    "\u9589": "\u95ED",
+    "\u958B": "\u5F00",
+    "\u9593": "\u95F4",
+    "\u9598": "\u95E8",
+    "\u95DC": "\u5173",
+    "\u9663": "\u9635",
+    "\u968E": "\u9636",
+    "\u969B": "\u9645",
+    "\u96A8": "\u968F",
+    "\u96D6": "\u867D",
+    "\u96D9": "\u53CC",
+    "\u96DC": "\u6742",
+    "\u96E2": "\u79BB",
+    "\u96FB": "\u7535",
+    "\u975C": "\u9759",
+    "\u97FF": "\u54CD",
+    "\u9801": "\u9875",
+    "\u9802": "\u9876",
+    "\u9805": "\u9879",
+    "\u9806": "\u987A",
+    "\u9808": "\u987B",
+    "\u9810": "\u9884",
+    "\u9813": "\u987F",
+    "\u982D": "\u5934",
+    "\u9838": "\u9888",
+    "\u983B": "\u9891",
+    "\u9846": "\u9897",
+    "\u984C": "\u9898",
+    "\u984F": "\u989C",
+    "\u985E": "\u7C7B",
+    "\u986F": "\u663E",
+    "\u9918": "\u4F59",
+    "\u994B": "\u9988",
+    "\u9A45": "\u9A71",
+    "\u9A57": "\u9A8C",
+    "\u9AD4": "\u4F53",
+    "\u9B06": "\u677E",
+    "\u9EC3": "\u9EC4",
+    "\u9EDE": "\u70B9",
+    "\u9F4A": "\u9F50"
+  };
+
+  // src/i18n.ts
+  var cur = "zh-Hant";
+  function tr(hant, en) {
+    return cur === "en" ? en : cur === "zh-Hans" ? hans(hant) : hant;
+  }
+  var cache = /* @__PURE__ */ new Map();
+  var phraseRe = null;
+  function hans(s) {
+    let r = cache.get(s);
+    if (r !== void 0) return r;
+    phraseRe ?? (phraseRe = new RegExp(Object.keys(HANS_PHRASES).sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g"));
+    r = s.replace(phraseRe, (m) => HANS_PHRASES[m]);
+    let out = "";
+    for (const ch of r) out += HANS_CHARS[ch] ?? ch;
+    cache.set(s, out);
+    return out;
+  }
+
   // src/client.ts
   async function startCore(wasm) {
     const mod = await WebAssembly.compile(wasm);
@@ -92,7 +465,7 @@
     }
   }
   function chipdbGz() {
-    if (typeof VERYL_CHIPDB_GZ_B64 === "undefined") throw new Error("chipdb.js (\u6676\u7247\u8CC7\u6599\u5EAB) \u6C92\u6709\u8F09\u5165");
+    if (typeof VERYL_CHIPDB_GZ_B64 === "undefined") throw new Error(tr("chipdb.js\uFF08\u6676\u7247\u8CC7\u6599\u5EAB\uFF09\u6C92\u6709\u8F09\u5165", "chipdb.js (chip database) is not loaded"));
     return fromBase64(VERYL_CHIPDB_GZ_B64);
   }
   async function workerCore(mod) {
@@ -113,7 +486,7 @@
       w.postMessage({ ...msg, id }, transfer);
     });
     w.onerror = () => {
-      for (const p of pending.values()) p.fail(new Error("worker \u932F\u8AA4"));
+      for (const p of pending.values()) p.fail(new Error(tr("worker \u932F\u8AA4", "worker error")));
       pending.clear();
     };
     await Promise.race([send({ type: "init", module: mod }), new Promise((_, f) => setTimeout(() => f(new Error("worker timeout")), 5e3))]);
@@ -695,7 +1068,7 @@
         ...left.texts,
         ...right.texts,
         { x: bf.x0, y: ty, s: `FPGA\uFF1AiCE40UP5K\uFF08${p.lcs.length} LC / 5280\uFF09`, color: "#7ec3ff", size, align: "left" },
-        { x: bf.x1 + gap, y: ty, s: `ASIC\uFF1Avlib \u6A19\u6E96\u5143\u4EF6\uFF08\u6676\u7C92 ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m\uFF0C\u653E\u5927\u5230\u540C\u9AD8\uFF09`, color: "#e0b87e", size, align: "left" }
+        { x: bf.x1 + gap, y: ty, s: tr(`ASIC\uFF1Avlib \u6A19\u6E96\u5143\u4EF6\uFF08\u6676\u7C92 ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m\uFF0C\u653E\u5927\u5230\u540C\u9AD8\uFF09`, `ASIC: vlib standard cells (die ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m, scaled to the same height)`), color: "#e0b87e", size, align: "left" }
       ],
       bg: [...left.bg ?? [], ...right.bg ?? []]
     };
@@ -711,15 +1084,15 @@
     const f = Math.min(p.timing.fmax, a.timing.fmax);
     const pF = eF * f / 1e3 + p.timing.power.static, pA = eA * f / 1e3 + a.power.leakage;
     return [
-      ["\u5BE6\u4F5C", "iCE40UP5K LUT4 FPGA\uFF08\u53EF\u91CD\u65B0\u71D2\u9304\uFF09", "vlib \u6A19\u6E96\u5143\u4EF6\uFF08\u7D04 130 nm\uFF0C\u9700\u6D41\u7247\uFF09"],
-      ["\u908F\u8F2F\u55AE\u5143", `${p.lcs.length} LC\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0CDFF ${fc("ff")}\uFF0CCARRY ${fc("carry")}`, `${a.map.cells.length} \u500B\u5143\u4EF6\uFF0CDFF ${ffA}`],
-      ...p.rams.length || srams ? [["\u8A18\u61B6\u9AD4", `${p.rams.length} \u500B SB_RAM40_4K`, `${srams} \u500B SRAM \u5DE8\u96C6`]] : [],
-      ["\u9762\u7A4D", "\u56FA\u5B9A\u6676\u7247\uFF085280 LC\u300130 BRAM\uFF09", `\u5143\u4EF6 ${f1(a.area)} \xB5m\xB2\uFF0C\u6676\u7C92 ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m\uFF08\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(0)}%\uFF09`],
-      ["\u7E5E\u7DDA", `${p.pips} \u500B pip\uFF08\u53EF\u7A0B\u5F0F\u958B\u95DC\uFF09`, `${f2(a.detail.wirelength / 1e3 || a.route.wirelength / 1e3)} mm \u91D1\u5C6C\u7DDA\uFF0C${a.detail.vias || a.route.vias} \u500B via`],
-      ["\u95DC\u9375\u8DEF\u5F91", `${f2(p.timing.period)} ns`, `${f2(a.timing.period)} ns`],
+      [tr("\u5BE6\u4F5C", "Implementation"), tr("iCE40UP5K LUT4 FPGA\uFF08\u53EF\u91CD\u65B0\u71D2\u9304\uFF09", "iCE40UP5K LUT4 FPGA (reprogrammable)"), tr("vlib \u6A19\u6E96\u5143\u4EF6\uFF08\u7D04 130 nm\uFF0C\u9700\u6D41\u7247\uFF09", "vlib standard cells (about 130 nm, needs a tape-out)")],
+      [tr("\u908F\u8F2F\u55AE\u5143", "Logic"), tr(`${p.lcs.length} LC\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0CDFF ${fc("ff")}\uFF0CCARRY ${fc("carry")}`, `${p.lcs.length} LCs (${(100 * p.lcs.length / 5280).toFixed(1)}%), DFF ${fc("ff")}, CARRY ${fc("carry")}`), tr(`${a.map.cells.length} \u500B\u5143\u4EF6\uFF0CDFF ${ffA}`, `${a.map.cells.length} cells, DFF ${ffA}`)],
+      ...p.rams.length || srams ? [[tr("\u8A18\u61B6\u9AD4", "Memory"), tr(`${p.rams.length} \u500B SB_RAM40_4K`, `${p.rams.length} SB_RAM40_4K`), tr(`${srams} \u500B SRAM \u5DE8\u96C6`, `${srams} SRAM macros`)]] : [],
+      [tr("\u9762\u7A4D", "Area"), tr("\u56FA\u5B9A\u6676\u7247\uFF085280 LC\u300130 BRAM\uFF09", "a fixed chip (5280 LCs, 30 BRAMs)"), tr(`\u5143\u4EF6 ${f1(a.area)} \xB5m\xB2\uFF0C\u6676\u7C92 ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m\uFF08\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(0)}%\uFF09`, `cells ${f1(a.area)} \xB5m\xB2, die ${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)} \xB5m (${(a.die.util * 100).toFixed(0)}% utilization)`)],
+      [tr("\u7E5E\u7DDA", "Wiring"), tr(`${p.pips} \u500B pip\uFF08\u53EF\u7A0B\u5F0F\u958B\u95DC\uFF09`, `${p.pips} pips (programmable switches)`), tr(`${f2(a.detail.wirelength / 1e3 || a.route.wirelength / 1e3)} mm \u91D1\u5C6C\u7DDA\uFF0C${a.detail.vias || a.route.vias} \u500B via`, `${f2(a.detail.wirelength / 1e3 || a.route.wirelength / 1e3)} mm of metal, ${a.detail.vias || a.route.vias} vias`)],
+      [tr("\u95DC\u9375\u8DEF\u5F91", "Critical path"), `${f2(p.timing.period)} ns`, `${f2(a.timing.period)} ns`],
       ["F<sub>max</sub>", `${f1(p.timing.fmax)} MHz`, `${f1(a.timing.fmax)} MHz\uFF08\xD7${(a.timing.fmax / p.timing.fmax).toFixed(1)}\uFF09`],
-      ["\u6BCF\u9031\u671F\u80FD\u91CF", `${f1(eF)} pJ`, `${f2(eA)} pJ\uFF08\xF7${(eF / Math.max(1e-9, eA)).toFixed(0)}\uFF09`],
-      [`\u529F\u8017 @ ${f1(f)} MHz`, `${pF.toFixed(3)} mW\uFF08\u975C\u614B ${p.timing.power.static.toFixed(3)}\uFF09`, `${pA.toFixed(4)} mW\uFF08\u6F0F\u96FB ${a.power.leakage.toFixed(4)}\uFF09`]
+      [tr("\u6BCF\u9031\u671F\u80FD\u91CF", "Energy per cycle"), `${f1(eF)} pJ`, `${f2(eA)} pJ\uFF08\xF7${(eF / Math.max(1e-9, eA)).toFixed(0)}\uFF09`],
+      [tr(`\u529F\u8017 @ ${f1(f)} MHz`, `Power @ ${f1(f)} MHz`), tr(`${pF.toFixed(3)} mW\uFF08\u975C\u614B ${p.timing.power.static.toFixed(3)}\uFF09`, `${pF.toFixed(3)} mW (static ${p.timing.power.static.toFixed(3)})`), tr(`${pA.toFixed(4)} mW\uFF08\u6F0F\u96FB ${a.power.leakage.toFixed(4)}\uFF09`, `${pA.toFixed(4)} mW (leakage ${a.power.leakage.toFixed(4)})`)]
     ];
   }
 
@@ -879,7 +1252,7 @@
         const sx = Math.floor(k / rows), sy = k % rows;
         pos[id] = [x + sx * (w + 4), sy * (BH + RG)];
       });
-      const label = ci === 0 ? "\u8F38\u5165" : ci === 1 ? "DFF" : ci === last ? "\u8F38\u51FA" : `L${ci - 1}`;
+      const label = ci === 0 ? tr("\u8F38\u5165", "inputs") : ci === 1 ? "DFF" : ci === last ? tr("\u8F38\u51FA", "outputs") : `L${ci - 1}`;
       texts.push({ x, y: -12, s: label, color: "#9fb2c8", size: 11 });
       x += sub * (w + 4) + CG;
     });
@@ -941,7 +1314,7 @@
       const name = h.path === "" ? h.module : h.path.split(".").pop();
       const n = counts.get(h.path) ?? 0;
       boxes.push({ id: i, x, y, w: W, h: H, fill: depth === 0 ? "#3d6ea0" : "#2c3e55", stroke: "#6aa1d4", label: `${name} : ${h.module}` });
-      texts.push({ x: x + W + 10, y: y + H / 2, s: `${n} \u500B\u8A0A\u865F`, color: "#9fb2c8", size: 11 });
+      texts.push({ x: x + W + 10, y: y + H / 2, s: tr(`${n} \u500B\u8A0A\u865F`, `${n} signals`), color: "#9fb2c8", size: 11 });
       if (parent !== null && ypos.has(parent)) {
         const [px, py] = ypos.get(parent);
         lines.push({ pts: [px + 14, py + H, px + 14, y + H / 2, x, y + H / 2], color: "#6aa1d4", width: 1.5 });
@@ -953,23 +1326,26 @@
 
   // src/synth/overlay.ts
   var $ = (id) => document.getElementById(id);
+  function stageLabel(s) {
+    return tr(s.label, s.en);
+  }
   var FPGA_STAGES = [
-    { key: "rtl", tag: "common", label: "\u5171 \u2460 RTL\u2192Logic" },
-    { key: "raw", tag: "common", label: "\u5171 \u2461 Logic Netlist" },
-    { key: "opt", tag: "common", label: "\u5171 \u2462 Tech-indep Syn" },
-    { key: "map", tag: "fpga", label: "F \u2463 LUT4 Techmap" },
-    { key: "place", tag: "fpga", label: "F \u2464 Placement \u9000\u706B" },
-    { key: "route", tag: "fpga", label: "F \u2465 Global+Detail Routing" },
-    { key: "sta", tag: "fpga", label: "F \u2466 Timing (STA)" }
+    { key: "rtl", tag: "common", label: "\u5171 \u2460 RTL\u2192Logic", en: "C \u2460 RTL\u2192Logic" },
+    { key: "raw", tag: "common", label: "\u5171 \u2461 Logic Netlist", en: "C \u2461 Logic Netlist" },
+    { key: "opt", tag: "common", label: "\u5171 \u2462 Tech-indep Syn", en: "C \u2462 Tech-indep Syn" },
+    { key: "map", tag: "fpga", label: "F \u2463 LUT4 Techmap", en: "F \u2463 LUT4 Techmap" },
+    { key: "place", tag: "fpga", label: "F \u2464 Placement \u9000\u706B", en: "F \u2464 Placement (annealing)" },
+    { key: "route", tag: "fpga", label: "F \u2465 Global+Detail Routing", en: "F \u2465 Global+Detail Routing" },
+    { key: "sta", tag: "fpga", label: "F \u2466 Timing (STA)", en: "F \u2466 Timing (STA)" }
   ];
   var ASIC_STAGES = [
     ...FPGA_STAGES.slice(0, 3),
-    { key: "amap", tag: "asic", label: "A \u2463 Standard Cell Map" },
-    { key: "aplace", tag: "asic", label: "A \u2464 Row Placement \u9000\u706B" },
-    { key: "aroute", tag: "asic", label: "A \u2465 CTS + Global Routing" },
-    { key: "adetail", tag: "asic", label: "A \u2466 Detail Routing" },
-    { key: "asta", tag: "asic", label: "A \u2467 Timing (STA)" },
-    { key: "apower", tag: "asic", label: "A \u2468 Power + IR Drop" }
+    { key: "amap", tag: "asic", label: "A \u2463 Standard Cell Map", en: "A \u2463 Standard Cell Map" },
+    { key: "aplace", tag: "asic", label: "A \u2464 Row Placement \u9000\u706B", en: "A \u2464 Row Placement (annealing)" },
+    { key: "aroute", tag: "asic", label: "A \u2465 CTS + Global Routing", en: "A \u2465 CTS + Global Routing" },
+    { key: "adetail", tag: "asic", label: "A \u2466 Detail Routing", en: "A \u2466 Detail Routing" },
+    { key: "asta", tag: "asic", label: "A \u2467 Timing (STA)", en: "A \u2467 Timing (STA)" },
+    { key: "apower", tag: "asic", label: "A \u2468 Power + IR Drop", en: "A \u2468 Power + IR Drop" }
   ];
   var PNR = /* @__PURE__ */ new Set(["place", "route", "sta"]);
   var ASIC = /* @__PURE__ */ new Set(["amap", "aplace", "aroute", "adetail", "asta", "apower"]);
@@ -1065,7 +1441,7 @@
       this.asic = null;
       this.asicErr = null;
       this.nets.clear();
-      $("synInfo").textContent = "\u5408\u6210\u4E2D\u2026";
+      $("synInfo").textContent = tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026");
       $("synSide").innerHTML = "";
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.buttons();
@@ -1075,7 +1451,7 @@
         res = await this.core.call({ cmd: "synth", files: this.files, top: top || null });
       } catch (e) {
         if (gen !== this.gen) return;
-        $("synInfo").textContent = "\u5408\u6210\u5931\u6557\uFF1A\n" + String(e.message ?? e);
+        $("synInfo").textContent = tr("\u5408\u6210\u5931\u6557\uFF1A\n", "Synthesis failed:\n") + String(e.message ?? e);
         $("synStats").innerHTML = "";
         return;
       }
@@ -1098,10 +1474,10 @@
       this.pnrBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
-        if (gen === this.gen && PNR.has(this.stage)) $("synInfo").textContent = `\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`;
+        if (gen === this.gen && PNR.has(this.stage)) $("synInfo").textContent = tr(`\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026\uFF08iCE40UP5K\uFF0C${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `Placing and routing\u2026 (iCE40UP5K, ${((performance.now() - t0) / 1e3).toFixed(1)} s)`);
       }, 200);
       try {
-        $("synInfo").textContent = "\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026";
+        $("synInfo").textContent = tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026", "Loading the chip database (IceStorm chipdb-5k, 4 MB)\u2026");
         await this.core.chipdb();
         const r = await this.core.call({ cmd: "pnr", files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
         if (gen !== this.gen) return;
@@ -1121,12 +1497,12 @@
     setTarget(t, show = true) {
       this.target = t;
       $("synTarget").value = t;
-      $("synTitle").textContent = t === "fpga" ? "\u5408\u6210 \u2192 FPGA\uFF08iCE40UP5K\uFF09" : "\u5408\u6210 \u2192 ASIC\uFF08vlib \u6A19\u6E96\u5143\u4EF6\uFF09";
+      $("synTitle").textContent = t === "fpga" ? tr("\u5408\u6210 \u2192 FPGA\uFF08iCE40UP5K\uFF09", "Synthesis \u2192 FPGA (iCE40UP5K)") : tr("\u5408\u6210 \u2192 ASIC\uFF08vlib \u6A19\u6E96\u5143\u4EF6\uFF09", "Synthesis \u2192 ASIC (vlib standard cells)");
       this.chips();
-      const cur = ASIC.has(this.stage) !== (t === "asic") && OTHER[this.stage] ? OTHER[this.stage] : this.stage;
+      const cur2 = ASIC.has(this.stage) !== (t === "asic") && OTHER[this.stage] ? OTHER[this.stage] : this.stage;
       if (this.res) this.stats(this.synMs);
-      if (show) this.show(cur);
-      else this.stage = cur;
+      if (show) this.show(cur2);
+      else this.stage = cur2;
     }
     async runAsic() {
       if (!this.res || this.asic || this.asicBusy) return;
@@ -1134,7 +1510,7 @@
       this.asicBusy = true;
       const t0 = performance.now();
       const tick = setInterval(() => {
-        if (gen === this.gen && ASIC.has(this.stage)) $("synInfo").textContent = `ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`;
+        if (gen === this.gen && ASIC.has(this.stage)) $("synInfo").textContent = tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`);
       }, 200);
       try {
         const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1 });
@@ -1163,7 +1539,7 @@
           box.appendChild(a);
         }
         const b = document.createElement("button");
-        b.textContent = s.label;
+        b.textContent = stageLabel(s);
         b.dataset.key = s.key;
         b.className = s.tag === "fpga" ? "tagf" : s.tag === "asic" ? "taga" : "";
         b.onclick = () => this.show(s.key);
@@ -1175,7 +1551,7 @@
       const c = document.createElement("button");
       c.textContent = "\u21C4 FPGA vs ASIC";
       c.dataset.key = "cmp";
-      c.title = "\u540C\u4E00\u500B\u8A2D\u8A08\u7684\u5169\u7A2E\u5BE6\u4F5C\u4E26\u6392\u6BD4\u8F03";
+      c.title = tr("\u540C\u4E00\u500B\u8A2D\u8A08\u7684\u5169\u7A2E\u5BE6\u4F5C\u4E26\u6392\u6BD4\u8F03", "The two implementations of the same design side by side");
       c.onclick = () => this.show("cmp");
       box.append(sep, c);
     }
@@ -1218,13 +1594,13 @@
       const brams = m.filter((c) => c.t === "SB_RAM40_4K").length;
       const lev = this.netView("map").lev;
       const items = [
-        `\u9802\u5C64 <b>${r.top}</b>`,
-        `\u9598 <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`,
+        `${tr("\u9802\u5C64", "Top")} <b>${r.top}</b>`,
+        `${tr("\u9598", "Gates")} <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`,
         `LUT4 <b>${luts}</b>`,
         `CARRY <b>${carry}</b>`,
         `DFF <b>${ffs}</b>`,
         ...brams ? [`BRAM <b>${brams}</b>`] : [],
-        `LUT \u5C64\u6578 <b>${lev.depth}</b>`
+        `${tr("LUT \u5C64\u6578", "LUT levels")} <b>${lev.depth}</b>`
       ];
       if (this.pnr) {
         const p = this.pnr;
@@ -1233,27 +1609,27 @@
           ...p.rams.length ? [`BRAM <b>${p.rams.length}</b>/30`] : [],
           `pip <b>${p.pips}</b>`,
           `F<sub>max</sub> <b>${p.timing.fmax.toFixed(1)}</b> MHz`,
-          `\u95DC\u9375\u8DEF\u5F91 <b>${p.timing.period.toFixed(2)}</b> ns`
+          `${tr("\u95DC\u9375\u8DEF\u5F91", "Critical path")} <b>${p.timing.period.toFixed(2)}</b> ns`
         );
       }
-      items.push(`\u5408\u6210 <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `\uFF0C\u4F48\u5C40\u7E5E\u7DDA <b>${(this.pnrMs / 1e3).toFixed(1)}</b> s` : ""));
+      items.push(`${tr("\u5408\u6210", "Synthesis")} <b>${ms.toFixed(0)}</b> ms` + (this.pnr ? `${tr("\uFF0C\u4F48\u5C40\u7E5E\u7DDA", ", place & route")} <b>${(this.pnrMs / 1e3).toFixed(1)}</b> s` : ""));
       $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
     }
     asicStats(ms) {
       const r = this.res;
-      const items = [`\u9802\u5C64 <b>${r.top}</b>`, `\u9598 <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`];
+      const items = [`${tr("\u9802\u5C64", "Top")} <b>${r.top}</b>`, `${tr("\u9598", "Gates")} <b>${r.raw.cells.length}</b> \u2192 <b>${r.opt.cells.length}</b>`];
       const a = this.asic;
       if (a) {
         const ffs = a.map.cells.filter((c) => c.t.includes("DFF")).length;
         items.push(
-          `\u6A19\u6E96\u5143\u4EF6 <b>${a.map.cells.length}</b>\uFF08DFF ${ffs}\uFF09`,
-          `\u9762\u7A4D <b>${fmtArea(a.area)}</b>`,
-          `\u6676\u7C92 <b>${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)}</b> \xB5m\uFF08${a.die.rows} \u5217\uFF0C\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(0)}%\uFF09`,
-          `\u7DDA\u9577 <b>${(a.route.wirelength / 1e3).toFixed(2)}</b> mm`,
+          tr(`\u6A19\u6E96\u5143\u4EF6 <b>${a.map.cells.length}</b>\uFF08DFF ${ffs}\uFF09`, `Cells <b>${a.map.cells.length}</b> (DFF ${ffs})`),
+          `${tr("\u9762\u7A4D", "Area")} <b>${fmtArea(a.area)}</b>`,
+          tr(`\u6676\u7C92 <b>${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)}</b> \xB5m\uFF08${a.die.rows} \u5217\uFF0C\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(0)}%\uFF09`, `Die <b>${a.die.w.toFixed(0)}\xD7${a.die.h.toFixed(0)}</b> \xB5m (${a.die.rows} rows, ${(a.die.util * 100).toFixed(0)}% utilization)`),
+          `${tr("\u7DDA\u9577", "Wirelength")} <b>${(a.route.wirelength / 1e3).toFixed(2)}</b> mm`,
           `F<sub>max</sub> <b>${a.timing.fmax.toFixed(1)}</b> MHz`
         );
       }
-      items.push(`\u5408\u6210 <b>${ms.toFixed(0)}</b> ms` + (a ? `\uFF0CASIC \u6D41\u7A0B <b>${(this.asicMs / 1e3).toFixed(1)}</b> s` : ""));
+      items.push(`${tr("\u5408\u6210", "Synthesis")} <b>${ms.toFixed(0)}</b> ms` + (a ? `${tr("\uFF0CASIC \u6D41\u7A0B", ", ASIC flow")} <b>${(this.asicMs / 1e3).toFixed(1)}</b> s` : ""));
       $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
     }
     show(key) {
@@ -1279,12 +1655,15 @@
         const bits = r.signals.reduce((a, s) => a + s.width, 0);
         this.info([
           "\u2460 RTL\u2192Logic",
-          "\u89E3\u6790 Veryl\uFF08veryl-parser\uFF09\u2192 \u5C55\u958B package / enum / struct / \u53C3\u6578 \u2192 \u7531\u9802\u5C64\u5F80\u4E0B\u5BE6\u4F8B\u5316\u5B50\u6A21\u7D44\u4E26\u6524\u5E73\uFF08flatten\uFF09\uFF0C\u6BCF\u500B\u8A0A\u865F\u914D\u7F6E\u300C\u4F54\u4F4D\u300D\u7DDA\u3002",
+          tr(
+            "\u89E3\u6790 Veryl\uFF08veryl-parser\uFF09\u2192 \u5C55\u958B package / enum / struct / \u53C3\u6578 \u2192 \u7531\u9802\u5C64\u5F80\u4E0B\u5BE6\u4F8B\u5316\u5B50\u6A21\u7D44\u4E26\u6524\u5E73\uFF08flatten\uFF09\uFF0C\u6BCF\u500B\u8A0A\u865F\u914D\u7F6E\u300C\u4F54\u4F4D\u300D\u7DDA\u3002",
+            "Parse Veryl (veryl-parser) \u2192 expand packages / enums / structs / parameters \u2192 instantiate the submodules from the top down and flatten them; every signal gets placeholder wires."
+          ),
           "",
-          `\u9802\u5C64\uFF1A${r.top}\u3000\u5BE6\u4F8B ${r.hier.length - 1} \u500B\u3000\u6A21\u7D44\u7A2E\u985E ${new Set(r.hier.map((h) => h.module)).size}`,
-          `\u57E0\uFF1A${r.ports.map((p) => `${p.dir === "in" ? "\u2192" : "\u2190"}${p.name}${p.width > 1 ? `[${p.width}]` : ""}`).join("  ")}`,
-          `\u8A0A\u865F ${r.signals.length} \u500B\uFF0C\u5171 ${bits} bit`,
-          ...r.warnings.length ? ["", "\u8B66\u544A\uFF1A", ...r.warnings] : []
+          tr(`\u9802\u5C64\uFF1A${r.top}\u3000\u5BE6\u4F8B ${r.hier.length - 1} \u500B\u3000\u6A21\u7D44\u7A2E\u985E ${new Set(r.hier.map((h) => h.module)).size}`, `Top: ${r.top}\u3000${r.hier.length - 1} instances\u3000${new Set(r.hier.map((h) => h.module)).size} module types`),
+          `${tr("\u57E0\uFF1A", "Ports: ")}${r.ports.map((p) => `${p.dir === "in" ? "\u2192" : "\u2190"}${p.name}${p.width > 1 ? `[${p.width}]` : ""}`).join("  ")}`,
+          tr(`\u8A0A\u865F ${r.signals.length} \u500B\uFF0C\u5171 ${bits} bit`, `${r.signals.length} signals, ${bits} bits`),
+          ...r.warnings.length ? ["", tr("\u8B66\u544A\uFF1A", "Warnings:"), ...r.warnings] : []
         ]);
         this.side(this.rtlSide());
         return;
@@ -1293,10 +1672,10 @@
         this.view.set({ boxes: [], lines: [], texts: [] });
         this.side(document.createElement("div"));
         if (this.asicErr) {
-          this.info(["ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", this.asicErr]);
+          this.info([tr("ASIC \u6D41\u7A0B\u5931\u6557\uFF1A", "ASIC flow failed:"), this.asicErr]);
           return;
         }
-        this.info(["ASIC \u6D41\u7A0B\u4E2D\u2026"]);
+        this.info([tr("ASIC \u6D41\u7A0B\u4E2D\u2026", "Running the ASIC flow\u2026")]);
         this.runAsic();
         return;
       }
@@ -1318,10 +1697,10 @@
         this.side(document.createElement("div"));
         if (this.pnrErr) {
           const fit = /does not fit/.test(this.pnrErr);
-          this.info(["\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", this.pnrErr, ...fit ? ["", "iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002"] : []]);
+          this.info([tr("\u4F48\u5C40\u7E5E\u7DDA\u5931\u6557\uFF1A", "Place and route failed:"), this.pnrErr, ...fit ? ["", tr("iCE40UP5K-SG48 \u53EA\u6709 5280 \u500B LC\u300139 \u500B IO \u8173\uFF1A\u6574\u9846 RV32I \u6838\u5FC3\uFF08\u66AB\u5B58\u5668\u6A94\u7528\u6B63\u53CD\u5668\uFF09\u653E\u4E0D\u4E0B\u3002\u8ACB\u6539\u7528\u300CRISC-V SoC\uFF08FPGA\uFF09\u300D\u7BC4\u4F8B\uFF0C\u6216\u6539\u770B ASIC \u6D41\u7A0B\u3002", 'The iCE40UP5K-SG48 has only 5280 LCs and 39 IO pins: the whole RV32I core (register file in flip-flops) does not fit. Use the "RISC-V SoC (FPGA)" example, or look at the ASIC flow.')] : []]);
           return;
         }
-        this.info(["\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026"]);
+        this.info([tr("\u4F48\u5C40\u7E5E\u7DDA\u4E2D\u2026", "Placing and routing\u2026")]);
         this.runPnr();
         return;
       }
@@ -1334,9 +1713,9 @@
       if (!p || !a) {
         this.view.set({ boxes: [], lines: [], texts: [] });
         this.side(document.createElement("div"));
-        const lines = ["\u21C4 FPGA vs ASIC\uFF1A\u5169\u500B\u5F8C\u7AEF\u90FD\u8981\u8DD1\u5B8C\u624D\u80FD\u6BD4\u8F03"];
-        lines.push(p ? "\u2713 FPGA \u4F48\u5C40\u7E5E\u7DDA\u5B8C\u6210" : this.pnrErr ? `\u2717 FPGA\uFF1A${this.pnrErr}` : "\u2026 FPGA \u4F48\u5C40\u7E5E\u7DDA\u4E2D");
-        lines.push(a ? "\u2713 ASIC \u6D41\u7A0B\u5B8C\u6210" : this.asicErr ? `\u2717 ASIC\uFF1A${this.asicErr}` : "\u2026 ASIC \u6D41\u7A0B\u4E2D");
+        const lines = [tr("\u21C4 FPGA vs ASIC\uFF1A\u5169\u500B\u5F8C\u7AEF\u90FD\u8981\u8DD1\u5B8C\u624D\u80FD\u6BD4\u8F03", "\u21C4 FPGA vs ASIC: both back ends must finish first")];
+        lines.push(p ? tr("\u2713 FPGA \u4F48\u5C40\u7E5E\u7DDA\u5B8C\u6210", "\u2713 FPGA place and route done") : this.pnrErr ? `\u2717 FPGA: ${this.pnrErr}` : tr("\u2026 FPGA \u4F48\u5C40\u7E5E\u7DDA\u4E2D", "\u2026 FPGA place and route running"));
+        lines.push(a ? tr("\u2713 ASIC \u6D41\u7A0B\u5B8C\u6210", "\u2713 ASIC flow done") : this.asicErr ? `\u2717 ASIC: ${this.asicErr}` : tr("\u2026 ASIC \u6D41\u7A0B\u4E2D", "\u2026 ASIC flow running"));
         this.info(lines);
         if (!p && !this.pnrErr) this.runPnr();
         if (!a && !this.asicErr) this.runAsic();
@@ -1345,13 +1724,16 @@
       this.view.set(compareScene(p, a), true);
       const rows = compareRows(p, a);
       this.info([
-        "\u21C4 FPGA vs ASIC\uFF1A\u540C\u4E00\u500B\u7DB2\u8868\uFF08\u5171 \u2460\u2013\u2462\uFF09\u5206\u5225\u8D70 iCE40 \u8207\u6A19\u6E96\u5143\u4EF6\u6D41\u7A0B",
-        "FPGA \u7528\u73FE\u6210\u7684 LUT / \u53EF\u7A0B\u5F0F\u7E5E\u7DDA\u958B\u95DC\uFF0C\u5F48\u6027\u5927\u4F46\u6BCF\u500B\u908F\u8F2F\u548C\u6BCF\u6BB5\u7E5E\u7DDA\u90FD\u6162\u3001\u90FD\u8017\u96FB\uFF1BASIC \u628A\u908F\u8F2F\u76F4\u63A5\u505A\u6210\u96FB\u6676\u9AD4\u8207\u91D1\u5C6C\u7DDA\uFF0C\u9762\u7A4D\u5C0F\u3001\u5FEB\u3001\u7701\u96FB\uFF0C\u4F46\u8981\u6D41\u7247\u3002",
+        tr("\u21C4 FPGA vs ASIC\uFF1A\u540C\u4E00\u500B\u7DB2\u8868\uFF08\u5171 \u2460\u2013\u2462\uFF09\u5206\u5225\u8D70 iCE40 \u8207\u6A19\u6E96\u5143\u4EF6\u6D41\u7A0B", "\u21C4 FPGA vs ASIC: the same netlist (common \u2460\u2013\u2462) through the iCE40 and the standard-cell flows"),
+        tr(
+          "FPGA \u7528\u73FE\u6210\u7684 LUT / \u53EF\u7A0B\u5F0F\u7E5E\u7DDA\u958B\u95DC\uFF0C\u5F48\u6027\u5927\u4F46\u6BCF\u500B\u908F\u8F2F\u548C\u6BCF\u6BB5\u7E5E\u7DDA\u90FD\u6162\u3001\u90FD\u8017\u96FB\uFF1BASIC \u628A\u908F\u8F2F\u76F4\u63A5\u505A\u6210\u96FB\u6676\u9AD4\u8207\u91D1\u5C6C\u7DDA\uFF0C\u9762\u7A4D\u5C0F\u3001\u5FEB\u3001\u7701\u96FB\uFF0C\u4F46\u8981\u6D41\u7247\u3002",
+          "An FPGA uses ready-made LUTs and programmable routing switches: flexible, but every logic level and every wire segment is slow and power hungry. An ASIC builds the logic directly from transistors and metal: small, fast and frugal, but it needs a tape-out."
+        ),
         "",
-        `F_max\uFF1AFPGA ${p.timing.fmax.toFixed(1)} MHz vs ASIC ${a.timing.fmax.toFixed(1)} MHz\u3000\u5DE6\uFF1AiCE40 \u4F48\u5C40\uFF0C\u53F3\uFF1A\u6A19\u6E96\u5143\u4EF6\u6676\u7C92\uFF08\u653E\u5927\u5230\u540C\u9AD8\uFF09`
+        tr(`F_max\uFF1AFPGA ${p.timing.fmax.toFixed(1)} MHz vs ASIC ${a.timing.fmax.toFixed(1)} MHz\u3000\u5DE6\uFF1AiCE40 \u4F48\u5C40\uFF0C\u53F3\uFF1A\u6A19\u6E96\u5143\u4EF6\u6676\u7C92\uFF08\u653E\u5927\u5230\u540C\u9AD8\uFF09`, `F_max: FPGA ${p.timing.fmax.toFixed(1)} MHz vs ASIC ${a.timing.fmax.toFixed(1)} MHz\u3000left: iCE40 placement, right: standard-cell die (scaled to the same height)`)
       ]);
       const d = document.createElement("div");
-      d.innerHTML = '<h3>\u6BD4\u8F03</h3><div class="cmpw">' + table(["\u9805\u76EE", "FPGA", "ASIC"], rows.map((r) => [r[0], r[1], r[2]])) + '</div><p class="hint">\u529F\u8017\u4EE5\u5169\u8005 F<sub>max</sub> \u8F03\u4F4E\u8005\u70BA\u5171\u540C\u983B\u7387\uFF0C\u7FFB\u8F49\u7387\u4F86\u81EA\u540C\u4E00\u7D44\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u3002</p>';
+      d.innerHTML = `<h3>${tr("\u6BD4\u8F03", "Comparison")}</h3><div class="cmpw">` + table([tr("\u9805\u76EE", "Item"), "FPGA", "ASIC"], rows.map((r) => [r[0], r[1], r[2]])) + `</div><p class="hint">${tr("\u529F\u8017\u4EE5\u5169\u8005 F<sub>max</sub> \u8F03\u4F4E\u8005\u70BA\u5171\u540C\u983B\u7387\uFF0C\u7FFB\u8F49\u7387\u4F86\u81EA\u540C\u4E00\u7D44\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u3002", "Power at the lower of the two F<sub>max</sub> as a common frequency; toggle rates from the same random-input simulation.")}</p>`;
       this.side(d);
     }
     drawPnr(fit) {
@@ -1375,32 +1757,56 @@
         const h = p.history;
         const chains = p.chains.map((c) => c.length);
         return [
-          "\u2464 Placement \u9000\u706B\uFF08iCE40UP5K\uFF1A26\xD732 tile\uFF0C\u908F\u8F2F tile \u6BCF\u500B 8 \u500B LC\uFF09",
-          "\u5148\u6253\u5305\uFF08LUT+FF+CARRY \u2192 LC\uFF09\uFF0C\u9032\u4F4D\u93C8\u653E\u5728\u6574\u6B04\u908F\u8F2F tile \u4E26\u5F9E LC 0 \u958B\u59CB\uFF1B\u5176\u9918\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316\u7DDA\u9577\uFF08HPWL\uFF09\uFF0C\u540C\u4E00 tile \u7684 DFF \u5FC5\u9808\u540C clock / reset / \u908A\u7DE3\u3002",
+          tr("\u2464 Placement \u9000\u706B\uFF08iCE40UP5K\uFF1A26\xD732 tile\uFF0C\u908F\u8F2F tile \u6BCF\u500B 8 \u500B LC\uFF09", "\u2464 Placement, simulated annealing (iCE40UP5K: 26\xD732 tiles, 8 LCs per logic tile)"),
+          tr(
+            "\u5148\u6253\u5305\uFF08LUT+FF+CARRY \u2192 LC\uFF09\uFF0C\u9032\u4F4D\u93C8\u653E\u5728\u6574\u6B04\u908F\u8F2F tile \u4E26\u5F9E LC 0 \u958B\u59CB\uFF1B\u5176\u9918\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316\u7DDA\u9577\uFF08HPWL\uFF09\uFF0C\u540C\u4E00 tile \u7684 DFF \u5FC5\u9808\u540C clock / reset / \u908A\u7DE3\u3002",
+            "Packing first (LUT+FF+CARRY \u2192 LC); carry chains go into a column of logic tiles starting at LC 0; the rest is placed by simulated annealing minimizing wirelength (HPWL); the DFFs of one tile must share clock / reset / edge."
+          ),
           "",
-          `LC ${p.lcs.length} \u500B\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0C\u9032\u4F4D\u93C8 ${chains.length} \u689D${chains.length ? `\uFF08${chains.join(", ")} LC\uFF09` : ""}\uFF0CIO ${p.ios.length} \u500B${p.rams.length ? `\uFF0Cblock RAM ${p.rams.length} \u500B\uFF08RAM \u6B04 x = 6 / 19\uFF0C\u6BCF\u500B\u4F54\u4E0A\u4E0B\u5169\u500B tile\uFF09` : ""}`,
-          `HPWL\uFF1A\u521D\u59CB ${h[0].cost.toFixed(0)} \u2192 \u9000\u706B\u5F8C ${h[h.length - 1].cost.toFixed(0)}\uFF08${h.length - 1} \u500B\u6EAB\u5EA6\u5FEB\u7167\uFF09\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`
+          tr(
+            `LC ${p.lcs.length} \u500B\uFF08${(100 * p.lcs.length / 5280).toFixed(1)}%\uFF09\uFF0C\u9032\u4F4D\u93C8 ${chains.length} \u689D${chains.length ? `\uFF08${chains.join(", ")} LC\uFF09` : ""}\uFF0CIO ${p.ios.length} \u500B${p.rams.length ? `\uFF0Cblock RAM ${p.rams.length} \u500B\uFF08RAM \u6B04 x = 6 / 19\uFF0C\u6BCF\u500B\u4F54\u4E0A\u4E0B\u5169\u500B tile\uFF09` : ""}`,
+            `${p.lcs.length} LCs (${(100 * p.lcs.length / 5280).toFixed(1)}%), ${chains.length} carry chains${chains.length ? ` (${chains.join(", ")} LCs)` : ""}, ${p.ios.length} IOs${p.rams.length ? `, ${p.rams.length} block RAMs (RAM columns x = 6 / 19, two tiles each)` : ""}`
+          ),
+          tr(
+            `HPWL\uFF1A\u521D\u59CB ${h[0].cost.toFixed(0)} \u2192 \u9000\u706B\u5F8C ${h[h.length - 1].cost.toFixed(0)}\uFF08${h.length - 1} \u500B\u6EAB\u5EA6\u5FEB\u7167\uFF09\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`,
+            `HPWL: initial ${h[0].cost.toFixed(0)} \u2192 annealed ${h[h.length - 1].cost.toFixed(0)} (${h.length - 1} temperature snapshots)\u3000press "\u25B6 Annealing" to replay`
+          )
         ];
       }
       if (key === "route") {
-        const glb = p.globals.map((g) => `${g.net} \u2192 glb_netwk_${g.glb}`).join("\uFF0C") || "\u7121";
+        const glb = p.globals.map((g) => `${g.net} \u2192 glb_netwk_${g.glb}`).join(", ") || tr("\u7121", "none");
         return [
           "\u2465 Global + Detail Routing",
-          "clock / reset \u8D70\u5168\u57DF\u7DB2\u8DEF\uFF08\u4F86\u6E90 \u2192 fabout \u2192 glb_netwk \u2192 \u5404 tile \u7684 clk / s_r mux\uFF09\uFF1B\u5176\u9918\u4EE5 PathFinder \u5354\u5546\u64C1\u585E + A* \u5728 IceStorm \u7E5E\u7DDA\u5716\u4E0A\u627E\u8DEF\uFF08\u6BCF\u689D\u7DDA\u53EA\u80FD\u7D66\u4E00\u500B\u8A0A\u865F\uFF09\u3002",
+          tr(
+            "clock / reset \u8D70\u5168\u57DF\u7DB2\u8DEF\uFF08\u4F86\u6E90 \u2192 fabout \u2192 glb_netwk \u2192 \u5404 tile \u7684 clk / s_r mux\uFF09\uFF1B\u5176\u9918\u4EE5 PathFinder \u5354\u5546\u64C1\u585E + A* \u5728 IceStorm \u7E5E\u7DDA\u5716\u4E0A\u627E\u8DEF\uFF08\u6BCF\u689D\u7DDA\u53EA\u80FD\u7D66\u4E00\u500B\u8A0A\u865F\uFF09\u3002",
+            "Clock / reset use the global networks (source \u2192 fabout \u2192 glb_netwk \u2192 each tile's clk / s_r mux); everything else is routed with PathFinder congestion negotiation + A* on the IceStorm routing graph (each wire carries one signal)."
+          ),
           "",
-          `\u5168\u57DF\uFF1A${glb}`,
-          `${p.nets.length} \u689D net\uFF0C\u4F7F\u7528 ${p.pips} \u500B pip\uFF1B\u6BCF\u8F2A\u904E\u5EA6\u4F7F\u7528\u7684\u7DDA\uFF1A${p.route_iters.join(" \u2192 ")}`,
-          "\u984F\u8272\uFF1A\u85CD\uFF1Dspan4\u3001\u7D2B\uFF1Dspan12\u3001\u7070\uFF1Dlocal / \u8F38\u5165\u3001\u7DA0\uFF1D\u5168\u57DF\u3001\u9EC3\uFF1DIO\uFF08\u9EDE LC \u770B\u7D30\u7BC0\uFF09"
+          `${tr("\u5168\u57DF\uFF1A", "Globals: ")}${glb}`,
+          tr(`${p.nets.length} \u689D net\uFF0C\u4F7F\u7528 ${p.pips} \u500B pip\uFF1B\u6BCF\u8F2A\u904E\u5EA6\u4F7F\u7528\u7684\u7DDA\uFF1A${p.route_iters.join(" \u2192 ")}`, `${p.nets.length} nets, ${p.pips} pips; overused wires per iteration: ${p.route_iters.join(" \u2192 ")}`),
+          tr("\u984F\u8272\uFF1A\u85CD\uFF1Dspan4\u3001\u7D2B\uFF1Dspan12\u3001\u7070\uFF1Dlocal / \u8F38\u5165\u3001\u7DA0\uFF1D\u5168\u57DF\u3001\u9EC3\uFF1DIO\uFF08\u9EDE LC \u770B\u7D30\u7BC0\uFF09", "Colors: blue = span4, purple = span12, gray = local / inputs, green = global, yellow = IO (click an LC for details)")
         ];
       }
       const t = p.timing;
       return [
         "\u2466 Timing (STA)",
-        "\u5EF6\u9072\u53D6\u81EA IceStorm timings_up5k\uFF08\u6162\u901F\u89D2\uFF09\uFF1ALC in\u2192out\u3001carry\u3001clk\u2192Q\u3001setup\uFF0C\u6BCF\u6BB5\u7E5E\u7DDA\u4F9D\u6240\u9A45\u52D5\u7684\u7DDA\u7A2E\u985E\u8A08 mux \u5EF6\u9072\uFF1Bclock \u8996\u70BA\u7406\u60F3\uFF08\u5168\u57DF\u7DB2\u8DEF\uFF09\u3002",
+        tr(
+          "\u5EF6\u9072\u53D6\u81EA IceStorm timings_up5k\uFF08\u6162\u901F\u89D2\uFF09\uFF1ALC in\u2192out\u3001carry\u3001clk\u2192Q\u3001setup\uFF0C\u6BCF\u6BB5\u7E5E\u7DDA\u4F9D\u6240\u9A45\u52D5\u7684\u7DDA\u7A2E\u985E\u8A08 mux \u5EF6\u9072\uFF1Bclock \u8996\u70BA\u7406\u60F3\uFF08\u5168\u57DF\u7DB2\u8DEF\uFF09\u3002",
+          "Delays from IceStorm timings_up5k (slow corner): LC in\u2192out, carry, clk\u2192Q, setup; each routing segment adds the mux delay of the wire type it drives; the clock is ideal (global network)."
+        ),
         "",
-        `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0CLC \u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
-        `\u529F\u8017\u4F30\u8A08\uFF08\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u7684\u7FFB\u8F49\u7387\uFF1Bnet \u96FB\u5BB9 \u2248 5 fF \xD7 \u8CA0\u8F09 + 8 fF \xD7 \u7E5E\u7DDA\u6BB5\uFF0C\u5168\u57DF\u6642\u8108\u7DB2\u8DEF\u6BCF\u62CD\uFF0Cblock RAM \u6BCF\u6B21\u5B58\u53D6 \u2248 24 pJ\uFF0C\u975C\u614B \u2248 75 \xB5A\uFF09\uFF1A\u5728 ${t.fmax.toFixed(1)} MHz \u7D04 ${t.power.total.toFixed(3)} mW\uFF08\u52D5\u614B ${t.power.dynamic.toFixed(3)} + \u975C\u614B ${t.power.static.toFixed(3)}\uFF1B\u6BCF\u9031\u671F ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ\uFF09`,
-        ...t.fmax_wl ? [`\u6642\u5E8F\u5C0E\u5411\uFF1A\u7B2C\u4E00\u8F2A\u53EA\u770B\u7DDA\u9577 ${t.fmax_wl.toFixed(2)} MHz\uFF1B\u518D\u4EE5\u6BCF\u689D net \u7684\u95DC\u9375\u5EA6\uFF08\u7D93\u904E\u5B83\u7684\u6700\u9577\u8DEF\u5F91 / \u95DC\u9375\u8DEF\u5F91\uFF09\u52A0\u6B0A\u91CD\u65B0\u4F48\u5C40\uFF0C\u7E5E\u7DDA\u6642\u95DC\u9375 net \u512A\u5148\u8D70\u5FEB\u7684\u7DDA \u2192 ${t.fmax.toFixed(2)} MHz\uFF08\u53D6\u8F03\u5FEB\u7684\u4E00\u8F2A\uFF09`] : []
+        tr(
+          `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0CLC \u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
+          `Critical path ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz (${t.endpoints} endpoints); red = critical path, LC color = arrival time (green early, red late)`
+        ),
+        tr(
+          `\u529F\u8017\u4F30\u8A08\uFF08\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u7684\u7FFB\u8F49\u7387\uFF1Bnet \u96FB\u5BB9 \u2248 5 fF \xD7 \u8CA0\u8F09 + 8 fF \xD7 \u7E5E\u7DDA\u6BB5\uFF0C\u5168\u57DF\u6642\u8108\u7DB2\u8DEF\u6BCF\u62CD\uFF0Cblock RAM \u6BCF\u6B21\u5B58\u53D6 \u2248 24 pJ\uFF0C\u975C\u614B \u2248 75 \xB5A\uFF09\uFF1A\u5728 ${t.fmax.toFixed(1)} MHz \u7D04 ${t.power.total.toFixed(3)} mW\uFF08\u52D5\u614B ${t.power.dynamic.toFixed(3)} + \u975C\u614B ${t.power.static.toFixed(3)}\uFF1B\u6BCF\u9031\u671F ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ\uFF09`,
+          `Power estimate (toggle rates from a random-input simulation; net capacitance \u2248 5 fF \xD7 loads + 8 fF \xD7 routing segments, the global clock network every cycle, \u2248 24 pJ per block RAM access, static \u2248 75 \xB5A): about ${t.power.total.toFixed(3)} mW at ${t.fmax.toFixed(1)} MHz (dynamic ${t.power.dynamic.toFixed(3)} + static ${t.power.static.toFixed(3)}; ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ per cycle)`
+        ),
+        ...t.fmax_wl ? [tr(
+          `\u6642\u5E8F\u5C0E\u5411\uFF1A\u7B2C\u4E00\u8F2A\u53EA\u770B\u7DDA\u9577 ${t.fmax_wl.toFixed(2)} MHz\uFF1B\u518D\u4EE5\u6BCF\u689D net \u7684\u95DC\u9375\u5EA6\uFF08\u7D93\u904E\u5B83\u7684\u6700\u9577\u8DEF\u5F91 / \u95DC\u9375\u8DEF\u5F91\uFF09\u52A0\u6B0A\u91CD\u65B0\u4F48\u5C40\uFF0C\u7E5E\u7DDA\u6642\u95DC\u9375 net \u512A\u5148\u8D70\u5FEB\u7684\u7DDA \u2192 ${t.fmax.toFixed(2)} MHz\uFF08\u53D6\u8F03\u5FEB\u7684\u4E00\u8F2A\uFF09`,
+          `Timing driven: the wirelength-only pass gives ${t.fmax_wl.toFixed(2)} MHz; placing again with nets weighted by criticality (longest path through the net / critical path), and routing critical nets on fast wires first \u2192 ${t.fmax.toFixed(2)} MHz (the faster pass is kept)`
+        )] : []
       ];
     }
     pnrSide(key) {
@@ -1408,16 +1814,16 @@
       const d = document.createElement("div");
       const det = document.createElement("div");
       det.id = "synDetail";
-      det.innerHTML = '<p class="hint">\u9EDE LC \u770B\u7D30\u7BC0\uFF08LUT \u771F\u503C\u8868\u3001DFF\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+      det.innerHTML = `<p class="hint">${tr("\u9EDE LC \u770B\u7D30\u7BC0\uFF08LUT \u771F\u503C\u8868\u3001DFF\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002", "Click an LC for details (LUT truth table, DFF, pin signals, arrival time).")}</p>`;
       d.appendChild(det);
       let h = "";
       if (key === "sta") {
-        h += `<h3>\u95DC\u9375\u8DEF\u5F91\uFF08${p.timing.period.toFixed(2)} ns\uFF09</h3>` + table(["\u7D2F\u8A08 ns", "\u5EF6\u9072", "\u7D93\u904E"], p.timing.path.map((s) => [s.at.toFixed(2), s.delay.toFixed(3), esc(s.what)]));
+        h += `<h3>${tr("\u95DC\u9375\u8DEF\u5F91", "Critical path")}\uFF08${p.timing.period.toFixed(2)} ns\uFF09</h3>` + table([tr("\u7D2F\u8A08 ns", "At ns"), tr("\u5EF6\u9072", "Delay"), tr("\u7D93\u904E", "Through")], p.timing.path.map((s) => [s.at.toFixed(2), s.delay.toFixed(3), esc(stepText(s.what))]));
       }
       if (key === "route") {
-        h += `<h3>Net\uFF08${p.nets.length}\uFF0C\u4F9D pip \u6578\uFF09</h3>`;
+        h += `<h3>${tr(`Net\uFF08${p.nets.length}\uFF0C\u4F9D pip \u6578\uFF09`, `Nets (${p.nets.length}, by pips)`)}</h3>`;
       }
-      h += `<h3>IO</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "\u8173\u4F4D", "tile"], p.ios.map((io) => [esc(io.name), io.dir === "in" ? "in" : "out", io.pin, `${io.x},${io.y}/${io.z}`]));
+      h += `<h3>IO</h3>` + table([tr("\u8A0A\u865F", "Signal"), tr("\u65B9\u5411", "Dir"), tr("\u8173\u4F4D", "Pin"), "tile"], p.ios.map((io) => [esc(io.name), io.dir === "in" ? "in" : "out", io.pin, `${io.x},${io.y}/${io.z}`]));
       const div = document.createElement("div");
       div.innerHTML = h;
       d.appendChild(div);
@@ -1428,7 +1834,7 @@
         for (const i of order.slice(0, 400)) {
           const n = p.nets[i];
           const row = document.createElement("div");
-          row.textContent = `${n.name}  ${n.pips} pip  ${n.sinks} \u8CA0\u8F09${n.global ? "  [\u5168\u57DF]" : ""}`;
+          row.textContent = `${n.name}  ${n.pips} pip  ${n.sinks} ${tr("\u8CA0\u8F09", "loads")}${n.global ? tr("  [\u5168\u57DF]", "  [global]") : ""}`;
           row.onclick = () => {
             this.selNet = i;
             this.drawPnr(false);
@@ -1452,7 +1858,7 @@
         const fr = p.history[f];
         const scene = deviceScene(p, fr.pos, void 0, fr.ram);
         this.view.set(scene, false);
-        $("synInfo").textContent = `\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`;
+        $("synInfo").textContent = tr(`\u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${p.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `\u2464 Annealing: snapshot ${f + 1}/${p.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${fr.cost.toFixed(0)}\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`);
         f++;
         if (f < p.history.length) this.anim = window.setTimeout(step, 90);
         else this.anim = window.setTimeout(() => {
@@ -1470,7 +1876,7 @@
       const step = () => {
         const fr = a.history[f];
         this.view.set(dieScene(a, fr.pos), false);
-        $("synInfo").textContent = `A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`;
+        $("synInfo").textContent = tr(`A \u2464 \u9000\u706B\u52D5\u756B\uFF1A\u7B2C ${f + 1}/${a.history.length} \u500B\u5FEB\u7167\u3000\u6EAB\u5EA6 ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000\u63A5\u53D7\u7387 ${(fr.accept * 100).toFixed(0)}%`, `A \u2464 Annealing: snapshot ${f + 1}/${a.history.length}\u3000temperature ${fr.temp.toFixed(2)}\u3000HPWL ${(fr.cost / 1e3).toFixed(2)} mm\u3000acceptance ${(fr.accept * 100).toFixed(0)}%`);
         f++;
         if (f < a.history.length) this.anim = window.setTimeout(step, 110);
         else this.anim = window.setTimeout(() => {
@@ -1512,25 +1918,40 @@
       if (key === "aplace") {
         const h = a.history;
         return [
-          `A \u2464 Row Placement \u9000\u706B\uFF08\u6676\u7C92 ${a.die.w.toFixed(1)} \xD7 ${a.die.h.toFixed(1)} \xB5m\uFF0C${a.die.rows} \u5217 \xD7 ${a.die.sites} site\uFF09`,
-          `\u4F9D\u76EE\u6A19\u5229\u7528\u7387\u6C7A\u5B9A\u6676\u7C92\u5927\u5C0F\uFF08${(a.die.util * 100).toFixed(0)}%\uFF1B\u592A\u64E0\u7E5E\u4E0D\u901A\u5C31\u81EA\u52D5\u653E\u5927\uFF09\uFF0CIO \u8173\u5E73\u5747\u653E\u5728\u56DB\u5468\uFF08\u8F38\u5165\uFF1A\u5DE6\u3001\u4E0A\uFF1B\u8F38\u51FA\uFF1A\u53F3\u3001\u4E0B\uFF09\u3002\u521D\u59CB\u4F9D\u7DB2\u8868\u9806\u5E8F\u86C7\u5F62\u586B\u5217\uFF0C\u518D\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316 HPWL + \u5BC6\u5EA6\u61F2\u7F70\uFF1A\u6BCF\u4E00\u6B65\u628A\u5143\u4EF6\u79FB\u5230\u7A7A\u4F4D\u6216\u8207\u53E6\u4E00\u500B\u5143\u4EF6\u4EA4\u63DB\uFF0C\u6C38\u9060\u4FDD\u6301\u5408\u6CD5\uFF08\u4E0D\u91CD\u758A\u3001\u5C0D\u9F4A site\uFF09\uFF1B16 \xD7 16 \xB5m \u7684\u683C\u5B50\u8D85\u904E\u76EE\u6A19\u5BC6\u5EA6 ${(a.die.target_density * 100).toFixed(0)}% \u7684\u90E8\u5206\u8981\u4ED8\u4EE3\u50F9\uFF0C\u5143\u4EF6\u624D\u4E0D\u6703\u5168\u64E0\u5230 IO \u8173\u65C1\u908A\u3001\u7559\u4E0B\u5C40\u90E8\u7E5E\u4E0D\u901A\u7684\u71B1\u9EDE\u3002`,
-          `\u6700\u6EFF\u7684\u683C\u5B50 ${(a.die.max_density * 100).toFixed(0)}%`,
+          tr(`A \u2464 Row Placement \u9000\u706B\uFF08\u6676\u7C92 ${a.die.w.toFixed(1)} \xD7 ${a.die.h.toFixed(1)} \xB5m\uFF0C${a.die.rows} \u5217 \xD7 ${a.die.sites} site\uFF09`, `A \u2464 Row Placement, simulated annealing (die ${a.die.w.toFixed(1)} \xD7 ${a.die.h.toFixed(1)} \xB5m, ${a.die.rows} rows \xD7 ${a.die.sites} sites)`),
+          tr(
+            `\u4F9D\u76EE\u6A19\u5229\u7528\u7387\u6C7A\u5B9A\u6676\u7C92\u5927\u5C0F\uFF08${(a.die.util * 100).toFixed(0)}%\uFF1B\u592A\u64E0\u7E5E\u4E0D\u901A\u5C31\u81EA\u52D5\u653E\u5927\uFF09\uFF0CIO \u8173\u5E73\u5747\u653E\u5728\u56DB\u5468\uFF08\u8F38\u5165\uFF1A\u5DE6\u3001\u4E0A\uFF1B\u8F38\u51FA\uFF1A\u53F3\u3001\u4E0B\uFF09\u3002\u521D\u59CB\u4F9D\u7DB2\u8868\u9806\u5E8F\u86C7\u5F62\u586B\u5217\uFF0C\u518D\u4EE5\u6A21\u64EC\u9000\u706B\u6700\u5C0F\u5316 HPWL + \u5BC6\u5EA6\u61F2\u7F70\uFF1A\u6BCF\u4E00\u6B65\u628A\u5143\u4EF6\u79FB\u5230\u7A7A\u4F4D\u6216\u8207\u53E6\u4E00\u500B\u5143\u4EF6\u4EA4\u63DB\uFF0C\u6C38\u9060\u4FDD\u6301\u5408\u6CD5\uFF08\u4E0D\u91CD\u758A\u3001\u5C0D\u9F4A site\uFF09\uFF1B16 \xD7 16 \xB5m \u7684\u683C\u5B50\u8D85\u904E\u76EE\u6A19\u5BC6\u5EA6 ${(a.die.target_density * 100).toFixed(0)}% \u7684\u90E8\u5206\u8981\u4ED8\u4EE3\u50F9\uFF0C\u5143\u4EF6\u624D\u4E0D\u6703\u5168\u64E0\u5230 IO \u8173\u65C1\u908A\u3001\u7559\u4E0B\u5C40\u90E8\u7E5E\u4E0D\u901A\u7684\u71B1\u9EDE\u3002`,
+            `The die size follows the target utilization (${(a.die.util * 100).toFixed(0)}%; enlarged automatically when too crowded to route); IO pins are spread around the edge (inputs: left, top; outputs: right, bottom). Rows are first filled in netlist order like a snake, then simulated annealing minimizes HPWL + a density penalty: each move takes a cell to a free spot or swaps it with another, always legal (no overlap, on sites); 16 \xD7 16 \xB5m bins above the target density of ${(a.die.target_density * 100).toFixed(0)}% pay a cost, so cells do not pile up next to the IO pins and leave unroutable hot spots.`
+          ),
+          tr(`\u6700\u6EFF\u7684\u683C\u5B50 ${(a.die.max_density * 100).toFixed(0)}%`, `Fullest bin ${(a.die.max_density * 100).toFixed(0)}%`),
           "",
-          `${a.cells.length} \u500B\u5143\u4EF6\uFF0C\u5217\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(1)}%\uFF1BHPWL\uFF1A\u521D\u59CB ${(h[0].cost / 1e3).toFixed(2)} mm \u2192 \u9000\u706B\u5F8C ${(h[h.length - 1].cost / 1e3).toFixed(2)} mm\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`,
-          "\u984F\u8272\uFF1A\u6A58\uFF1DDFF\u3001\u9EC3\uFF1DMUX2\u3001\u85CD\uFF1DAND/OR \u985E\u3001\u7D2B\uFF1DXOR/AOI/OAI\u3001\u7DA0\uFF1DINV\u3001\u9752\uFF1DBUF\uFF1B\u7DA0/\u7D05\u5C0F\u65B9\u584A\uFF1D\u8F38\u5165/\u8F38\u51FA\u8173"
+          tr(
+            `${a.cells.length} \u500B\u5143\u4EF6\uFF0C\u5217\u5229\u7528\u7387 ${(a.die.util * 100).toFixed(1)}%\uFF1BHPWL\uFF1A\u521D\u59CB ${(h[0].cost / 1e3).toFixed(2)} mm \u2192 \u9000\u706B\u5F8C ${(h[h.length - 1].cost / 1e3).toFixed(2)} mm\u3000\u6309\u300C\u25B6 \u9000\u706B\u52D5\u756B\u300D\u91CD\u64AD`,
+            `${a.cells.length} cells, row utilization ${(a.die.util * 100).toFixed(1)}%; HPWL: initial ${(h[0].cost / 1e3).toFixed(2)} mm \u2192 annealed ${(h[h.length - 1].cost / 1e3).toFixed(2)} mm\u3000press "\u25B6 Annealing" to replay`
+          ),
+          tr("\u984F\u8272\uFF1A\u6A58\uFF1DDFF\u3001\u9EC3\uFF1DMUX2\u3001\u85CD\uFF1DAND/OR \u985E\u3001\u7D2B\uFF1DXOR/AOI/OAI\u3001\u7DA0\uFF1DINV\u3001\u9752\uFF1DBUF\uFF1B\u7DA0/\u7D05\u5C0F\u65B9\u584A\uFF1D\u8F38\u5165/\u8F38\u51FA\u8173", "Colors: orange = DFF, yellow = MUX2, blue = AND/OR family, purple = XOR/AOI/OAI, green = INV, cyan = BUF; small green / red squares = input / output pins")
         ];
       }
       if (key === "aroute") {
         const r = a.route;
         const c = a.cts;
         return [
-          `A \u2465 CTS + Global Routing\uFF08${r.gx} \xD7 ${r.gy} \u500B gcell\uFF0C\u6BCF\u683C 4 \xB5m\uFF1B\u6C34\u5E73\u7DDA\u8D70 M2/M4\u3001\u5782\u76F4\u7DDA\u8D70 M3/M5\uFF0C\u6BCF\u908A ${r.cap} \u8ECC\uFF09`,
-          `\u6642\u8108\u6A39\u5408\u6210\uFF08CTS\uFF09\uFF1A\u4F48\u5C40\u5B8C\u6210\u5F8C\uFF0C\u628A clock\uFF08\u8207\u975E\u540C\u6B65 reset\uFF09\u7684\u8CA0\u8F09\u4F9D\u4F4D\u7F6E\u905E\u8FF4\u5C0D\u534A\u5207\uFF08\u6CBF\u8F03\u9577\u7684\u65B9\u5411\u53D6\u4E2D\u4F4D\u6578\uFF0C\u50CF H-tree\uFF09\uFF0C\u6BCF\u7FA4 \u2264 16 \u500B\u8CA0\u8F09\u7531\u4E00\u500B CLKBUF \u9A45\u52D5\uFF0C\u7DE9\u885D\u5668\u653E\u5728\u6240\u9A45\u52D5\u8005\u7684\u91CD\u5FC3\uFF1B\u5E73\u8861\u7684\u5207\u6CD5\u8B93\u6BCF\u500B\u6B63\u53CD\u5668\u7D93\u904E\u4E00\u6A23\u591A\u7D1A\u3001\u5DEE\u4E0D\u591A\u9577\u7684\u7DDA \u2192 skew \u5C0F\u3002`,
-          c.buffers ? `\u2192 ${c.trees.map((t2) => `${t2.net}\uFF1A${t2.sinks} \u500B\u8CA0\u8F09\uFF0C${t2.buffers} \u500B CLKBUF\uFF0C${t2.levels} \u7D1A`).join("\uFF1B")}\uFF1B\u63D2\u5165\u5EF6\u9072 ${a.timing.insertion.toFixed(3)} ns\uFF0Cskew ${(a.timing.skew * 1e3).toFixed(0)} ps` : "\u2192 \u8CA0\u8F09\u4E0D\u591A\uFF08\u2264 16\uFF09\uFF0C\u4E0D\u9700\u8981\u6642\u8108\u6A39",
-          "\u6BCF\u689D net \u7684\u7AEF\u9EDE\u4F9D Prim \u6700\u5C0F\u751F\u6210\u6A39\u9806\u5E8F\uFF0C\u7528 A* \u5F9E\u7AEF\u9EDE\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF1B\u8D85\u904E\u5BB9\u91CF\u7684\u908A\u4EE5 PathFinder\uFF08\u73FE\u6CC1 + \u6B77\u53F2\u6210\u672C\uFF09\u5354\u5546\u91CD\u7E5E\uFF0C\u76F4\u5230\u6C92\u6709\u6EA2\u51FA\u3002",
+          tr(`A \u2465 CTS + Global Routing\uFF08${r.gx} \xD7 ${r.gy} \u500B gcell\uFF0C\u6BCF\u683C 4 \xB5m\uFF1B\u6C34\u5E73\u7DDA\u8D70 M2/M4\u3001\u5782\u76F4\u7DDA\u8D70 M3/M5\uFF0C\u6BCF\u908A ${r.cap} \u8ECC\uFF09`, `A \u2465 CTS + Global Routing (${r.gx} \xD7 ${r.gy} gcells of 4 \xB5m; horizontal on M2/M4, vertical on M3/M5, ${r.cap} tracks per edge)`),
+          tr(
+            `\u6642\u8108\u6A39\u5408\u6210\uFF08CTS\uFF09\uFF1A\u4F48\u5C40\u5B8C\u6210\u5F8C\uFF0C\u628A clock\uFF08\u8207\u975E\u540C\u6B65 reset\uFF09\u7684\u8CA0\u8F09\u4F9D\u4F4D\u7F6E\u905E\u8FF4\u5C0D\u534A\u5207\uFF08\u6CBF\u8F03\u9577\u7684\u65B9\u5411\u53D6\u4E2D\u4F4D\u6578\uFF0C\u50CF H-tree\uFF09\uFF0C\u6BCF\u7FA4 \u2264 16 \u500B\u8CA0\u8F09\u7531\u4E00\u500B CLKBUF \u9A45\u52D5\uFF0C\u7DE9\u885D\u5668\u653E\u5728\u6240\u9A45\u52D5\u8005\u7684\u91CD\u5FC3\uFF1B\u5E73\u8861\u7684\u5207\u6CD5\u8B93\u6BCF\u500B\u6B63\u53CD\u5668\u7D93\u904E\u4E00\u6A23\u591A\u7D1A\u3001\u5DEE\u4E0D\u591A\u9577\u7684\u7DDA \u2192 skew \u5C0F\u3002`,
+            `Clock tree synthesis (CTS): after placement the loads of the clock (and asynchronous reset) are split in halves by position, recursively (median along the longer side, like an H-tree); each group of \u2264 16 loads is driven by one CLKBUF placed at their centroid; balanced splits give every flip-flop the same number of levels and similar wire lengths \u2192 small skew.`
+          ),
+          c.buffers ? tr(
+            `\u2192 ${c.trees.map((t2) => `${t2.net}\uFF1A${t2.sinks} \u500B\u8CA0\u8F09\uFF0C${t2.buffers} \u500B CLKBUF\uFF0C${t2.levels} \u7D1A`).join("\uFF1B")}\uFF1B\u63D2\u5165\u5EF6\u9072 ${a.timing.insertion.toFixed(3)} ns\uFF0Cskew ${(a.timing.skew * 1e3).toFixed(0)} ps`,
+            `\u2192 ${c.trees.map((t2) => `${t2.net}: ${t2.sinks} loads, ${t2.buffers} CLKBUFs, ${t2.levels} levels`).join("; ")}; insertion delay ${a.timing.insertion.toFixed(3)} ns, skew ${(a.timing.skew * 1e3).toFixed(0)} ps`
+          ) : tr("\u2192 \u8CA0\u8F09\u4E0D\u591A\uFF08\u2264 16\uFF09\uFF0C\u4E0D\u9700\u8981\u6642\u8108\u6A39", "\u2192 few loads (\u2264 16), no clock tree needed"),
+          tr(
+            "\u6BCF\u689D net \u7684\u7AEF\u9EDE\u4F9D Prim \u6700\u5C0F\u751F\u6210\u6A39\u9806\u5E8F\uFF0C\u7528 A* \u5F9E\u7AEF\u9EDE\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF1B\u8D85\u904E\u5BB9\u91CF\u7684\u908A\u4EE5 PathFinder\uFF08\u73FE\u6CC1 + \u6B77\u53F2\u6210\u672C\uFF09\u5354\u5546\u91CD\u7E5E\uFF0C\u76F4\u5230\u6C92\u6709\u6EA2\u51FA\u3002",
+            "The pins of each net are connected in Prim minimum-spanning-tree order, A* from a pin to the tree built so far; edges over capacity are renegotiated with PathFinder (present + history cost) until nothing overflows."
+          ),
           "",
-          `${r.nets.length} \u689D net\uFF0C\u7E3D\u7DDA\u9577 ${(r.wirelength / 1e3).toFixed(2)} mm\uFF0Cvia ${r.vias} \u500B\uFF1B\u6BCF\u8F2A\u6EA2\u51FA\uFF1A${r.iters.join(" \u2192 ")}`,
-          "\u984F\u8272\uFF1A\u85CD\uFF1D\u6C34\u5E73\u3001\u7D2B\uFF1D\u5782\u76F4\u3001\u7DA0\uFF1Dclock / reset\uFF1B\u5E95\u8272\uFF1D\u64C1\u585E\uFF08\u7DA0\u9B06 \u2192 \u7D05\u6EFF\uFF09\u3002\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\u3001\u9EDE\u53F3\u5074 net \u9AD8\u4EAE\u3002"
+          tr(`${r.nets.length} \u689D net\uFF0C\u7E3D\u7DDA\u9577 ${(r.wirelength / 1e3).toFixed(2)} mm\uFF0Cvia ${r.vias} \u500B\uFF1B\u6BCF\u8F2A\u6EA2\u51FA\uFF1A${r.iters.join(" \u2192 ")}`, `${r.nets.length} nets, wirelength ${(r.wirelength / 1e3).toFixed(2)} mm, ${r.vias} vias; overflow per iteration: ${r.iters.join(" \u2192 ")}`),
+          tr("\u984F\u8272\uFF1A\u85CD\uFF1D\u6C34\u5E73\u3001\u7D2B\uFF1D\u5782\u76F4\u3001\u7DA0\uFF1Dclock / reset\uFF1B\u5E95\u8272\uFF1D\u64C1\u585E\uFF08\u7DA0\u9B06 \u2192 \u7D05\u6EFF\uFF09\u3002\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\u3001\u9EDE\u53F3\u5074 net \u9AD8\u4EAE\u3002", "Colors: blue = horizontal, purple = vertical, green = clock / reset; background = congestion (green free \u2192 red full). Click a cell for details, a net on the right to highlight it.")
         ];
       }
       if (key === "apower") {
@@ -1538,34 +1959,70 @@
         const e = p.e_nets + p.e_clock + p.e_internal + p.e_sram;
         return [
           "A \u2468 Power + IR Drop",
-          `\u4EE5\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u6700\u5F8C\u7684\u7DB2\u8868 ${p.cycles} \u500B\u9031\u671F\uFF08\u6709 reset \u5C31\u5148\u62C9\u5169\u62CD\uFF09\uFF0C\u7D71\u8A08\u6BCF\u689D net \u7684\u7FFB\u8F49\u7387 \u03B1\uFF1B\u5207\u63DB\u529F\u8017 = \xBD\xB7\u03B1\xB7C\xB7V\xB2\xB7f\uFF08C = \u8CA0\u8F09\u8173\u4F4D + 0.2 fF/\xB5m \u7684\u5BE6\u969B\u7DDA\u9577\uFF0CV = 1.2 V\uFF09\uFF0C\u6642\u8108\u6A39\u6BCF\u62CD\u5145\u653E\u96FB\uFF1B\u5143\u4EF6\u5167\u90E8\u80FD\u91CF\u4F9D\u5927\u5C0F\u8A08\u3001\u6B63\u53CD\u5668\u6BCF\u62CD\u6709\u6642\u8108\u80FD\u91CF\u3001SRAM \u6BCF\u6B21\u5B58\u53D6\uFF1B\u6F0F\u96FB\u4F9D\u9762\u7A4D\u3002`,
-          `IR drop\uFF1A\u6BCF\u500B\u5143\u4EF6\u7684\u5E73\u5747\u96FB\u6D41\u6D41\u904E\u6240\u5728\u5217\u7684 VDD \u8ECC\u8207 VSS \u8ECC\uFF1B\u5169\u689D\u96FB\u6E90\u5E36\u4E4B\u9593\u7684\u8ECC\u662F\u5169\u7AEF\u4F9B\u96FB\u7684\u96FB\u963B\u7DDA\uFF08M1 0.2 \u03A9/\xB5m\uFF09\uFF0C\u7B97\u51FA\u6BCF\u500B\u5143\u4EF6\u770B\u5230\u7684\u58D3\u964D\u3002`,
+          tr(
+            `\u4EE5\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u6700\u5F8C\u7684\u7DB2\u8868 ${p.cycles} \u500B\u9031\u671F\uFF08\u6709 reset \u5C31\u5148\u62C9\u5169\u62CD\uFF09\uFF0C\u7D71\u8A08\u6BCF\u689D net \u7684\u7FFB\u8F49\u7387 \u03B1\uFF1B\u5207\u63DB\u529F\u8017 = \xBD\xB7\u03B1\xB7C\xB7V\xB2\xB7f\uFF08C = \u8CA0\u8F09\u8173\u4F4D + 0.2 fF/\xB5m \u7684\u5BE6\u969B\u7DDA\u9577\uFF0CV = 1.2 V\uFF09\uFF0C\u6642\u8108\u6A39\u6BCF\u62CD\u5145\u653E\u96FB\uFF1B\u5143\u4EF6\u5167\u90E8\u80FD\u91CF\u4F9D\u5927\u5C0F\u8A08\u3001\u6B63\u53CD\u5668\u6BCF\u62CD\u6709\u6642\u8108\u80FD\u91CF\u3001SRAM \u6BCF\u6B21\u5B58\u53D6\uFF1B\u6F0F\u96FB\u4F9D\u9762\u7A4D\u3002`,
+            `The final netlist is simulated for ${p.cycles} cycles with random inputs (reset held for two cycles first, if any) to get each net's toggle rate \u03B1; switching power = \xBD\xB7\u03B1\xB7C\xB7V\xB2\xB7f (C = load pins + 0.2 fF/\xB5m of actual wire, V = 1.2 V); the clock tree charges every cycle; internal energy by cell size, clock energy per flip-flop per cycle, SRAM per access; leakage by area.`
+          ),
+          tr(
+            `IR drop\uFF1A\u6BCF\u500B\u5143\u4EF6\u7684\u5E73\u5747\u96FB\u6D41\u6D41\u904E\u6240\u5728\u5217\u7684 VDD \u8ECC\u8207 VSS \u8ECC\uFF1B\u5169\u689D\u96FB\u6E90\u5E36\u4E4B\u9593\u7684\u8ECC\u662F\u5169\u7AEF\u4F9B\u96FB\u7684\u96FB\u963B\u7DDA\uFF08M1 0.2 \u03A9/\xB5m\uFF09\uFF0C\u7B97\u51FA\u6BCF\u500B\u5143\u4EF6\u770B\u5230\u7684\u58D3\u964D\u3002`,
+            `IR drop: each cell's average current flows through the VDD and VSS rails of its row; a rail between two straps is a resistive line fed from both ends (M1 0.2 \u03A9/\xB5m), giving the drop each cell sees.`
+          ),
           "",
-          `\u6BCF\u9031\u671F\u80FD\u91CF ${e.toFixed(2)} pJ\uFF08\u8A0A\u865F ${p.e_nets.toFixed(2)}\u3001\u6642\u8108\u6A39 ${p.e_clock.toFixed(2)}\u3001\u5143\u4EF6\u5167\u90E8 ${p.e_internal.toFixed(2)}\u3001SRAM ${p.e_sram.toFixed(2)}\uFF09\u2192 \u5728 Fmax ${p.freq.toFixed(1)} MHz\uFF1A${p.total.toFixed(3)} mW\uFF08\u52D5\u614B ${p.dynamic.toFixed(3)}\u3001\u6F0F\u96FB ${p.leakage.toFixed(4)}\uFF09`,
-          `\u6700\u5927 IR drop ${p.ir_worst.toFixed(2)} mV\uFF08${(p.ir_worst / 12).toFixed(2)}% of VDD\uFF09\uFF1B\u984F\u8272\uFF1D${this.showIr ? "IR drop" : "\u6BCF\u500B\u5143\u4EF6\u7684\u529F\u8017"}\uFF08\u7DA0\u4F4E\u7D05\u9AD8\uFF09\uFF0C\u5074\u6B04\u53EF\u5207\u63DB`
+          tr(
+            `\u6BCF\u9031\u671F\u80FD\u91CF ${e.toFixed(2)} pJ\uFF08\u8A0A\u865F ${p.e_nets.toFixed(2)}\u3001\u6642\u8108\u6A39 ${p.e_clock.toFixed(2)}\u3001\u5143\u4EF6\u5167\u90E8 ${p.e_internal.toFixed(2)}\u3001SRAM ${p.e_sram.toFixed(2)}\uFF09\u2192 \u5728 Fmax ${p.freq.toFixed(1)} MHz\uFF1A${p.total.toFixed(3)} mW\uFF08\u52D5\u614B ${p.dynamic.toFixed(3)}\u3001\u6F0F\u96FB ${p.leakage.toFixed(4)}\uFF09`,
+            `Energy per cycle ${e.toFixed(2)} pJ (signals ${p.e_nets.toFixed(2)}, clock tree ${p.e_clock.toFixed(2)}, cell internal ${p.e_internal.toFixed(2)}, SRAM ${p.e_sram.toFixed(2)}) \u2192 at Fmax ${p.freq.toFixed(1)} MHz: ${p.total.toFixed(3)} mW (dynamic ${p.dynamic.toFixed(3)}, leakage ${p.leakage.toFixed(4)})`
+          ),
+          tr(
+            `\u6700\u5927 IR drop ${p.ir_worst.toFixed(2)} mV\uFF08${(p.ir_worst / 12).toFixed(2)}% of VDD\uFF09\uFF1B\u984F\u8272\uFF1D${this.showIr ? "IR drop" : "\u6BCF\u500B\u5143\u4EF6\u7684\u529F\u8017"}\uFF08\u7DA0\u4F4E\u7D05\u9AD8\uFF09\uFF0C\u5074\u6B04\u53EF\u5207\u63DB`,
+            `Worst IR drop ${p.ir_worst.toFixed(2)} mV (${(p.ir_worst / 12).toFixed(2)}% of VDD); color = ${this.showIr ? "IR drop" : "power per cell"} (green low, red high), switch in the side panel`
+          )
         ];
       }
       if (key === "adetail") {
         const d = a.detail;
         const um = (x) => (x / 1e3).toFixed(2) + " mm";
         return [
-          `A \u2466 Detail Routing\uFF08\u8ECC\u9053\u683C\u9EDE\uFF1A\u6BCF ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m \u4E00\u689D\uFF0C${d.nx} \xD7 ${d.ny} \xD7 4 \u5C64\uFF1BM2/M4 \u6C34\u5E73\u3001M3/M5 \u5782\u76F4\uFF09`,
-          "\u6BCF\u689D net \u53EA\u5728\u5168\u57DF\u7E5E\u7DDA\u9078\u7684 gcell \u8D70\u5ECA\u5167\uFF08\u5916\u52A0\u4E00\u5708\uFF09\u4EE5 A* \u627E\u8DEF\uFF1A\u7AEF\u9EDE\u4F9D Prim \u9806\u5E8F\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF0C\u63DB\u5C64\u4E00\u500B via \u6210\u672C\u8F03\u9AD8\uFF1B\u6BCF\u500B\u683C\u9EDE\u53EA\u80FD\u5C6C\u65BC\u4E00\u689D net\uFF08\u6240\u4EE5\u6C92\u6709\u77ED\u8DEF\uFF09\uFF0C\u91CD\u758A\u4EE5 PathFinder \u5354\u5546\u91CD\u7E5E\uFF0C\u5361\u4F4F\u7684 net \u8D70\u5ECA\u6703\u52A0\u5BEC\u3002\u5143\u4EF6\u8173\u4F4D\u5F9E M1 \u7D93 via \u4E0A\u4F86\uFF0CSRAM \u5DE8\u96C6\u4E0A\u65B9\u64CB\u4F4F M2/M3\uFF0CIO \u8173\u5728 M5\u3002",
+          tr(`A \u2466 Detail Routing\uFF08\u8ECC\u9053\u683C\u9EDE\uFF1A\u6BCF ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m \u4E00\u689D\uFF0C${d.nx} \xD7 ${d.ny} \xD7 4 \u5C64\uFF1BM2/M4 \u6C34\u5E73\u3001M3/M5 \u5782\u76F4\uFF09`, `A \u2466 Detail Routing (track grid: one every ${(a.die.row_h / d.tracks).toFixed(1)} \xB5m, ${d.nx} \xD7 ${d.ny} \xD7 4 layers; M2/M4 horizontal, M3/M5 vertical)`),
+          tr(
+            "\u6BCF\u689D net \u53EA\u5728\u5168\u57DF\u7E5E\u7DDA\u9078\u7684 gcell \u8D70\u5ECA\u5167\uFF08\u5916\u52A0\u4E00\u5708\uFF09\u4EE5 A* \u627E\u8DEF\uFF1A\u7AEF\u9EDE\u4F9D Prim \u9806\u5E8F\u9023\u5230\u5DF2\u5EFA\u597D\u7684\u6A39\uFF0C\u63DB\u5C64\u4E00\u500B via \u6210\u672C\u8F03\u9AD8\uFF1B\u6BCF\u500B\u683C\u9EDE\u53EA\u80FD\u5C6C\u65BC\u4E00\u689D net\uFF08\u6240\u4EE5\u6C92\u6709\u77ED\u8DEF\uFF09\uFF0C\u91CD\u758A\u4EE5 PathFinder \u5354\u5546\u91CD\u7E5E\uFF0C\u5361\u4F4F\u7684 net \u8D70\u5ECA\u6703\u52A0\u5BEC\u3002\u5143\u4EF6\u8173\u4F4D\u5F9E M1 \u7D93 via \u4E0A\u4F86\uFF0CSRAM \u5DE8\u96C6\u4E0A\u65B9\u64CB\u4F4F M2/M3\uFF0CIO \u8173\u5728 M5\u3002",
+            "Each net is routed with A* only inside the gcell corridor chosen by global routing (plus one ring): pins join the tree in Prim order, a layer change (via) costs more; every grid point belongs to one net at most (so no shorts), overlaps are renegotiated with PathFinder and a stuck net's corridor widens. Cell pins come up from M1 through vias, SRAM macros block M2/M3 above them, IO pins are on M5."
+          ),
           "",
-          `\u96FB\u6E90\u7DB2\u8DEF\uFF1A\u6BCF\u689D\u5217\u908A\u754C\u4E00\u689D M1 \u96FB\u6E90\u8ECC\uFF08VSS / VDD \u4EA4\u66FF\uFF0C\u5171 ${a.pdn.rails} \u689D\uFF09\uFF0CM5 \u5782\u76F4\u96FB\u6E90\u5E36 ${a.pdn.straps.length} \u689D\uFF08VDD / VSS \u6210\u5C0D\uFF0C\u6BCF 40 \xB5m \u4E00\u5C0D\uFF09\uFF0C${a.pdn.vias} \u500B via \u758A\u628A\u5E36\u5B50\u63A5\u5230\u540C\u540D\u7684\u8ECC\uFF1B\u7E5E\u7DDA\u5668\u907F\u958B\u5E36\u5B50\u8207 via \u758A\u3002\u7A7A\u4F4D\u88DC\u4E0A ${a.pdn.fillers.length / 3} \u500B\u586B\u5145\u5143\u4EF6\uFF08FILL8/4/2/1\uFF0C\u6DF1\u7070\uFF09\uFF0C\u8B93\u4E95\u8207\u96FB\u6E90\u8ECC\u9023\u7E8C\u3002`,
-          `\u7DDA\u9577 ${um(d.wirelength)}\uFF08M2 ${um(d.per_layer[0])}\u3001M3 ${um(d.per_layer[1])}\u3001M4 ${um(d.per_layer[2])}\u3001M5 ${um(d.per_layer[3])}\uFF09\uFF0Cvia ${d.vias} \u500B\uFF1B\u885D\u7A81 ${d.conflicts}\u3001\u672A\u63A5\u901A ${d.opens}\uFF1B\u6BCF\u8F2A\u885D\u7A81\uFF1A${d.iters.join(" \u2192 ")}`,
-          d.nets.length ? "\u984F\u8272\uFF1A\u85CD M2\u3001\u7D05 M3\u3001\u7DA0 M4\u3001\u9EC3 M5\uFF1B\u5074\u6B04\u53EF\u5207\u63DB\u5C64\u3001\u9EDE net \u9AD8\u4EAE\u3002\u9019\u4E00\u6B65\u7684\u7DDA\u9577\u4E5F\u56DE\u994B\u7D66 STA\u3002" : `\uFF08\u5171 ${d.segments} \u6BB5\u7DDA\uFF0C\u592A\u591A\u4E0D\u756B\uFF0C\u53EA\u5217\u7D71\u8A08\uFF09`
+          tr(
+            `\u96FB\u6E90\u7DB2\u8DEF\uFF1A\u6BCF\u689D\u5217\u908A\u754C\u4E00\u689D M1 \u96FB\u6E90\u8ECC\uFF08VSS / VDD \u4EA4\u66FF\uFF0C\u5171 ${a.pdn.rails} \u689D\uFF09\uFF0CM5 \u5782\u76F4\u96FB\u6E90\u5E36 ${a.pdn.straps.length} \u689D\uFF08VDD / VSS \u6210\u5C0D\uFF0C\u6BCF 40 \xB5m \u4E00\u5C0D\uFF09\uFF0C${a.pdn.vias} \u500B via \u758A\u628A\u5E36\u5B50\u63A5\u5230\u540C\u540D\u7684\u8ECC\uFF1B\u7E5E\u7DDA\u5668\u907F\u958B\u5E36\u5B50\u8207 via \u758A\u3002\u7A7A\u4F4D\u88DC\u4E0A ${a.pdn.fillers.length / 3} \u500B\u586B\u5145\u5143\u4EF6\uFF08FILL8/4/2/1\uFF0C\u6DF1\u7070\uFF09\uFF0C\u8B93\u4E95\u8207\u96FB\u6E90\u8ECC\u9023\u7E8C\u3002`,
+            `Power grid: an M1 rail on every row boundary (VSS / VDD alternating, ${a.pdn.rails} rails), ${a.pdn.straps.length} vertical M5 straps (VDD / VSS pairs, one pair every 40 \xB5m), ${a.pdn.vias} via stacks tie the straps to the rails of the same net; the router avoids straps and via stacks. ${a.pdn.fillers.length / 3} filler cells (FILL8/4/2/1, dark gray) fill the gaps so wells and rails are continuous.`
+          ),
+          tr(
+            `\u7DDA\u9577 ${um(d.wirelength)}\uFF08M2 ${um(d.per_layer[0])}\u3001M3 ${um(d.per_layer[1])}\u3001M4 ${um(d.per_layer[2])}\u3001M5 ${um(d.per_layer[3])}\uFF09\uFF0Cvia ${d.vias} \u500B\uFF1B\u885D\u7A81 ${d.conflicts}\u3001\u672A\u63A5\u901A ${d.opens}\uFF1B\u6BCF\u8F2A\u885D\u7A81\uFF1A${d.iters.join(" \u2192 ")}`,
+            `Wirelength ${um(d.wirelength)} (M2 ${um(d.per_layer[0])}, M3 ${um(d.per_layer[1])}, M4 ${um(d.per_layer[2])}, M5 ${um(d.per_layer[3])}), ${d.vias} vias; ${d.conflicts} conflicts, ${d.opens} opens; conflicts per iteration: ${d.iters.join(" \u2192 ")}`
+          ),
+          d.nets.length ? tr("\u984F\u8272\uFF1A\u85CD M2\u3001\u7D05 M3\u3001\u7DA0 M4\u3001\u9EC3 M5\uFF1B\u5074\u6B04\u53EF\u5207\u63DB\u5C64\u3001\u9EDE net \u9AD8\u4EAE\u3002\u9019\u4E00\u6B65\u7684\u7DDA\u9577\u4E5F\u56DE\u994B\u7D66 STA\u3002", "Colors: blue M2, red M3, green M4, yellow M5; switch layers in the side panel, click a net to highlight it. These wire lengths also feed the STA.") : tr(`\uFF08\u5171 ${d.segments} \u6BB5\u7DDA\uFF0C\u592A\u591A\u4E0D\u756B\uFF0C\u53EA\u5217\u7D71\u8A08\uFF09`, `(${d.segments} segments: too many to draw, statistics only)`)
         ];
       }
       const t = a.timing;
       return [
         "A \u2467 Timing (STA)",
-        "\u5143\u4EF6\u5EF6\u9072 = \u672C\u5FB5\u5EF6\u9072 + \u6BCF\u6247\u51FA\u8CA0\u8F09 \xD7 \u6247\u51FA\uFF1B\u7DDA\u5EF6\u9072 = \u9A45\u52D5\u6574\u689D\u7E5E\u7DDA\u7684\u96FB\u5BB9 + \u5230\u8A72\u8CA0\u8F09\u7684\u5206\u4F48 RC\uFF08\u4F9D\u66FC\u54C8\u9813\u8DDD\u96E2\uFF09\u3002\u8DEF\u5F91\u8D77\u9EDE\u70BA\u8F38\u5165\u8173\u8207 DFF\uFF08clk\u2192Q\uFF09\uFF0C\u7D42\u9EDE\u70BA DFF D\uFF08\u52A0 setup\uFF09\u8207\u8F38\u51FA\u8173\uFF1Bclock \u8996\u70BA\u7406\u60F3\u3002",
+        tr(
+          "\u5143\u4EF6\u5EF6\u9072 = \u672C\u5FB5\u5EF6\u9072 + \u6BCF\u6247\u51FA\u8CA0\u8F09 \xD7 \u6247\u51FA\uFF1B\u7DDA\u5EF6\u9072 = \u9A45\u52D5\u6574\u689D\u7E5E\u7DDA\u7684\u96FB\u5BB9 + \u5230\u8A72\u8CA0\u8F09\u7684\u5206\u4F48 RC\uFF08\u4F9D\u66FC\u54C8\u9813\u8DDD\u96E2\uFF09\u3002\u8DEF\u5F91\u8D77\u9EDE\u70BA\u8F38\u5165\u8173\u8207 DFF\uFF08clk\u2192Q\uFF09\uFF0C\u7D42\u9EDE\u70BA DFF D\uFF08\u52A0 setup\uFF09\u8207\u8F38\u51FA\u8173\uFF1Bclock \u8996\u70BA\u7406\u60F3\u3002",
+          "Cell delay = intrinsic delay + load per fanout \xD7 fanout; wire delay = driving the whole routed net's capacitance + the distributed RC to that load (by Manhattan distance). Paths start at input pins and DFFs (clk\u2192Q) and end at DFF D (plus setup) and output pins; the clock is ideal here."
+        ),
         "",
-        `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(3)} ns \u2192 Fmax ${t.fmax.toFixed(1)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0C\u5143\u4EF6\u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
-        `\u6642\u5E8F\u5C0E\u5411\uFF1A\u53EA\u770B\u7DDA\u9577\u7684\u4F48\u5C40 ${t.fmax_wl.toFixed(1)} MHz\uFF1B\u4EE5 net \u95DC\u9375\u5EA6\u52A0\u6B0A\u5F8C\u518D\u9000\u706B\uFF08\u5FAE\u8ABF + \u5C0F\u8A2D\u8A08\u91CD\u65B0\u9000\u706B\uFF0C\u53EA\u53D6\u7E5E\u5F97\u901A\u7684\uFF09\u2192 ${t.fmax_ideal.toFixed(1)} MHz\uFF08\u7406\u60F3\u6642\u8108\uFF09`,
-        `\u6642\u8108\u6A39\u4E4B\u5F8C\uFF08propagated clock\uFF09\uFF1A\u8DEF\u5F91\u5F9E\u767C\u9001\u7AEF\u6B63\u53CD\u5668\u7684\u6642\u8108\u5230\u9054\u6642\u9593\u51FA\u767C\u3001\u5C0D\u63A5\u6536\u7AEF\u7684\u6642\u8108\u6AA2\u67E5 setup \u2192 ${t.fmax.toFixed(1)} MHz\uFF1Bskew ${(t.skew * 1e3).toFixed(0)} ps\u3002`,
-        `Hold \u6AA2\u67E5\uFF08\u6700\u77ED\u8DEF\u5F91\uFF1A\u6700\u65E9\u5230\u9054 \u2265 \u63A5\u6536\u6642\u8108 + hold\uFF09\uFF1A\u6700\u5DEE\u9918\u88D5 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `\uFF0C\u63D2\u5165 ${a.cts.hold_bufs} \u500B\u5EF6\u9072 BUF \u4FEE\u6B63` : "\uFF0C\u6C92\u6709\u9055\u898F"}\u3002`
+        tr(
+          `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(3)} ns \u2192 Fmax ${t.fmax.toFixed(1)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0C\u5143\u4EF6\u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
+          `Critical path ${t.period.toFixed(3)} ns \u2192 Fmax ${t.fmax.toFixed(1)} MHz (${t.endpoints} endpoints); red = critical path, cell color = arrival time (green early, red late)`
+        ),
+        tr(
+          `\u6642\u5E8F\u5C0E\u5411\uFF1A\u53EA\u770B\u7DDA\u9577\u7684\u4F48\u5C40 ${t.fmax_wl.toFixed(1)} MHz\uFF1B\u4EE5 net \u95DC\u9375\u5EA6\u52A0\u6B0A\u5F8C\u518D\u9000\u706B\uFF08\u5FAE\u8ABF + \u5C0F\u8A2D\u8A08\u91CD\u65B0\u9000\u706B\uFF0C\u53EA\u53D6\u7E5E\u5F97\u901A\u7684\uFF09\u2192 ${t.fmax_ideal.toFixed(1)} MHz\uFF08\u7406\u60F3\u6642\u8108\uFF09`,
+          `Timing driven: wirelength-only placement ${t.fmax_wl.toFixed(1)} MHz; annealing again with nets weighted by criticality (refinement, plus a fresh anneal for small designs, routable results only) \u2192 ${t.fmax_ideal.toFixed(1)} MHz (ideal clock)`
+        ),
+        tr(
+          `\u6642\u8108\u6A39\u4E4B\u5F8C\uFF08propagated clock\uFF09\uFF1A\u8DEF\u5F91\u5F9E\u767C\u9001\u7AEF\u6B63\u53CD\u5668\u7684\u6642\u8108\u5230\u9054\u6642\u9593\u51FA\u767C\u3001\u5C0D\u63A5\u6536\u7AEF\u7684\u6642\u8108\u6AA2\u67E5 setup \u2192 ${t.fmax.toFixed(1)} MHz\uFF1Bskew ${(t.skew * 1e3).toFixed(0)} ps\u3002`,
+          `With the clock tree (propagated clock): paths start at the launching flip-flop's clock arrival and check setup against the capturing clock \u2192 ${t.fmax.toFixed(1)} MHz; skew ${(t.skew * 1e3).toFixed(0)} ps.`
+        ),
+        tr(
+          `Hold \u6AA2\u67E5\uFF08\u6700\u77ED\u8DEF\u5F91\uFF1A\u6700\u65E9\u5230\u9054 \u2265 \u63A5\u6536\u6642\u8108 + hold\uFF09\uFF1A\u6700\u5DEE\u9918\u88D5 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `\uFF0C\u63D2\u5165 ${a.cts.hold_bufs} \u500B\u5EF6\u9072 BUF \u4FEE\u6B63` : "\uFF0C\u6C92\u6709\u9055\u898F"}\u3002`,
+          `Hold check (shortest paths: earliest arrival \u2265 capture clock + hold): worst slack ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `, fixed by inserting ${a.cts.hold_bufs} delay BUFs` : ", no violations"}.`
+        )
       ];
     }
     asicSide(key) {
@@ -1573,7 +2030,7 @@
       const d = document.createElement("div");
       const det = document.createElement("div");
       det.id = "synDetail";
-      det.innerHTML = '<p class="hint">\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+      det.innerHTML = `<p class="hint">${tr("\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002", "Click a cell for details (type, position, pin signals, arrival time).")}</p>`;
       d.appendChild(det);
       const div = document.createElement("div");
       if (key === "apower") {
@@ -1587,14 +2044,14 @@
           this.drawAsic(false);
           this.info(this.asicReport("apower"));
         };
-        lab.append(cb, " \u986F\u793A IR drop\uFF08\u5426\u5247\u986F\u793A\u529F\u8017\uFF09");
+        lab.append(cb, tr(" \u986F\u793A IR drop\uFF08\u5426\u5247\u986F\u793A\u529F\u8017\uFF09", " show IR drop (otherwise power)"));
         div.appendChild(lab);
         const byType = /* @__PURE__ */ new Map();
         a.map.cells.forEach((c, i) => byType.set(c.t, (byType.get(c.t) ?? 0) + p.cell[i]));
-        div.insertAdjacentHTML("beforeend", `<h3>\u6BCF\u9031\u671F\u80FD\u91CF\uFF08pJ\uFF09</h3>` + table(["\u4F86\u6E90", "pJ"], [["\u8A0A\u865F net", p.e_nets.toFixed(3)], ["\u6642\u8108\u6A39", p.e_clock.toFixed(3)], ["\u5143\u4EF6\u5167\u90E8", p.e_internal.toFixed(3)], ["SRAM", p.e_sram.toFixed(3)]]) + `<h3>\u529F\u8017\uFF08\u4F9D\u5143\u4EF6\u7A2E\u985E\uFF0C\xB5W\uFF09</h3>` + table(["\u5143\u4EF6", "\xB5W"], [...byType.entries()].sort((x, y) => y[1] - x[1]).map(([t, v]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, v.toFixed(2)])));
+        div.insertAdjacentHTML("beforeend", `<h3>${tr("\u6BCF\u9031\u671F\u80FD\u91CF\uFF08pJ\uFF09", "Energy per cycle (pJ)")}</h3>` + table([tr("\u4F86\u6E90", "Source"), "pJ"], [[tr("\u8A0A\u865F net", "signal nets"), p.e_nets.toFixed(3)], [tr("\u6642\u8108\u6A39", "clock tree"), p.e_clock.toFixed(3)], [tr("\u5143\u4EF6\u5167\u90E8", "cell internal"), p.e_internal.toFixed(3)], ["SRAM", p.e_sram.toFixed(3)]]) + `<h3>${tr("\u529F\u8017\uFF08\u4F9D\u5143\u4EF6\u7A2E\u985E\uFF0C\xB5W\uFF09", "Power by cell type (\xB5W)")}</h3>` + table([tr("\u5143\u4EF6", "Cell"), "\xB5W"], [...byType.entries()].sort((x, y) => y[1] - x[1]).map(([t, v]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, v.toFixed(2)])));
       } else if (key === "adetail") {
         const d2 = a.detail;
-        div.innerHTML = `<h3>\u5C64</h3>`;
+        div.innerHTML = `<h3>${tr("\u5C64", "Layers")}</h3>`;
         const pw = document.createElement("label");
         pw.style.display = "block";
         const pcb = document.createElement("input");
@@ -1604,9 +2061,9 @@
           this.power = pcb.checked;
           this.drawAsic(false);
         };
-        pw.append(pcb, ` \u96FB\u6E90\u7DB2\u8DEF\uFF08\u7D05 VDD\u3001\u85CD VSS\uFF09`);
+        pw.append(pcb, tr(" \u96FB\u6E90\u7DB2\u8DEF\uFF08\u7D05 VDD\u3001\u85CD VSS\uFF09", " power grid (red VDD, blue VSS)"));
         div.appendChild(pw);
-        ["M2 \u6C34\u5E73", "M3 \u5782\u76F4", "M4 \u6C34\u5E73", "M5 \u5782\u76F4"].forEach((name, l) => {
+        [tr("M2 \u6C34\u5E73", "M2 horizontal"), tr("M3 \u5782\u76F4", "M3 vertical"), tr("M4 \u6C34\u5E73", "M4 horizontal"), tr("M5 \u5782\u76F4", "M5 vertical")].forEach((name, l) => {
           const lab = document.createElement("label");
           lab.style.display = "block";
           const cb = document.createElement("input");
@@ -1621,7 +2078,7 @@
         });
         if (d2.nets.length) {
           const h = document.createElement("h3");
-          h.textContent = `Net\uFF08${d2.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09`;
+          h.textContent = tr(`Net\uFF08${d2.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09`, `Nets (${d2.nets.length}, by length)`);
           div.appendChild(h);
           const list = document.createElement("div");
           list.className = "clist";
@@ -1639,9 +2096,9 @@
           div.appendChild(list);
         }
       } else if (key === "asta") {
-        div.innerHTML = `<h3>\u95DC\u9375\u8DEF\u5F91\uFF08${a.timing.period.toFixed(3)} ns\uFF09</h3>` + table(["\u7D2F\u8A08 ns", "\u5EF6\u9072", "\u7D93\u904E"], a.timing.path.map((s) => [s.at.toFixed(3), s.delay.toFixed(3), esc(s.what)]));
+        div.innerHTML = `<h3>${tr("\u95DC\u9375\u8DEF\u5F91", "Critical path")}\uFF08${a.timing.period.toFixed(3)} ns\uFF09</h3>` + table([tr("\u7D2F\u8A08 ns", "At ns"), tr("\u5EF6\u9072", "Delay"), tr("\u7D93\u904E", "Through")], a.timing.path.map((s) => [s.at.toFixed(3), s.delay.toFixed(3), esc(s.what)]));
       } else if (key === "aroute") {
-        div.innerHTML = `<h3>Net\uFF08${a.route.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09</h3>`;
+        div.innerHTML = `<h3>${tr(`Net\uFF08${a.route.nets.length}\uFF0C\u4F9D\u7DDA\u9577\uFF09`, `Nets (${a.route.nets.length}, by length)`)}</h3>`;
         const list = document.createElement("div");
         list.className = "clist";
         const order = a.route.nets.map((_, i) => i).sort((x, y) => a.route.nets[y].len - a.route.nets[x].len);
@@ -1662,9 +2119,9 @@
           const t = a.map.cells[i].t;
           areaOf.set(t, (areaOf.get(t) ?? 0) + w * a.die.site_w * h * a.die.row_h);
         });
-        div.innerHTML = `<h3>\u5143\u4EF6\u6578\u91CF</h3>` + table(["\u5143\u4EF6", "\u6578\u91CF", "\u9762\u7A4D \xB5m\xB2"], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (areaOf.get(t) ?? 0).toFixed(0)]));
+        div.innerHTML = `<h3>${tr("\u5143\u4EF6\u6578\u91CF", "Cell counts")}</h3>` + table([tr("\u5143\u4EF6", "Cell"), tr("\u6578\u91CF", "Count"), tr("\u9762\u7A4D \xB5m\xB2", "Area \xB5m\xB2")], a.counts.map(([t, n]) => [`<span class="sw" style="background:${stdColor(t)}"></span>${t}`, String(n), (areaOf.get(t) ?? 0).toFixed(0)]));
       }
-      div.insertAdjacentHTML("beforeend", `<h3>IO \u8173</h3>` + table(["\u8A0A\u865F", "\u65B9\u5411", "x \xB5m", "y \xB5m"], a.pins.map((p) => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)])));
+      div.insertAdjacentHTML("beforeend", `<h3>${tr("IO \u8173", "IO pins")}</h3>` + table([tr("\u8A0A\u865F", "Signal"), tr("\u65B9\u5411", "Dir"), "x \xB5m", "y \xB5m"], a.pins.map((p) => [esc(p.name), p.dir, p.x.toFixed(1), p.y.toFixed(1)])));
       d.appendChild(div);
       return d;
     }
@@ -1672,7 +2129,7 @@
       const det = document.getElementById("synDetail");
       if (!det || !this.asic) return;
       if (this.sel === null) {
-        det.innerHTML = '<p class="hint">\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+        det.innerHTML = `<p class="hint">${tr("\u9EDE\u5143\u4EF6\u770B\u7D30\u7BC0\uFF08\u7A2E\u985E\u3001\u4F4D\u7F6E\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002", "Click a cell for details (type, position, pin signals, arrival time).")}</p>`;
         return;
       }
       const a = this.asic;
@@ -1680,14 +2137,14 @@
       const c = a.map.cells[this.sel];
       const [row, site, w, arr, crit] = a.cells[this.sel];
       const lib = a.lib.find((l) => l.name === c.t);
-      let h = `<h3><span class="sw" style="background:${stdColor(c.t)}"></span>#${this.sel} ${c.t}${crit ? "\uFF08\u95DC\u9375\u8DEF\u5F91\uFF09" : ""}</h3>`;
-      h += `<p>\u7B2C ${row} \u5217\uFF0Csite ${site}\u2013${site + w - 1}\uFF08x = ${(site * a.die.site_w).toFixed(1)} \xB5m\uFF09<br>\u8F38\u51FA\u5230\u9054\u6642\u9593 ${arr.toFixed(3)} ns</p>`;
+      let h = `<h3><span class="sw" style="background:${stdColor(c.t)}"></span>#${this.sel} ${c.t}${crit ? tr("\uFF08\u95DC\u9375\u8DEF\u5F91\uFF09", " (critical path)") : ""}</h3>`;
+      h += `<p>${tr(`\u7B2C ${row} \u5217\uFF0Csite ${site}\u2013${site + w - 1}\uFF08x = ${(site * a.die.site_w).toFixed(1)} \xB5m\uFF09<br>\u8F38\u51FA\u5230\u9054\u6642\u9593 ${arr.toFixed(3)} ns`, `Row ${row}, sites ${site}\u2013${site + w - 1} (x = ${(site * a.die.site_w).toFixed(1)} \xB5m)<br>output arrival ${arr.toFixed(3)} ns`)}</p>`;
       if (lib) h += `<p><code>${esc(lib.verilog)}</code></p>`;
       if (c.t === "SRAM") {
         const n = (k) => parseInt(c.p?.[k] ?? "0", 2);
-        h += `<p>SRAM \u5DE8\u96C6\uFF08\u8A18\u61B6\u9AD4\u7DE8\u8B6F\u5668\u7522\u751F\u7684\u786C\u5DE8\u96C6\uFF09\uFF1A${n("DEPTH")} \u5B57 \xD7 ${n("WIDTH")} bit\uFF0C\u4E00\u500B\u5BEB\u5165\u57E0\u3001\u4E00\u500B\u540C\u6B65\u8B80\u53D6\u57E0\uFF08RA \u5728 CK \u6B63\u7DE3\u53D6\u6A23\uFF0CRDATA \u4E0B\u4E00\u62CD\u6709\u6548\uFF09\uFF1B\u4F54 ${w} site \xD7 ${a.cells[this.sel][5]} \u5217\u3002</p>`;
+        h += `<p>${tr(`SRAM \u5DE8\u96C6\uFF08\u8A18\u61B6\u9AD4\u7DE8\u8B6F\u5668\u7522\u751F\u7684\u786C\u5DE8\u96C6\uFF09\uFF1A${n("DEPTH")} \u5B57 \xD7 ${n("WIDTH")} bit\uFF0C\u4E00\u500B\u5BEB\u5165\u57E0\u3001\u4E00\u500B\u540C\u6B65\u8B80\u53D6\u57E0\uFF08RA \u5728 CK \u6B63\u7DE3\u53D6\u6A23\uFF0CRDATA \u4E0B\u4E00\u62CD\u6709\u6548\uFF09\uFF1B\u4F54 ${w} site \xD7 ${a.cells[this.sel][5]} \u5217\u3002`, `SRAM macro (a hard macro from a memory compiler): ${n("DEPTH")} words \xD7 ${n("WIDTH")} bits, one write port and one synchronous read port (RA sampled on the CK rising edge, RDATA valid the next cycle); ${w} sites \xD7 ${a.cells[this.sel][5]} rows.`)}</p>`;
       }
-      h += table(["\u63A5\u8173", "\u8A0A\u865F"], c.c.map(([p, b]) => [p, esc(bitName(v.names, b))]));
+      h += table([tr("\u63A5\u8173", "Pin"), tr("\u8A0A\u865F", "Signal")], c.c.map(([p, b]) => [p, esc(bitName(v.names, b))]));
       det.innerHTML = h;
     }
     stopAnim() {
@@ -1697,7 +2154,7 @@
       }
     }
     redrawLines() {
-      $("synEdges").textContent = `\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`;
+      $("synEdges").textContent = tr(`\u2301 \u9023\u7DDA\uFF1A${this.edges ? "\u958B" : "\u95DC"}`, `\u2301 Wires: ${this.edges ? "on" : "off"}`);
       const k = this.stage;
       if (PNR.has(k)) {
         if (this.pnr) this.drawPnr(false);
@@ -1717,37 +2174,37 @@
       const r = this.res;
       const types = countTypes(v.nl).map(([t, n]) => `${shortType(t)} ${n}`).join("  ");
       const ffs = v.nl.cells.filter((c) => c.t.includes("DFF")).length;
-      const big = edgeCount(v.nl) > 6e3 ? "\uFF08\u9023\u7DDA\u592A\u591A\uFF1A\u53EA\u756B\u9078\u53D6\u5143\u4EF6\u7684\u6247\u5165/\u6247\u51FA\uFF09" : "";
+      const big = edgeCount(v.nl) > 6e3 ? tr("\uFF08\u9023\u7DDA\u592A\u591A\uFF1A\u53EA\u756B\u9078\u53D6\u5143\u4EF6\u7684\u6247\u5165/\u6247\u51FA\uFF09", "(too many wires: only the selected cell's fan-in / fan-out is drawn)") : "";
       if (key === "raw") return [
         "\u2461 Logic Netlist",
-        "\u6BCF\u500B assign / always_comb / always_ff \u7D93\u300C\u7B26\u865F\u57F7\u884C\u300D\u8B8A\u6210 2 \u8F38\u5165\u9598\u3001MUX \u8207 DFF\uFF1Aif/case \u2192 MUX\uFF08\u5E38\u6578\u6A19\u7C64\u7684 case \u2192 \u5E73\u884C one-hot\uFF09\uFF0Cfor \u5C55\u958B\uFF0Cfunction \u5167\u5D4C\uFF0Calways_ff \u2192 $_DFF_* / $_SDFF_*\u3002",
-        "\u5EFA\u9598\u6642\u5C31\u505A\u5C40\u90E8\u5E38\u6578\u647A\u758A\u8207 structural hashing\uFF1B\u9019\u88E1\u5DF2\u89E3\u6790\u4F54\u4F4D\u5225\u540D\uFF0C\u4F46\u9084\u6C92\u505A\u6574\u9AD4\u6700\u4F73\u5316\u3002",
+        tr("\u6BCF\u500B assign / always_comb / always_ff \u7D93\u300C\u7B26\u865F\u57F7\u884C\u300D\u8B8A\u6210 2 \u8F38\u5165\u9598\u3001MUX \u8207 DFF\uFF1Aif/case \u2192 MUX\uFF08\u5E38\u6578\u6A19\u7C64\u7684 case \u2192 \u5E73\u884C one-hot\uFF09\uFF0Cfor \u5C55\u958B\uFF0Cfunction \u5167\u5D4C\uFF0Calways_ff \u2192 $_DFF_* / $_SDFF_*\u3002", "Every assign / always_comb / always_ff is symbolically executed into 2-input gates, MUXes and DFFs: if/case \u2192 MUX (case with constant labels \u2192 parallel one-hot), for loops unrolled, functions inlined, always_ff \u2192 $_DFF_* / $_SDFF_*."),
+        tr("\u5EFA\u9598\u6642\u5C31\u505A\u5C40\u90E8\u5E38\u6578\u647A\u758A\u8207 structural hashing\uFF1B\u9019\u88E1\u5DF2\u89E3\u6790\u4F54\u4F4D\u5225\u540D\uFF0C\u4F46\u9084\u6C92\u505A\u6574\u9AD4\u6700\u4F73\u5316\u3002", "Local constant folding and structural hashing happen while the gates are built; placeholder aliases are resolved here, but nothing is optimized globally yet."),
         "",
-        `${v.nl.cells.length} \u500B\u5143\u4EF6\uFF1A${types}`,
-        `\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64\uFF0CDFF ${ffs} \u500B ${big}`
+        tr(`${v.nl.cells.length} \u500B\u5143\u4EF6\uFF1A${types}`, `${v.nl.cells.length} cells: ${types}`),
+        tr(`\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64\uFF0CDFF ${ffs} \u500B ${big}`, `combinational depth ${v.lev.depth}, ${ffs} DFFs ${big}`)
       ];
       if (key === "opt") {
         const d = r.raw.cells.length - r.opt.cells.length;
         const rf = r.raw.cells.filter((c) => c.t.includes("DFF")).length;
         return [
-          "\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09",
-          "\u4F9D\u62D3\u64B2\u9806\u5E8F\u91CD\u5EFA\u6574\u500B\u7DB2\u8868\uFF1A\u5E38\u6578\u50B3\u64AD\u3001structural hashing\u3001x&!x \u7B49\u5316\u7C21\u3001\u7D44\u5408\u8FF4\u8DEF\u6AA2\u67E5\u3001\u79FB\u9664\u4E0D\u5F71\u97FF\u8F38\u51FA\u7684\u908F\u8F2F\uFF1B",
-          "\u53CD\u8986\u300C\u8B49\u660E\u5E38\u6578\u7BC0\u9EDE\u300D\uFF08\u96A8\u6A5F\u6A21\u64EC\u627E\u5019\u9078\u3001\u5C0D \u226416 \u500B\u8F38\u5165\u7AAE\u8209\u8B49\u660E\uFF09\u4E26\u79FB\u9664\u5361\u5728 0 \u7684\u66AB\u5B58\u5668\u3002",
+          tr("\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09", "\u2462 Tech-indep Syn (technology-independent optimization)"),
+          tr("\u4F9D\u62D3\u64B2\u9806\u5E8F\u91CD\u5EFA\u6574\u500B\u7DB2\u8868\uFF1A\u5E38\u6578\u50B3\u64AD\u3001structural hashing\u3001x&!x \u7B49\u5316\u7C21\u3001\u7D44\u5408\u8FF4\u8DEF\u6AA2\u67E5\u3001\u79FB\u9664\u4E0D\u5F71\u97FF\u8F38\u51FA\u7684\u908F\u8F2F\uFF1B", "The whole netlist is rebuilt in topological order: constant propagation, structural hashing, simplifications such as x&!x, combinational loop check, removal of logic that does not reach an output;"),
+          tr("\u53CD\u8986\u300C\u8B49\u660E\u5E38\u6578\u7BC0\u9EDE\u300D\uFF08\u96A8\u6A5F\u6A21\u64EC\u627E\u5019\u9078\u3001\u5C0D \u226416 \u500B\u8F38\u5165\u7AAE\u8209\u8B49\u660E\uFF09\u4E26\u79FB\u9664\u5361\u5728 0 \u7684\u66AB\u5B58\u5668\u3002", "repeatedly proving constant nodes (candidates from random simulation, exhaustive proof over \u226416 inputs) and removing registers stuck at 0."),
           "",
-          `${r.raw.cells.length} \u2192 ${v.nl.cells.length} \u500B\u5143\u4EF6\uFF08\u5C11\u4E86 ${d}\uFF0C${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%\uFF09\uFF1BDFF ${rf} \u2192 ${ffs}`,
+          tr(`${r.raw.cells.length} \u2192 ${v.nl.cells.length} \u500B\u5143\u4EF6\uFF08\u5C11\u4E86 ${d}\uFF0C${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%\uFF09\uFF1BDFF ${rf} \u2192 ${ffs}`, `${r.raw.cells.length} \u2192 ${v.nl.cells.length} cells (${d} fewer, ${(100 * d / Math.max(1, r.raw.cells.length)).toFixed(1)}%); DFF ${rf} \u2192 ${ffs}`),
           `${types}`,
-          `\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`
+          tr(`\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`, `combinational depth ${v.lev.depth} ${big}`)
         ];
       }
       if (key === "amap") {
         const a = this.asic;
         const bufs = v.nl.cells.filter((c) => c.t === "BUF").length;
         return [
-          "A \u2463 Standard Cell Map\uFF08vlib\uFF1A\u5217\u9AD8 4.0 \xB5m\u3001site 0.5 \xB5m\uFF0C\u7D04 130 nm \u6162\u901F\u89D2\uFF09",
-          "\u628A\u7DB2\u8868\u5728\u591A\u6247\u51FA\u9EDE\u5207\u6210\u6A39\uFF0C\u5C0D\u6BCF\u68F5\u6A39\u505A\u52D5\u614B\u898F\u5283\u7684 tree covering\uFF08\u6700\u5C0F\u9762\u7A4D\uFF09\uFF1A\u53CD\u76F8\u5668\u4F75\u5165 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21\uFF1B\u540C\u6B65 set/reset \u8B8A\u6210 D \u524D\u7684\u908F\u8F2F\uFF0C\u975E\u540C\u6B65\u7684\u7528 DFFR / DFFS\uFF08\u4F4E\u614B\u6709\u6548\uFF0C\u5FC5\u8981\u6642\u52A0 INV\uFF09\uFF1B\u6247\u51FA > 12 \u7684\u8A0A\u865F\u63D2\u5165 BUF \u6A39\uFF1B\u540C\u6B65\u8B80\u53D6\u7684\u8A18\u61B6\u9AD4\u8B8A\u6210 SRAM \u5DE8\u96C6\uFF08\u6BCF\u500B\u8B80\u53D6\u57E0\u4E00\u500B\uFF09\u3002",
+          tr("A \u2463 Standard Cell Map\uFF08vlib\uFF1A\u5217\u9AD8 4.0 \xB5m\u3001site 0.5 \xB5m\uFF0C\u7D04 130 nm \u6162\u901F\u89D2\uFF09", "A \u2463 Standard Cell Map (vlib: row height 4.0 \xB5m, site 0.5 \xB5m, about a 130 nm slow corner)"),
+          tr("\u628A\u7DB2\u8868\u5728\u591A\u6247\u51FA\u9EDE\u5207\u6210\u6A39\uFF0C\u5C0D\u6BCF\u68F5\u6A39\u505A\u52D5\u614B\u898F\u5283\u7684 tree covering\uFF08\u6700\u5C0F\u9762\u7A4D\uFF09\uFF1A\u53CD\u76F8\u5668\u4F75\u5165 NAND2 / NOR2 / XNOR2 / AOI21 / OAI21\uFF1B\u540C\u6B65 set/reset \u8B8A\u6210 D \u524D\u7684\u908F\u8F2F\uFF0C\u975E\u540C\u6B65\u7684\u7528 DFFR / DFFS\uFF08\u4F4E\u614B\u6709\u6548\uFF0C\u5FC5\u8981\u6642\u52A0 INV\uFF09\uFF1B\u6247\u51FA > 12 \u7684\u8A0A\u865F\u63D2\u5165 BUF \u6A39\uFF1B\u540C\u6B65\u8B80\u53D6\u7684\u8A18\u61B6\u9AD4\u8B8A\u6210 SRAM \u5DE8\u96C6\uFF08\u6BCF\u500B\u8B80\u53D6\u57E0\u4E00\u500B\uFF09\u3002", "The netlist is cut into trees at multi-fanout points and each tree is covered by dynamic programming (minimum area): inverters merge into NAND2 / NOR2 / XNOR2 / AOI21 / OAI21; synchronous set/reset becomes logic before D, asynchronous ones use DFFR / DFFS (active low, INV added when needed); signals with fanout > 12 get BUF trees; memories with synchronous reads become SRAM macros (one per read port)."),
           "",
           `${types}`,
-          `\u5143\u4EF6\u9762\u7A4D ${fmtArea(a.area)}\uFF0CBUF ${bufs} \u500B\uFF0C\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`
+          tr(`\u5143\u4EF6\u9762\u7A4D ${fmtArea(a.area)}\uFF0CBUF ${bufs} \u500B\uFF0C\u7D44\u5408\u908F\u8F2F\u6DF1\u5EA6 ${v.lev.depth} \u5C64 ${big}`, `cell area ${fmtArea(a.area)}, ${bufs} BUFs, combinational depth ${v.lev.depth} ${big}`)
         ];
       }
       const luts = v.nl.cells.filter((c) => c.t === "SB_LUT4");
@@ -1755,11 +2212,11 @@
       luts.forEach((c) => hist[lutInputs(c)]++);
       return [
         "\u2463 LUT4 Techmap\uFF08iCE40\uFF09",
-        "\u5168\u52A0\u5668\u9032\u4F4D (a&b)|((a^b)&c) \u5C0D\u5230\u786C\u9AD4\u9032\u4F4D\u93C8 SB_CARRY\uFF1B\u5176\u9918\u4EE5 cut-based \u65B9\u5F0F\u8986\u84CB\u6210 4 \u8F38\u5165 LUT\uFF08\u5148\u6C42\u6700\u6DFA\u3001\u518D\u770B area flow\uFF09\uFF1BDFF \u2192 SB_DFF[N][S]{R,S}\u3002",
+        tr("\u5168\u52A0\u5668\u9032\u4F4D (a&b)|((a^b)&c) \u5C0D\u5230\u786C\u9AD4\u9032\u4F4D\u93C8 SB_CARRY\uFF1B\u5176\u9918\u4EE5 cut-based \u65B9\u5F0F\u8986\u84CB\u6210 4 \u8F38\u5165 LUT\uFF08\u5148\u6C42\u6700\u6DFA\u3001\u518D\u770B area flow\uFF09\uFF1BDFF \u2192 SB_DFF[N][S]{R,S}\u3002", "Full-adder carries (a&b)|((a^b)&c) map to the hardware carry chain SB_CARRY; the rest is covered by 4-input LUTs, cut-based (depth first, then area flow); DFF \u2192 SB_DFF[N][S]{R,S}."),
         "",
         `${types}`,
-        `LUT \u8F38\u5165\u6578\u5206\u5E03\uFF1A${hist.map((n, i) => `${i} \u5165 ${n}`).filter((_, i) => i > 0).join("  ")}`,
-        `LUT \u5C64\u6578 ${v.lev.depth} ${big}`
+        `${tr("LUT \u8F38\u5165\u6578\u5206\u5E03\uFF1A", "LUT inputs: ")}${hist.map((n, i) => tr(`${i} \u5165 ${n}`, `${i}-in ${n}`)).filter((_, i) => i > 0).join("  ")}`,
+        `${tr("LUT \u5C64\u6578", "LUT levels")} ${v.lev.depth} ${big}`
       ];
     }
     info(lines) {
@@ -1773,13 +2230,13 @@
     rtlSide() {
       const r = this.res;
       const d = document.createElement("div");
-      d.innerHTML = `<h3>\u57E0</h3>` + table(["\u540D\u7A31", "\u65B9\u5411", "\u5BEC\u5EA6"], r.ports.map((p) => [esc(p.name), p.dir === "in" ? "input" : "output", String(p.width)])) + `<h3>\u5BE6\u4F8B</h3>` + table(["\u8DEF\u5F91", "\u6A21\u7D44"], r.hier.map((h) => [esc(h.path || "(top)"), esc(h.module)])) + `<h3>\u8A0A\u865F\uFF08${r.signals.length}\uFF09</h3>` + table(["\u540D\u7A31", "\u5BEC\u5EA6"], r.signals.slice(0, 400).map((s) => [esc(s.name), String(s.width)]));
+      d.innerHTML = `<h3>${tr("\u57E0", "Ports")}</h3>` + table([tr("\u540D\u7A31", "Name"), tr("\u65B9\u5411", "Dir"), tr("\u5BEC\u5EA6", "Width")], r.ports.map((p) => [esc(p.name), p.dir === "in" ? "input" : "output", String(p.width)])) + `<h3>${tr("\u5BE6\u4F8B", "Instances")}</h3>` + table([tr("\u8DEF\u5F91", "Path"), tr("\u6A21\u7D44", "Module")], r.hier.map((h) => [esc(h.path || "(top)"), esc(h.module)])) + `<h3>${tr("\u8A0A\u865F", "Signals")}\uFF08${r.signals.length}\uFF09</h3>` + table([tr("\u540D\u7A31", "Name"), tr("\u5BEC\u5EA6", "Width")], r.signals.slice(0, 400).map((s) => [esc(s.name), String(s.width)]));
       return d;
     }
     netSide(v) {
       const d = document.createElement("div");
       const types = countTypes(v.nl);
-      d.innerHTML = `<h3>\u5143\u4EF6\u7A2E\u985E</h3>` + table(["\u7A2E\u985E", "\u6578\u91CF"], types.map(([t, n2]) => [`<span class="sw" style="background:${cellColor(t, 4)}"></span>${shortType(t)}`, String(n2)])) + `<h3>\u5143\u4EF6\u6E05\u55AE\uFF08\u9EDE\u9078\uFF09</h3>`;
+      d.innerHTML = `<h3>${tr("\u5143\u4EF6\u7A2E\u985E", "Cell types")}</h3>` + table([tr("\u7A2E\u985E", "Type"), tr("\u6578\u91CF", "Count")], types.map(([t, n2]) => [`<span class="sw" style="background:${cellColor(t, 4)}"></span>${shortType(t)}`, String(n2)])) + `<h3>${tr("\u5143\u4EF6\u6E05\u55AE\uFF08\u9EDE\u9078\uFF09", "Cells (click one)")}</h3>`;
       const list = document.createElement("div");
       list.className = "clist";
       const n = Math.min(v.nl.cells.length, 500);
@@ -1793,21 +2250,21 @@
       if (v.nl.cells.length > n) {
         const m = document.createElement("div");
         m.className = "more";
-        m.textContent = `\u2026 \u5171 ${v.nl.cells.length} \u500B\uFF08\u9EDE\u5716\u4E0A\u7684\u65B9\u584A\u770B\u5176\u4ED6\u5143\u4EF6\uFF09`;
+        m.textContent = tr(`\u2026 \u5171 ${v.nl.cells.length} \u500B\uFF08\u9EDE\u5716\u4E0A\u7684\u65B9\u584A\u770B\u5176\u4ED6\u5143\u4EF6\uFF09`, `\u2026 ${v.nl.cells.length} in all (click a box in the drawing for the others)`);
         list.appendChild(m);
       }
       d.appendChild(list);
       if (v.nl === this.asic?.map) {
         const lib = document.createElement("div");
-        lib.innerHTML = `<h3>vlib \u5143\u4EF6\u5EAB</h3>` + table(
-          ["\u5143\u4EF6", "\u5BEC", "\u9762\u7A4D \xB5m\xB2", "\u5EF6\u9072 ns", "+\u6BCF\u6247\u51FA", "\u529F\u80FD"],
+        lib.innerHTML = `<h3>${tr("vlib \u5143\u4EF6\u5EAB", "vlib cell library")}</h3>` + table(
+          [tr("\u5143\u4EF6", "Cell"), tr("\u5BEC", "Width"), tr("\u9762\u7A4D \xB5m\xB2", "Area \xB5m\xB2"), tr("\u5EF6\u9072 ns", "Delay ns"), tr("+\u6BCF\u6247\u51FA", "+per fanout"), tr("\u529F\u80FD", "Function")],
           this.asic.lib.map((c) => [`<span class="sw" style="background:${stdColor(c.name)}"></span>${c.name}`, String(c.width), c.area.toFixed(0), c.delay.toFixed(3), c.load.toFixed(3), esc(c.verilog.replace(/^assign Y = |;$/g, ""))])
         );
         d.appendChild(lib);
       }
       const det = document.createElement("div");
       det.id = "synDetail";
-      det.innerHTML = '<p class="hint">\u9EDE\u5716\u4E0A\u7684\u5143\u4EF6\u770B\u7D30\u7BC0\uFF1A\u63A5\u8173\u3001\u6240\u9023\u8A0A\u865F\u3001LUT \u771F\u503C\u8868\u3002</p>';
+      det.innerHTML = `<p class="hint">${tr("\u9EDE\u5716\u4E0A\u7684\u5143\u4EF6\u770B\u7D30\u7BC0\uFF1A\u63A5\u8173\u3001\u6240\u9023\u8A0A\u865F\u3001LUT \u771F\u503C\u8868\u3002", "Click a cell in the drawing for details: pins, connected signals, LUT truth table.")}</p>`;
       d.prepend(det);
       return d;
     }
@@ -1844,24 +2301,24 @@
       if (!det || !this.pnr) return;
       const r = this.pnr.rams[k];
       let h = `<h3><span class="sw" style="background:${RAM_COLOR}"></span>block RAM #${k}\u3000tile (${r.x},${r.y})\u2013(${r.x},${r.y + 1})</h3>`;
-      h += `<p>SB_RAM40_4K\uFF084 Kbit\uFF09\uFF0C\u8B80 ${r.read}\u3001\u5BEB ${r.write}\uFF1B\u540C\u6B65\u8B80\u53D6\uFF1ARADDR \u5728 RCLK \u6B63\u7DE3\u53D6\u6A23\uFF0CRDATA \u4E0B\u4E00\u62CD\u6709\u6548\u3002</p>`;
-      h += table(["\u63A5\u8173", "\u8A0A\u865F"], [...r.ins.map(([p, n]) => [p, esc(n)]), ...r.outs.map(([p, n]) => [p + " \u2192", esc(n)])]);
+      h += `<p>${tr(`SB_RAM40_4K\uFF084 Kbit\uFF09\uFF0C\u8B80 ${r.read}\u3001\u5BEB ${r.write}\uFF1B\u540C\u6B65\u8B80\u53D6\uFF1ARADDR \u5728 RCLK \u6B63\u7DE3\u53D6\u6A23\uFF0CRDATA \u4E0B\u4E00\u62CD\u6709\u6548\u3002`, `SB_RAM40_4K (4 Kbit), read ${r.read}, write ${r.write}; synchronous read: RADDR sampled on the RCLK rising edge, RDATA valid the next cycle.`)}</p>`;
+      h += table([tr("\u63A5\u8173", "Pin"), tr("\u8A0A\u865F", "Signal")], [...r.ins.map(([p, n]) => [p, esc(n)]), ...r.outs.map(([p, n]) => [p + " \u2192", esc(n)])]);
       det.innerHTML = h;
     }
     lcDetail() {
       const det = document.getElementById("synDetail");
       if (!det || !this.pnr) return;
       if (this.sel === null) {
-        det.innerHTML = '<p class="hint">\u9EDE LC \u770B\u7D30\u7BC0\uFF08LUT \u771F\u503C\u8868\u3001DFF\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002</p>';
+        det.innerHTML = `<p class="hint">${tr("\u9EDE LC \u770B\u7D30\u7BC0\uFF08LUT \u771F\u503C\u8868\u3001DFF\u3001\u63A5\u8173\u8A0A\u865F\u3001\u5230\u9054\u6642\u9593\uFF09\u3002", "Click an LC for details (LUT truth table, DFF, pin signals, arrival time).")}</p>`;
         return;
       }
       const lc = this.pnr.lcs[this.sel];
       const init = parseInt(lc.init, 16).toString(2).padStart(16, "0");
       let h = `<h3>LC #${this.sel}\u3000tile (${lc.x},${lc.y}) LC ${lc.z}</h3>`;
-      h += `<p><span class="sw" style="background:${lcColor(lc)}"></span>${lc.carry ? "CARRY " : ""}${lc.ff ? `DFF${lc.ff.neg ? "\uFF08\u8CA0\u7DE3\uFF09" : ""}${lc.ff.sr ? (lc.ff.async ? "\uFF08\u975E\u540C\u6B65" : "\uFF08\u540C\u6B65") + (lc.ff.set ? " set\uFF09" : " reset\uFF09") : ""} ` : ""}LUT 16'h${lc.init}${lc.in3c ? "\uFF08in3 = \u9032\u4F4D\u93C8\uFF09" : ""}</p>`;
-      h += `<p>\u8F38\u51FA\u5230\u9054\u6642\u9593 ${lc.arr.toFixed(2)} ns</p>`;
-      h += table(["\u63A5\u8173", "\u8A0A\u865F"], [...lc.ins.map((n, k) => [`in${k}`, esc(k === 3 && lc.in3c ? "(carry in)" : n || "\u2014")]), ["out", esc(lc.out || "\u2014")]]);
-      h += `<h3>LUT \u771F\u503C\u8868</h3>` + table(["I3 I2 I1 I0", "O"], lutBits(init).map((o, k) => [`${k >> 3 & 1}  ${k >> 2 & 1}  ${k >> 1 & 1}  ${k & 1}`, String(o)]));
+      h += `<p><span class="sw" style="background:${lcColor(lc)}"></span>${lc.carry ? "CARRY " : ""}${lc.ff ? `DFF${lc.ff.neg ? tr("\uFF08\u8CA0\u7DE3\uFF09", " (falling edge)") : ""}${lc.ff.sr ? (lc.ff.async ? tr("\uFF08\u975E\u540C\u6B65", " (async") : tr("\uFF08\u540C\u6B65", " (sync")) + (lc.ff.set ? tr(" set\uFF09", " set)") : tr(" reset\uFF09", " reset)")) : ""} ` : ""}LUT 16'h${lc.init}${lc.in3c ? tr("\uFF08in3 = \u9032\u4F4D\u93C8\uFF09", " (in3 = carry chain)") : ""}</p>`;
+      h += `<p>${tr("\u8F38\u51FA\u5230\u9054\u6642\u9593", "Output arrival")} ${lc.arr.toFixed(2)} ns</p>`;
+      h += table([tr("\u63A5\u8173", "Pin"), tr("\u8A0A\u865F", "Signal")], [...lc.ins.map((n, k) => [`in${k}`, esc(k === 3 && lc.in3c ? "(carry in)" : n || "\u2014")]), ["out", esc(lc.out || "\u2014")]]);
+      h += `<h3>${tr("LUT \u771F\u503C\u8868", "LUT truth table")}</h3>` + table(["I3 I2 I1 I0", "O"], lutBits(init).map((o, k) => [`${k >> 3 & 1}  ${k >> 2 & 1}  ${k >> 1 & 1}  ${k & 1}`, String(o)]));
       det.innerHTML = h;
     }
     select(i) {
@@ -1871,14 +2328,14 @@
       const k = this.stage;
       if (!det || !isNet(k)) return;
       if (i === null) {
-        det.innerHTML = '<p class="hint">\u9EDE\u5716\u4E0A\u7684\u5143\u4EF6\u770B\u7D30\u7BC0\uFF1A\u63A5\u8173\u3001\u6240\u9023\u8A0A\u865F\u3001LUT \u771F\u503C\u8868\u3002</p>';
+        det.innerHTML = `<p class="hint">${tr("\u9EDE\u5716\u4E0A\u7684\u5143\u4EF6\u770B\u7D30\u7BC0\uFF1A\u63A5\u8173\u3001\u6240\u9023\u8A0A\u865F\u3001LUT \u771F\u503C\u8868\u3002", "Click a cell in the drawing for details: pins, connected signals, LUT truth table.")}</p>`;
         return;
       }
       const v = this.netView(k);
       const c = v.nl.cells[i];
-      let h = `<h3>#${i} ${c.t}</h3><p>\u5C64\u7D1A L${v.lev.level[i]}</p>`;
-      h += table(["\u63A5\u8173", "\u8A0A\u865F", "\u4F86\u6E90"], c.c.map(([p, b]) => {
-        const src = typeof b === "number" && !isOut(p) ? v.lev.driver.has(b) ? `#${v.lev.driver.get(b)} ${shortType(v.nl.cells[v.lev.driver.get(b)].t)}` : "\u8F38\u5165\u57E0" : isOut(p) ? `\u2192 ${typeof b === "number" ? v.lev.users.get(b)?.length ?? 0 : 0} \u500B\u8CA0\u8F09` : "\u5E38\u6578";
+      let h = `<h3>#${i} ${c.t}</h3><p>${tr("\u5C64\u7D1A", "Level")} L${v.lev.level[i]}</p>`;
+      h += table([tr("\u63A5\u8173", "Pin"), tr("\u8A0A\u865F", "Signal"), tr("\u4F86\u6E90", "Source")], c.c.map(([p, b]) => {
+        const src = typeof b === "number" && !isOut(p) ? v.lev.driver.has(b) ? `#${v.lev.driver.get(b)} ${shortType(v.nl.cells[v.lev.driver.get(b)].t)}` : tr("\u8F38\u5165\u57E0", "input port") : isOut(p) ? tr(`\u2192 ${typeof b === "number" ? v.lev.users.get(b)?.length ?? 0 : 0} \u500B\u8CA0\u8F09`, `\u2192 ${typeof b === "number" ? v.lev.users.get(b)?.length ?? 0 : 0} loads`) : tr("\u5E38\u6578", "constant");
         return [p, esc(bitName(v.names, b)), src];
       }));
       if (c.t === "SB_LUT4" && c.p?.LUT_INIT) {
@@ -1890,6 +2347,13 @@
       det.scrollIntoView({ block: "nearest" });
     }
   };
+  function stepText(w) {
+    let m = /^繞線 (.*)（(\d+) 段）$/.exec(w);
+    if (m) return tr(w, `route ${m[1]} (${m[2]} segments)`);
+    m = /^(輸出|輸入)腳 (.*)$/.exec(w);
+    if (m) return tr(w, `${m[1] === "\u8F38\u51FA" ? "output" : "input"} pin ${m[2]}`);
+    return w;
+  }
   function esc(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   }
@@ -2054,7 +2518,7 @@
       g.textBaseline = "middle";
       if (!this.vcd) {
         g.fillStyle = "#9fb2c8";
-        g.fillText("\u6309\u300C\u25B6 \u6A21\u64EC\u300D\u5F8C\u986F\u793A\u6CE2\u5F62", 12, 20);
+        g.fillText(tr("\u6309\u300C\u25B6 \u6A21\u64EC\u300D\u5F8C\u986F\u793A\u6CE2\u5F62", "Run a simulation (\u25B6) to see the waveform"), 12, 20);
         return;
       }
       const W = r.width - NAME_W;

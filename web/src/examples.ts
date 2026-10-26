@@ -1,6 +1,7 @@
 // Example projects; the sources are generated into dist/examples.js by build.mjs.
 
 import type { VFile } from './api';
+import { tr } from './i18n';
 
 export interface Example {
   id: string;
@@ -13,6 +14,10 @@ export interface Example {
   pcf?: string;
   /** shown under the title */
   note?: string;
+  /** English title and note */
+  title_en?: string;
+  note_en?: string;
+  group_en?: string;
 }
 
 declare const VERYL_EXAMPLES: Example[];
@@ -20,3 +25,7 @@ declare const VERYL_EXAMPLES: Example[];
 export function examples(): Example[] {
   return typeof VERYL_EXAMPLES === 'undefined' ? [] : VERYL_EXAMPLES;
 }
+
+export function exTitle(e: Example): string { return tr(e.title, e.title_en ?? e.title); }
+export function exNote(e: Example): string { return e.note ? tr(e.note, e.note_en ?? e.note) : ''; }
+export function exGroup(e: Example): string { return tr(e.group, e.group_en ?? e.group); }

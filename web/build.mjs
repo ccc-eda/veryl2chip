@@ -30,6 +30,29 @@ console.log(`wasm.js      ${(wasm.length / 1e6).toFixed(1)} MB wasm`);
 
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
+// English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
+const GROUP_EN = { 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 其他: 'Other' };
+const EN = {
+  adder: { title_en: 'Adder' },
+  max3: { title_en: 'Max3 function' },
+  alu_pkg: { title_en: 'AluUnit package + enum' },
+  gen_rev: { title_en: 'BitRev / GrayConv generate' },
+  seq101: { title_en: 'Seq101 state machine' },
+  pkt_reg: { title_en: 'PktReg struct register' },
+  ram: { title_en: 'Ram 16×8' },
+  sync_ram: { title_en: 'SyncRam synchronous-read RAM → block RAM' },
+  fifo: { title_en: 'FIFO 256×8 (block RAM)', note_en: 'Synchronous-read memory → one SB_RAM40_4K / one SRAM macro' },
+  counter: { title_en: 'Counter (veryl-sim example)' },
+  features: { title_en: 'features: shifts / functions / ranges / counters' },
+  bram: { title_en: 'BramMix: 4 block RAMs + logic' },
+  lang: { title_en: 'lang: division, interface, 200 bits, two clocks' },
+  acc: { title_en: 'AccTest 32-bit carry chain' },
+  uart: { title_en: 'UART transmitter / receiver (loopback test)', note_en: 'UartTx → UartRx loopback, 8N1, 8 clocks per bit' },
+  vga: { title_en: 'VGA 640×480 timing + color bars', note_en: 'The test uses a small 24×12 frame; synthesis uses the default 800×525' },
+  rv32i: { title_en: 'RV32I single-cycle CPU', note_en: 'TestRiscvCore runs examples/sw/rv32i_test.S (41 results, expected values cross-checked with spike)' },
+  soc: { title_en: 'RISC-V SoC (FPGA)', note_en: 'Fibonacci(10) = 55 → LEDs; iCEBreaker pins' },
+  alu_fail: { title_en: 'Alu (with an assertion that fails on purpose)', note_en: 'What a failing assertion looks like: tb_alu has a "should fail on purpose" assertion' },
+};
 const EX = [
   { id: 'adder', group: '基礎', title: 'Adder 加法器', files: ['examples/src/adder.veryl'], synth: 'Adder' },
   { id: 'max3', group: '基礎', title: 'Max3 function', files: ['examples/src/max3.veryl'], synth: 'Max3' },
@@ -53,7 +76,7 @@ const EX = [
     synth: 'RiscvSoc', pcf: 'veryl-eda/examples/icebreaker.pcf', note: 'Fibonacci(10) = 55 → LED；iCEBreaker 腳位' },
   { id: 'alu_fail', group: '其他', title: 'Alu（含一個故意失敗的斷言）', files: ['veryl-sim/examples/alu.veryl'], synth: 'Alu',
     note: '示範斷言失敗的樣子：tb_alu 有一個 "should fail on purpose" 的斷言' },
-].map((e) => ({ ...e, files: e.files.map(rd), pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined }));
+].map((e) => ({ ...e, ...EN[e.id], group_en: GROUP_EN[e.group], files: e.files.map(rd), pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined }));
 fs.writeFileSync(path.join(dist, 'examples.js'), `var VERYL_EXAMPLES = ${JSON.stringify(EX)};\n`);
 console.log(`examples.js  ${EX.length} projects`);
 

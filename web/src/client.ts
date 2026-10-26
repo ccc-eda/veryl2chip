@@ -1,6 +1,7 @@
 // Asynchronous access to the core: in a Web Worker when the browser allows
 // it (blob worker), otherwise directly on the main thread.
 
+import { tr } from './i18n';
 import { fromBase64, gunzip, Veryl } from './api';
 
 declare const WORKER_SRC: string;
@@ -23,7 +24,7 @@ export async function startCore(wasm: Uint8Array): Promise<Core> {
 }
 
 function chipdbGz(): Uint8Array {
-  if (typeof VERYL_CHIPDB_GZ_B64 === 'undefined') throw new Error('chipdb.js (晶片資料庫) 沒有載入');
+  if (typeof VERYL_CHIPDB_GZ_B64 === 'undefined') throw new Error(tr('chipdb.js（晶片資料庫）沒有載入', 'chipdb.js (chip database) is not loaded'));
   return fromBase64(VERYL_CHIPDB_GZ_B64);
 }
 
@@ -43,7 +44,7 @@ async function workerCore(mod: WebAssembly.Module): Promise<Core> {
     pending.set(id, { ok, fail });
     w.postMessage({ ...msg, id }, transfer);
   });
-  w.onerror = () => { for (const p of pending.values()) p.fail(new Error('worker 錯誤')); pending.clear(); };
+  w.onerror = () => { for (const p of pending.values()) p.fail(new Error(tr('worker 錯誤', 'worker error'))); pending.clear(); };
   // the worker must answer the init message, or we fall back
   await Promise.race([send({ type: 'init', module: mod }), new Promise((_, f) => setTimeout(() => f(new Error('worker timeout')), 5000))]);
   let db: Promise<void> | null = null;

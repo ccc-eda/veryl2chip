@@ -1,4 +1,6 @@
 # veryl2chip
+**English** | [繁體中文](README.tw.md) | [简体中文](README.cn.md)
+
 An EDA for Veryl HDL: simulation, logic synthesis, an FPGA flow (iCE40UP5K, down to a
 bitstream) and an ASIC flow (standard cells, placement, routing, timing), all written in Rust.
 
@@ -27,6 +29,8 @@ Open `web/dist/index.html` in a browser. It needs no server and no install, and 
     ⑧ Timing (STA) → ⑨ Power + IR Drop. Downloads: standard-cell Verilog and DEF.
   - ⇄ FPGA vs ASIC: both placements side by side and a table (cells, area, wiring, Fmax, energy, power).
 
+(The demo page's interface is in Traditional Chinese; the IDE below also has Simplified Chinese and English.)
+
 The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&target=asic`.
 
 ### IDE
@@ -39,6 +43,7 @@ The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&targe
 - ⚙ the flow as an editor tab: common ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦ or
   ASIC ④–⑨, and FPGA vs ASIC
 - bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)
+- interface in Traditional Chinese, Simplified Chinese or English (menu in the title bar; the browser's language by default)
 
 `ide.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests.
 
@@ -51,6 +56,6 @@ npm run build
 npm test
 ```
 
-`npm run build` rebuilds `web/dist`. `npm test` runs every example through the built `dist/`: simulation, synthesis, FPGA P&R (`.asc` equals the CLI's, `.bin` equals icepack's) and the ASIC flow (results equal the CLI's), gate-level simulation of every example, and a project `.zip` unpacked and checked with `veryl test`.
+`npm run build` rebuilds `web/dist`. `npm test` runs every example through the built `dist/`: simulation, synthesis, FPGA P&R (`.asc` equals the CLI's, `.bin` equals icepack's) and the ASIC flow (results equal the CLI's), gate-level simulation of every example, and a project `.zip` unpacked and checked with `veryl test`, and the interface translations.
 
 See [AGENTS.md](AGENTS.md) for commands and architecture, and the READMEs in each crate (Traditional Chinese) for details.

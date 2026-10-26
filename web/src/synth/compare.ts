@@ -2,6 +2,7 @@
 // standard-cell die (scaled to the same height), and a table of the two
 // implementations of the same design.
 
+import { tr } from '../i18n';
 import type { Scene } from '../view/canvas';
 import { AsicResult, dieScene } from './asic';
 import { deviceScene, PnrResult } from './device';
@@ -43,7 +44,7 @@ export function compareScene(p: PnrResult, a: AsicResult): Scene {
     under: [...(left.under ?? []), ...(right.under ?? [])],
     texts: [...left.texts, ...right.texts,
       { x: bf.x0, y: ty, s: `FPGA：iCE40UP5K（${p.lcs.length} LC / 5280）`, color: '#7ec3ff', size, align: 'left' },
-      { x: bf.x1 + gap, y: ty, s: `ASIC：vlib 標準元件（晶粒 ${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)} µm，放大到同高）`, color: '#e0b87e', size, align: 'left' }],
+      { x: bf.x1 + gap, y: ty, s: tr(`ASIC：vlib 標準元件（晶粒 ${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)} µm，放大到同高）`, `ASIC: vlib standard cells (die ${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)} µm, scaled to the same height)`), color: '#e0b87e', size, align: 'left' }],
     bg: [...(left.bg ?? []), ...(right.bg ?? [])],
   };
 }
@@ -61,14 +62,14 @@ export function compareRows(p: PnrResult, a: AsicResult): string[][] {
   const f = Math.min(p.timing.fmax, a.timing.fmax);
   const pF = eF * f / 1000 + p.timing.power.static, pA = eA * f / 1000 + a.power.leakage;
   return [
-    ['實作', 'iCE40UP5K LUT4 FPGA（可重新燒錄）', 'vlib 標準元件（約 130 nm，需流片）'],
-    ['邏輯單元', `${p.lcs.length} LC（${(100 * p.lcs.length / 5280).toFixed(1)}%），DFF ${fc('ff')}，CARRY ${fc('carry')}`, `${a.map.cells.length} 個元件，DFF ${ffA}`],
-    ...(p.rams.length || srams ? [['記憶體', `${p.rams.length} 個 SB_RAM40_4K`, `${srams} 個 SRAM 巨集`]] : []),
-    ['面積', '固定晶片（5280 LC、30 BRAM）', `元件 ${f1(a.area)} µm²，晶粒 ${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)} µm（利用率 ${(a.die.util * 100).toFixed(0)}%）`],
-    ['繞線', `${p.pips} 個 pip（可程式開關）`, `${f2(a.detail.wirelength / 1000 || a.route.wirelength / 1000)} mm 金屬線，${a.detail.vias || a.route.vias} 個 via`],
-    ['關鍵路徑', `${f2(p.timing.period)} ns`, `${f2(a.timing.period)} ns`],
+    [tr('實作', 'Implementation'), tr('iCE40UP5K LUT4 FPGA（可重新燒錄）', 'iCE40UP5K LUT4 FPGA (reprogrammable)'), tr('vlib 標準元件（約 130 nm，需流片）', 'vlib standard cells (about 130 nm, needs a tape-out)')],
+    [tr('邏輯單元', 'Logic'), tr(`${p.lcs.length} LC（${(100 * p.lcs.length / 5280).toFixed(1)}%），DFF ${fc('ff')}，CARRY ${fc('carry')}`, `${p.lcs.length} LCs (${(100 * p.lcs.length / 5280).toFixed(1)}%), DFF ${fc('ff')}, CARRY ${fc('carry')}`), tr(`${a.map.cells.length} 個元件，DFF ${ffA}`, `${a.map.cells.length} cells, DFF ${ffA}`)],
+    ...(p.rams.length || srams ? [[tr('記憶體', 'Memory'), tr(`${p.rams.length} 個 SB_RAM40_4K`, `${p.rams.length} SB_RAM40_4K`), tr(`${srams} 個 SRAM 巨集`, `${srams} SRAM macros`)]] : []),
+    [tr('面積', 'Area'), tr('固定晶片（5280 LC、30 BRAM）', 'a fixed chip (5280 LCs, 30 BRAMs)'), tr(`元件 ${f1(a.area)} µm²，晶粒 ${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)} µm（利用率 ${(a.die.util * 100).toFixed(0)}%）`, `cells ${f1(a.area)} µm², die ${a.die.w.toFixed(0)}×${a.die.h.toFixed(0)} µm (${(a.die.util * 100).toFixed(0)}% utilization)`)],
+    [tr('繞線', 'Wiring'), tr(`${p.pips} 個 pip（可程式開關）`, `${p.pips} pips (programmable switches)`), tr(`${f2(a.detail.wirelength / 1000 || a.route.wirelength / 1000)} mm 金屬線，${a.detail.vias || a.route.vias} 個 via`, `${f2(a.detail.wirelength / 1000 || a.route.wirelength / 1000)} mm of metal, ${a.detail.vias || a.route.vias} vias`)],
+    [tr('關鍵路徑', 'Critical path'), `${f2(p.timing.period)} ns`, `${f2(a.timing.period)} ns`],
     ['F<sub>max</sub>', `${f1(p.timing.fmax)} MHz`, `${f1(a.timing.fmax)} MHz（×${(a.timing.fmax / p.timing.fmax).toFixed(1)}）`],
-    ['每週期能量', `${f1(eF)} pJ`, `${f2(eA)} pJ（÷${(eF / Math.max(1e-9, eA)).toFixed(0)}）`],
-    [`功耗 @ ${f1(f)} MHz`, `${pF.toFixed(3)} mW（靜態 ${p.timing.power.static.toFixed(3)}）`, `${pA.toFixed(4)} mW（漏電 ${a.power.leakage.toFixed(4)}）`],
+    [tr('每週期能量', 'Energy per cycle'), `${f1(eF)} pJ`, `${f2(eA)} pJ（÷${(eF / Math.max(1e-9, eA)).toFixed(0)}）`],
+    [tr(`功耗 @ ${f1(f)} MHz`, `Power @ ${f1(f)} MHz`), tr(`${pF.toFixed(3)} mW（靜態 ${p.timing.power.static.toFixed(3)}）`, `${pF.toFixed(3)} mW (static ${p.timing.power.static.toFixed(3)})`), tr(`${pA.toFixed(4)} mW（漏電 ${a.power.leakage.toFixed(4)}）`, `${pA.toFixed(4)} mW (leakage ${a.power.leakage.toFixed(4)})`)],
   ];
 }
