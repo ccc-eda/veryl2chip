@@ -116,6 +116,65 @@ impl<'c> Asc<'c> {
     }
 }
 
+/// where a memory block ended up: `bram::SLOT` (NAME:BLOCK), tile and mode
+#[derive(Clone, Debug, PartialEq)]
+pub struct RamPos { pub slot: String, pub x: i32, pub y: i32, pub mode: usize }
+
+impl Output {
+    /// the placed block RAMs that hold (blocks of) named memories
+    pub fn ram_map(&self) -> Vec<RamPos> {
+        self.packed.rams.iter().enumerate().filter_map(|(r, ram)| {
+            let (x, y) = self.placement.ram[r];
+            Some(RamPos { slot: ram.slot.clone()?, x, y, mode: ram.read_mode as usize })
+        }).collect()
+    }
+}
+
+/// the `.ram_data` lines of a block (16 rows of 64 hex digits)
+fn ram_lines(init: &[String]) -> Vec<String> {
+    init.iter().map(|bits| {
+        bits.as_bytes().chunks(4).map(|c| { let v = c.iter().fold(0u32, |a, b| a * 2 + (*b == b'1') as u32); std::char::from_digit(v, 16).unwrap() }).collect::<String>()
+    }).collect()
+}
+
+/// Put new contents into memory `name` of a placed-and-routed design without
+/// placing and routing it again: rewrite the `.ram_data` of its blocks in the .asc
+/// (`map` from `Output::ram_map`). Returns the new .asc and the number of blocks.
+pub fn patch_ram(asc: &str, map: &[RamPos], name: &str, words: &[u64]) -> R<(String, usize)> {
+    let mut blocks: HashMap<(i32, i32), Vec<String>> = HashMap::new();
+    for r in map {
+        let Some((m, k)) = r.slot.rsplit_once(':') else { continue };
+        if m != name { continue; }
+        let k: usize = k.parse().map_err(|_| format!("bad memory slot {}", r.slot))?;
+        blocks.insert((r.x, r.y), ram_lines(&crate::bram::init_strings(r.mode, k, words)));
+    }
+    if blocks.is_empty() { return Err(format!("no block RAM holds memory {}", name)); }
+    let n = blocks.len();
+    let mut out = String::with_capacity(asc.len());
+    let mut lines = asc.lines().peekable();
+    while let Some(l) = lines.next() {
+        out += l;
+        out.push('\n');
+        let mut p = l.split_whitespace();
+        if p.next() == Some(".ram_data") {
+            let xy = (p.next().and_then(|v| v.parse().ok()), p.next().and_then(|v| v.parse().ok()));
+            if let (Some(x), Some(y)) = xy {
+                if let Some(new) = blocks.remove(&(x, y)) {
+                    // replace the 16 rows that follow
+                    for _ in 0..16 { if lines.peek().is_some_and(|r| !r.starts_with('.')) { lines.next(); } }
+                    for r in new { out += &r; out.push('\n'); }
+                }
+            }
+        }
+    }
+    // blocks the .asc had no contents for yet
+    for ((x, y), rows) in blocks {
+        out += &format!(".ram_data {} {}\n", x, y);
+        for r in rows { out += &r; out.push('\n'); }
+    }
+    Ok((out, n))
+}
+
 fn find_pip(chip: &Chip, x: i32, y: i32, dst: &str, src: &str) -> R<u32> {
     let (d, s) = (chip.net(x, y, dst).ok_or_else(|| format!("no wire {} at {},{}", dst, x, y))?, chip.net(x, y, src).ok_or_else(|| format!("no wire {} at {},{}", src, x, y))?);
     chip.fanout[s as usize].iter().copied().find(|p| { let q = &chip.pips[*p as usize]; q.dst == d && q.x as i32 == x && q.y as i32 == y })
@@ -305,10 +364,7 @@ pub fn place_and_route_on(chip: &Chip, nl: &Netlist, o: &Opts) -> R<Output> {
         for (k, on) in [ram.write_mode & 1, ram.write_mode & 2, ram.read_mode & 1, ram.read_mode & 2].iter().enumerate() {
             if *on != 0 { a.func(x, y + 1, &format!("RamConfig.CBIT_{}", k))?; }
         }
-        let lines = ram.init.iter().map(|bits| {
-            bits.as_bytes().chunks(4).map(|c| { let v = c.iter().fold(0u32, |a, b| a * 2 + (*b == b'1') as u32); std::char::from_digit(v, 16).unwrap() }).collect::<String>()
-        }).collect();
-        a.ram_data.push(((x, y), lines));
+        a.ram_data.push(((x, y), ram_lines(&ram.init)));
     }
     for ch in &p.chains {
         for (j, &l) in ch.lcs.iter().enumerate() {

@@ -14,11 +14,14 @@ interface LoadInfo {
   top: string; pins: PinInfo[]; warnings: string[]; default_pcf: boolean; clock_hz: number;
   cells: { lut: number; carry: number; ff: number; ram: number; lc?: number };
   /** bitstream: synthesized, placed, routed, decoded; netlist: the mapped netlist; bin: an uploaded bitstream */
-  mode: 'bitstream' | 'netlist' | 'bin';
+  mode: 'bitstream' | 'netlist' | 'bin' | 'cpu';
   fmax?: number;
   bin?: string;
   /** the design's port bits (not for an uploaded bitstream) */
   ports?: { name: string; dir: 'in' | 'out' }[];
+  /** the design has a program memory (RvSoc); bytes of the program in it */
+  program_mem?: boolean;
+  program?: number | null;
 }
 interface RunResult {
   cycle: number; window: number; duty: [number, number][]; evals: number;
@@ -28,7 +31,7 @@ interface RunResult {
 }
 
 /** what is plugged into the board: the USB terminal and a module on each PMOD */
-export interface BoardSetup { uart: boolean; baud: number; pmod1a: string; pmod1b: string; breadboard?: boolean; bb?: Part[] }
+export interface BoardSetup { uart: boolean; baud: number; pmod1a: string; pmod1b: string; breadboard?: boolean; bb?: Part[]; mode?: string }
 export const DEFAULT_SETUP: BoardSetup = { uart: false, baud: 115200, pmod1a: '', pmod1b: '' };
 
 /** PMOD pins 1-4, 7-10 */
@@ -65,8 +68,8 @@ export class VirtualBoard {
         <button class="tb-btn" data-a="flash" title="${tr('合成目前的設計並燒錄到虛擬板', 'Synthesize the current design and flash it to the virtual board')}">${tr('⚡ 燒錄', '⚡ Flash')}</button>
         <button class="tb-btn" data-a="run" disabled>⏸</button>
         <button class="tb-btn" data-a="power" disabled title="${tr('重新上電（從頭開始）', 'Power cycle (start over)')}">⟲</button>
-        <select data-a="mode" title="${tr('燒錄什麼：位元流＝佈局繞線後的真實位元流（解碼回電路模擬）；網表＝映射後的網表（快，不佈局繞線）', 'What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route)')}">
-          <option value="bitstream">${tr('位元流（真實）', 'bitstream (real)')}</option><option value="netlist">${tr('網表（快速）', 'netlist (fast)')}</option></select>
+        <select data-a="mode" title="${tr('燒錄什麼：位元流＝佈局繞線後的真實位元流（解碼回電路模擬）；網表＝映射後的網表（快，不佈局繞線）；CPU＝RISC-V SoC 的 C 程式，CPU 用指令集模擬器跑（即時速度，周邊和腳位相同）', 'What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route); CPU = the RISC-V SoC\'s C program with the CPU as an instruction-set simulator (real time, same pins and peripherals)')}">
+          <option value="bitstream">${tr('位元流（真實）', 'bitstream (real)')}</option><option value="netlist">${tr('網表（快速）', 'netlist (fast)')}</option><option value="cpu">${tr('CPU（C 程式，即時）', 'CPU (C program, real time)')}</option></select>
         <button class="tb-btn ghost" data-a="upload" title="${tr('載入任何 iCE40UP5K 的 .bin（例如 nextpnr + icepack 做的；也可以拖放到板子上）', 'Load any iCE40UP5K .bin (e.g. from nextpnr + icepack; or drop it on the board)')}">${tr('📂 .bin', '📂 .bin')}</button>
         <button class="tb-btn ghost" data-a="pins" disabled title="${tr('腳位指定：設計的每個埠接到板子的哪支腳（寫入 pins.pcf）', 'Pin assignment: which board pin each port uses (written to pins.pcf)')}">${tr('📌 腳位', '📌 Pins')}</button>
         <button class="tb-btn ghost hidden" data-a="download" title="${tr('下載這個位元流（iceprog 可以燒進真實的 iCEBreaker）', 'Download this bitstream (iceprog flashes it to a real iCEBreaker)')}">⬇ .bin</button>
@@ -98,7 +101,7 @@ export class VirtualBoard {
     this.q<HTMLInputElement>('[data-a=file]').onchange = e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) this.loadBin(f); (e.target as HTMLInputElement).value = ''; };
     this.q('[data-a=download]').onclick = () => this.download();
     this.q('[data-a=pins]').onclick = () => this.pinTable();
-    for (const k of ['uart', 'baud', 'pmod1a', 'pmod1b', 'breadboard']) this.q(`[data-a=${k}]`).addEventListener('change', () => this.setupFromUi());
+    for (const k of ['uart', 'baud', 'pmod1a', 'pmod1b', 'breadboard', 'mode']) this.q(`[data-a=${k}]`).addEventListener('change', () => this.setupFromUi());
     this.bb = new Breadboard(this.q<HTMLElement>('.bb'));
     this.bb.onChange = layout => {
       if (layout) { this.setup.bb = this.bb.parts.map(p => ({ ...p })); this.onSetup(this.setup); }
@@ -147,6 +150,7 @@ export class VirtualBoard {
     this.q<HTMLSelectElement>('[data-a=pmod1b]').value = this.setup.pmod1b;
     this.q<HTMLSelectElement>('[data-a=pmod1b]').disabled = this.setup.pmod1a === 'vga';
     this.q<HTMLInputElement>('[data-a=breadboard]').checked = !!this.setup.breadboard;
+    if (this.setup.mode) this.q<HTMLSelectElement>('[data-a=mode]').value = this.setup.mode;
     this.q<HTMLElement>('.bb').classList.toggle('hidden', !this.setup.breadboard);
     // header pins under a PMOD module cannot take wires
     this.bb.blocked = new Set([...(this.setup.pmod1a ? SLOT.pmod1a : []), ...(this.setup.pmod1b || this.setup.pmod1a === 'vga' ? SLOT.pmod1b : [])]);
@@ -164,6 +168,7 @@ export class VirtualBoard {
       pmod1b: this.q<HTMLSelectElement>('[data-a=pmod1b]').value,
       breadboard: this.q<HTMLInputElement>('[data-a=breadboard]').checked,
       bb: this.bb.parts.map(p => ({ ...p })),
+      mode: this.mode,
     };
     this.setSetup(s);
     this.onSetup(this.setup);
@@ -265,24 +270,38 @@ export class VirtualBoard {
   /** the selected mode: the real bitstream (synthesis, place and route, decoding) or the mapped netlist */
   get mode(): string { return this.q<HTMLSelectElement>('[data-a=mode]').value; }
 
-  /** synthesize `top` and power the board up with it */
-  async flash(files: VFile[], top: string, pcf: string | undefined): Promise<LoadInfo> {
+  /** synthesize `top` and power the board up with it (and `program`, base64, in its program memory) */
+  async flash(files: VFile[], top: string, pcf: string | undefined, program?: string): Promise<LoadInfo> {
     this.setRunning(false);
     const gen = ++this.gen;
     const core = await this.core();
     let info: LoadInfo;
-    if (this.mode === 'bitstream') {
+    if (this.mode === 'cpu') {
+      if (!program) throw new Error(tr('CPU 模式跑的是 C 程式：專案裡要有一個 .c 檔（設計要用 RvSoc）', 'The CPU mode runs a C program: the project needs a .c file (and the RvSoc design)'));
+      this.stat(tr('載入 C 程式（CPU 用指令集模擬器）…', 'Loading the C program (the CPU as an instruction-set simulator)…'));
+      info = await core.call<LoadInfo>({ cmd: 'board_load_cpu', program, pcf: pcf ?? null, top });
+    } else if (this.mode === 'bitstream') {
       this.stat(tr('載入晶片資料庫…', 'Loading the chip database…'));
       await core.chipdb();
       this.stat(tr('合成、佈局繞線、產生位元流並燒錄…', 'Synthesis, place and route, bitstream, flashing…'));
-      info = await core.call<LoadInfo>({ cmd: 'board_flash', files, top, pcf: pcf ?? null });
+      info = await core.call<LoadInfo>({ cmd: 'board_flash', files, top, pcf: pcf ?? null, program: program ?? null });
     } else {
       this.stat(tr('合成並燒錄網表…', 'Synthesizing and flashing the netlist…'));
-      info = await core.call<LoadInfo>({ cmd: 'board_load', files, top, pcf: pcf ?? null });
+      info = await core.call<LoadInfo>({ cmd: 'board_load', files, top, pcf: pcf ?? null, program: program ?? null });
     }
     if (gen !== this.gen) return info;
     this.start(info);
     return info;
+  }
+
+  /** a new program (base64) for the design on the board: no synthesis, no place and route */
+  async program(program: string): Promise<void> {
+    if (!this.info) throw new Error('no design on the board');
+    this.setRunning(false);
+    ++this.gen;
+    this.stat(tr('換程式…', 'Loading the program…'));
+    const r = await (await this.core()).call<{ bin: string | null; bytes: number }>({ cmd: 'board_program', program });
+    this.start({ ...this.info, bin: r.bin ?? this.info.bin, program: r.bytes });
   }
 
   /** any iCE40UP5K bitstream from a file */
@@ -561,7 +580,9 @@ export class VirtualBoard {
   private foot(): void {
     const i = this.info!;
     const used = i.pins.filter(p => p.input || p.output).map(p => `${p.name}↔${p.input ?? p.output}`);
-    const what = i.mode === 'netlist'
+    const what = i.mode === 'cpu'
+      ? tr(`CPU 模式：C 程式 ${i.program ?? 0} 位元組，CPU 用指令集模擬器（和 RvSoc 一樣的記憶體映射與時脈數），周邊與腳位照 pins.pcf`, `CPU mode: a ${i.program ?? 0}-byte C program, the CPU as an instruction-set simulator (RvSoc's memory map and cycle counts), peripherals and pins from pins.pcf`)
+      : i.mode === 'netlist'
       ? `${tr('網表', 'netlist')}：${i.cells.lut} LUT、${i.cells.carry} CARRY、${i.cells.ff} DFF${i.cells.ram ? `、${i.cells.ram} BRAM` : ''}（${tr('未佈局繞線', 'not placed and routed')}）`
       : `${i.mode === 'bin' ? tr('上傳的位元流', 'uploaded bitstream') : tr('位元流', 'bitstream')}：${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `、${i.cells.ram} BRAM` : ''}`
         + (i.fmax ? `，F<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? ' ⚠' : ` ≥ 12 MHz ✓`}` : '');

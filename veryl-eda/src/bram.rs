@@ -167,11 +167,76 @@ pub fn infer(nl: &Netlist) -> Inferred {
                 }
                 let mut params: Vec<(&'static str, String)> = vec![("READ_MODE", format!("{:032b}", mode)), ("WRITE_MODE", format!("{:032b}", mode))];
                 for name in INIT { params.push((name, "0".repeat(256))); }
+                params.push((SLOT, format!("{}:{}", m.name, k)));
                 rams.push(Cell { typ: "SB_RAM40_4K".into(), conns, params });
             }
         }
     }
     Inferred { nl: stripped, rams }
+}
+
+/// Which memory a block RAM holds: `NAME:BLOCK` (block k has data bits k·bw.. of
+/// every word); kept so a program can be put into the memory after mapping, or
+/// into a placed-and-routed bitstream (`pnr::patch_ram`). Not an iCE40 parameter:
+/// the yosys JSON writes it as an attribute.
+pub const SLOT: &str = "MEM_SLOT";
+
+/// INIT_0..INIT_F (msb first) of block `k` of a memory in `mode`, from its words
+/// (word a, data bit d is RAM bit (d << mode) | lane of RAM word a & 0xff, lane = a >> 8)
+pub fn init_strings(mode: usize, k: usize, words: &[u64]) -> Vec<String> {
+    let bw = 16 >> mode;
+    let mut ram = [0u16; 256];
+    for (a, w) in words.iter().enumerate().take(256 << mode) {
+        let lane = (a >> 8) & ((1 << mode) - 1);
+        for d in 0..bw {
+            let j = k * bw + d;
+            if j < 64 && (w >> j) & 1 == 1 { ram[a & 0xff] |= 1 << ((d << mode) | lane); }
+        }
+    }
+    (0..16).map(|i| (0..256).map(|p| { let bit = 255 - p; if (ram[i * 16 + bit / 16] >> (bit % 16)) & 1 == 1 { '1' } else { '0' } }).collect()).collect()
+}
+
+/// the memory and block of a block RAM cell (see `SLOT`) and its mode
+pub fn slot_of(c: &Cell) -> Option<(String, usize, usize)> {
+    let s = &c.params.iter().find(|x| x.0 == SLOT)?.1;
+    let (name, k) = s.rsplit_once(':')?;
+    let mode = c.params.iter().find(|x| x.0 == "READ_MODE").and_then(|x| usize::from_str_radix(&x.1, 2).ok()).unwrap_or(0);
+    Some((name.to_string(), k.parse().ok()?, mode))
+}
+
+/// Give memory `name` initial contents in a mapped iCE40 netlist; the number of blocks changed
+pub fn set_mem_init(nl: &mut Netlist, name: &str, words: &[u64]) -> usize {
+    let mut n = 0;
+    for c in nl.cells.iter_mut().filter(|c| c.typ == "SB_RAM40_4K") {
+        let Some((m, k, mode)) = slot_of(c) else { continue };
+        if m != name { continue; }
+        let init = init_strings(mode, k, words);
+        for (p, v) in c.params.iter_mut() {
+            if let Some(i) = INIT.iter().position(|x| x == p) { *v = init[i].clone(); }
+        }
+        n += 1;
+    }
+    n
+}
+
+/// A program (bytes from address 0) as the contents of a 32-bit memory made of four
+/// byte lanes `PREFIX.b0.mem` .. `PREFIX.b3.mem` (RvMem in examples/src/rvsoc.veryl)
+pub fn program_lanes(mems: &[String], bytes: &[u8]) -> Result<Vec<(String, Vec<u64>)>, String> {
+    let lane0: Vec<&String> = mems.iter().filter(|m| m.ends_with("b0.mem")).collect();
+    let [p] = lane0.as_slice() else { return Err(format!("no single program memory (byte lanes *.b0.mem .. *.b3.mem) among {:?}", mems)) };
+    let prefix = &p[..p.len() - "b0.mem".len()];
+    (0..4).map(|k| {
+        let name = format!("{}b{}.mem", prefix, k);
+        if !mems.contains(&name) { return Err(format!("no memory {}", name)); }
+        Ok((name, bytes.iter().skip(k).step_by(4).map(|b| *b as u64).collect()))
+    }).collect()
+}
+
+/// names of the memories in block RAMs of a mapped netlist
+pub fn mem_names(nl: &Netlist) -> Vec<String> {
+    let mut v: Vec<String> = nl.cells.iter().filter_map(slot_of).map(|s| s.0).collect();
+    v.dedup();
+    v
 }
 
 pub const INIT: [&str; 16] = ["INIT_0", "INIT_1", "INIT_2", "INIT_3", "INIT_4", "INIT_5", "INIT_6", "INIT_7",

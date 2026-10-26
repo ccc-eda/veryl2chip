@@ -13,8 +13,9 @@ Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https:
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
-              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]
+              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic] [--program PROG.bin]
               a.veryl b.veryl ...
+    veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
 
 In the source tree, `cargo run --release -- ...` works too. The own place & route needs IceStorm's `chipdb-5k.txt` (included in OSS CAD Suite, or point to it with `VERYL_EDA_CHIPDB`).
 
@@ -38,7 +39,7 @@ RISC-V reference simulator **spike** (done by `build.sh`). It passes on spike, t
 gate-level netlist, and the iCE40-mapped netlist (`cargo test`).
 
 The complete RiscvCore (not trimmed by a constant ROM) needs 5401 LUTs after mapping, more than the UP5K's 5280 LCs, mostly because of the
-32×32 register file in flip-flops; running the whole ISA test on the FPGA would first need block RAM (`SB_RAM40_4K`) inference.
+32×32 register file in flip-flops; the multi-cycle `RvSoc` below keeps its registers and memory in block RAM and fits with room to spare.
 
 ## A RISC-V CPU on the FPGA
 `RiscvSoc` in `examples/soc.veryl` = `RiscvCore` from `examples/src/rv32i.veryl` + a program ROM + a 16-word data RAM + an LED register (address 0x100).
@@ -56,6 +57,34 @@ the bitstream therefore only proves the instructions this program uses.
 | timing | about 17 MHz (the board clock is 12 MHz: passes) |
 | simulation of the mapped netlist (yosys iCE40 cell models) | LED = 55 at cycle 70 |
 | simulation of the **routed bitstream** (converted back to Verilog by `icebox_vlog`) | LED = 55 at cycle 70 |
+
+## A RISC-V SoC with C programs (`examples/src/rvsoc.veryl`, `src/rv/`)
+`RvCore` is a **multi-cycle** RV32I (Decode → Exec, plus Mem for loads; 2 cycles per instruction, 3 per load) whose register file
+(two `SyncRam` copies for two read ports) and memory are synchronous-read RAMs, so they become `SB_RAM40_4K`. `RvSoc` adds an 8 KB
+memory of four byte lanes (`RvMem`), memory-mapped peripherals (LEDs 0x1000_0000, buttons + switches 0x…04, UART data / status 0x…08 / 0x…0C, a cycle timer 0x…10)
+and a loader port for testbenches; `RvBoard` is the iCEBreaker top (`examples/rvsoc.pcf`): 1844 LUTs + 20 block RAMs, Fmax 13.3 MHz.
+`TestRvSoc` loads `rv32i_test.S` (data at 0x300, `examples/src/rvsoc_rom.veryl` from `examples/sw/build.sh`), runs it and checks its 41 results;
+`veryl-eda/examples/rvsoc_small.veryl` (a 64-byte memory) is proven equivalent to `veryl build` by `test.sh`.
+
+**Programs in block RAM.** Each `SB_RAM40_4K` that holds a memory carries `MEM_SLOT` = `NAME:BLOCK` (a yosys attribute in the JSON);
+`bram::set_mem_init` gives a memory initial contents after mapping, `--program PROG.bin` fills the byte lanes `*.b0.mem … *.b3.mem` from address 0,
+and `pnr::patch_ram` rewrites just those blocks' `.ram_data` in a placed-and-routed `.asc`: a new program without synthesis or place and route
+(`cargo test rvsoc_program_on_board`: the patched bitstream equals placing and routing with the program, and runs the ISA test on the virtual board).
+The optimizer keeps a memory that is never written (a ROM to be filled) instead of treating it as constant 0.
+
+**C compiler** (`src/rv/`): `cc.rs` compiles a subset of C — `char` (unsigned) / `short` / `int` / `unsigned`, pointers, arrays of any dimension,
+every C operator, `if` / `while` / `do` / `for` / `switch`, globals with initializers, `...` arguments, a small preprocessor (`#define` with parameters, `#ifdef`) —
+to RV32I assembly: plain stack-based code with immediate forms, compare-and-branch and C source lines as comments. `prelude.c` is the runtime library
+(software multiply / divide, `putchar` / `getchar` / `printf` / `puts` / `read_line`, `delay_ms` / `millis`, `rand`, `strlen` / `strcmp` / `memcpy` …, the
+peripheral registers `LED`, `BUTTONS`, `SWITCHES`, `TIMER`, `UART_DATA`, `UART_STATUS`); only what `main` reaches is kept. `asm.rs` is a two-pass assembler
+(pseudo-instructions, `%hi` / `%lo`, `.data` / `.rodata` / `.bss`, a listing), `iss.rs` an instruction-set simulator with RvSoc's memory map and cycle counts.
+
+    veryl-eda --cc hello.c -o hello.bin -S hello.s --run       # compile, write the image and the assembly, run on the ISS
+    veryl-eda --top RvBoard --ice40 --pnr veryl --pcf ../examples/rvsoc.pcf --program hello.bin --bin soc.bin ../examples/src/{rv32i,sync_ram,uart,rvsoc}.veryl
+
+Tests: `src/rv/tests/*.c` print exactly what the host C compiler's build prints (`cc -funsigned-char -fwrapv`); `cc_on_rvsoc` runs a compiled program
+on the gate-level `RvBoard` (program in its block RAMs) on the virtual board: the same serial output as the ISS. The virtual board's **CPU mode**
+(`Board::cpu`) runs a program on the ISS with RvSoc's pins and peripherals, about 5× faster than real time; the gate-level SoC runs at about 1% of real time.
 
 ## Own place & route (`--pnr veryl`, `src/pnr/`)
 iCE40UP5K only; the architecture comes from IceStorm's `chipdb-5k.txt` (set `VERYL_EDA_CHIPDB` if it is not found).

@@ -1,0 +1,31 @@
+// RvSoc (examples/src/rvsoc.veryl) with a 64-byte memory: small enough for the
+// formal equivalence check in veryl-eda/test.sh (the memory is free: any program)
+module RvSocSmall (
+    i_clk     : input  clock    ,
+    i_rst     : input  reset    ,
+    i_ld      : input  logic    ,
+    i_ld_we   : input  logic    ,
+    i_ld_addr : input  logic<4> ,
+    i_ld_wdata: input  logic<32>,
+    o_ld_rdata: output logic<32>,
+    i_btn     : input  logic<3> ,
+    i_sw      : input  logic<8> ,
+    i_rx      : input  logic    ,
+    o_tx      : output logic    ,
+    o_led     : output logic<8> ,
+) {
+    inst u_soc: RvSoc #(MEM_AW: 4, CPB: 4) (
+        i_clk     : i_clk     ,
+        i_rst     : i_rst     ,
+        i_ld      : i_ld      ,
+        i_ld_we   : i_ld_we   ,
+        i_ld_addr : i_ld_addr ,
+        i_ld_wdata: i_ld_wdata,
+        o_ld_rdata: o_ld_rdata,
+        i_btn     : i_btn     ,
+        i_sw      : i_sw      ,
+        i_rx      : i_rx      ,
+        o_tx      : o_tx      ,
+        o_led     : o_led     ,
+    );
+}

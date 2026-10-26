@@ -16,7 +16,31 @@ thread_local! {
     static BOARD: RefCell<Option<(veryl_eda::board::Design, Option<String>, veryl_eda::board::Board, Value)>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// what the board was last loaded from, so a new program can replace the old one
+    /// in place (`board_program`): the mapped netlist, or the placed-and-routed .asc
+    static LOADED: RefCell<Option<Loaded>> = const { RefCell::new(None) };
+}
+
+enum Loaded {
+    Netlist(Netlist),
+    Bitstream { asc: String, map: Vec<veryl_eda::pnr::RamPos> },
+    /// RvSoc with its CPU as an instruction-set simulator: the program and the RAM size
+    Cpu(Vec<u8>, usize),
+}
+
 type R<T> = Result<T, String>;
+
+/// `program` (base64 bytes from address 0) into the design's byte-lane program memory; its size
+fn apply_program(v: &Value, nl: &mut Netlist) -> R<Option<usize>> {
+    let Some(b64) = v.get("program").and_then(|p| p.as_str()) else { return Ok(None) };
+    let bytes = unbase64(b64)?;
+    for (m, words) in veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &bytes)? { veryl_eda::bram::set_mem_init(nl, &m, &words); }
+    Ok(Some(bytes.len()))
+}
+
+/// whether the design has a program memory (byte lanes in block RAM, see `bram::program_lanes`)
+fn has_program_mem(nl: &Netlist) -> bool { veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &[]).is_ok() }
 
 fn bit(b: &Bit) -> Value {
     match b { Bit::C0 => json!("0"), Bit::C1 => json!("1"), Bit::W(w) => json!(w) }
@@ -263,7 +287,8 @@ fn synth_netlists(v: &Value) -> R<(String, SynthOut)> {
 /// the virtual board: synthesize, map to iCE40 and power up an iCEBreaker with the design
 fn board_load(v: &Value) -> R<Value> {
     use veryl_eda::board::{icebreaker, Design};
-    let (top, (_, mapped)) = synth_netlists(v)?;
+    let (top, (_, mut mapped)) = synth_netlists(v)?;
+    let prog = apply_program(v, &mut mapped)?;
     let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
     let d = Design::from_netlist(&mapped)?;
     let b = icebreaker::board(d.clone(), pcf.as_deref())?;
@@ -272,7 +297,10 @@ fn board_load(v: &Value) -> R<Value> {
     let mut info = board_info(&top, cells, &b, pcf.is_none(), None);
     info["mode"] = json!("netlist");
     info["ports"] = port_bits(&mapped);
+    info["program_mem"] = json!(has_program_mem(&mapped));
+    info["program"] = json!(prog);
     BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = Some(Loaded::Netlist(mapped)));
     Ok(info)
 }
 
@@ -280,7 +308,8 @@ fn board_load(v: &Value) -> R<Value> {
 /// decode it and power up the board with it: the board runs what would be flashed
 fn board_flash(v: &Value) -> R<Value> {
     use veryl_eda::board::{bitstream, icebreaker};
-    let (top, (_, mapped)) = synth_netlists(v)?;
+    let (top, (_, mut mapped)) = synth_netlists(v)?;
+    let prog = apply_program(v, &mut mapped)?;
     let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
     let opts = veryl_eda::pnr::Opts {
         chipdb: None, package: "sg48".into(), pcf: veryl_eda::pnr::parse_pcf(pcf.as_deref().unwrap_or(icebreaker::DEFAULT_PCF)),
@@ -315,7 +344,10 @@ fn board_flash(v: &Value) -> R<Value> {
     info["ports"] = port_bits(&mapped);
     info["fmax"] = json!(fmax);
     info["bin"] = json!(base64(&bin));
+    info["program_mem"] = json!(has_program_mem(&mapped));
+    info["program"] = json!(prog);
     BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = Some(Loaded::Bitstream { asc: out.asc.clone(), map: out.ram_map() }));
     Ok(info)
 }
 
@@ -336,7 +368,120 @@ fn board_load_bin(v: &Value) -> R<Value> {
     let mut info = board_info(name, cells, &b, false, None);
     info["mode"] = json!("bin");
     BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = None);
     Ok(info)
+}
+
+/// RvSoc on the board with its CPU as an instruction-set simulator (real time):
+/// { program (base64), pcf, mem? (RAM bytes, 8192) }
+fn board_load_cpu(v: &Value) -> R<Value> {
+    let bytes = unbase64(v.get("program").and_then(|p| p.as_str()).ok_or("missing program")?)?;
+    let mem = v.get("mem").and_then(|m| m.as_u64()).unwrap_or(8192) as usize;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).ok_or("the CPU board needs the SoC's pin file")?.to_string();
+    let b = cpu_board(&bytes, mem, &pcf)?;
+    let cells = json!({ "lut": 0, "carry": 0, "ff": 0, "ram": 0 });
+    let mut info = board_info(v.get("top").and_then(|t| t.as_str()).unwrap_or("RvSoc"), cells, &b, false, None);
+    info["mode"] = json!("cpu");
+    info["ports"] = json!(b.eng.d.inputs.iter().map(|x| json!({ "name": x.0, "dir": "in" })).chain(b.eng.d.outputs.iter().map(|x| json!({ "name": x.0, "dir": "out" }))).collect::<Vec<_>>());
+    info["program_mem"] = json!(true);
+    info["program"] = json!(bytes.len());
+    let d = b.eng.d.clone();
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pcf), b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = Some(Loaded::Cpu(bytes, mem)));
+    Ok(info)
+}
+
+fn cpu_board(bytes: &[u8], mem: usize, pcf: &str) -> R<veryl_eda::board::Board> {
+    use veryl_eda::board::icebreaker;
+    let mut b = veryl_eda::board::Board::cpu(bytes, mem, pcf, icebreaker::CLOCK_PIN)?;
+    // buttons released (BTN1-3 read 1 when pressed: idle 0)
+    for p in icebreaker::PINS { if let icebreaker::Kind::Button { pressed } = p.kind { b.set_pin(p.pin, !pressed); } }
+    Ok(b)
+}
+
+/// A new program (`program`: base64 bytes from address 0) for the design on the board,
+/// without synthesizing or placing and routing again: the netlist's block RAMs get the
+/// new contents, or the bitstream's (`pnr::patch_ram`); the board powers up with it.
+fn board_program(v: &Value) -> R<Value> {
+    use veryl_eda::board::{bitstream, icebreaker, Design};
+    let bytes = unbase64(v.get("program").and_then(|p| p.as_str()).ok_or("missing program")?)?;
+    let done = LOADED.with(|l| -> R<(Design, Option<String>, Option<Vec<u8>>)> {
+        let mut l = l.borrow_mut();
+        match l.as_mut().ok_or("load a design with a program memory first")? {
+            Loaded::Netlist(nl) => {
+                for (m, words) in veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &bytes)? { veryl_eda::bram::set_mem_init(nl, &m, &words); }
+                let pcf = BOARD.with(|x| x.borrow().as_ref().and_then(|b| b.1.clone()));
+                Ok((Design::from_netlist(nl)?, pcf, None))
+            }
+            Loaded::Cpu(prog, mem) => {
+                *prog = bytes.clone();
+                let mem = *mem;
+                BOARD.with(|x| -> R<()> {
+                    let mut x = x.borrow_mut();
+                    let (_, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+                    *b = cpu_board(&bytes, mem, pcf.as_deref().unwrap_or(""))?;
+                    attach(b, periph);
+                    Ok(())
+                })?;
+                Err("cpu".to_string())
+            }
+            Loaded::Bitstream { asc, map } => {
+                let names: Vec<String> = { let mut v: Vec<String> = map.iter().filter_map(|p| p.slot.rsplit_once(':').map(|x| x.0.to_string())).collect(); v.dedup(); v };
+                for (m, words) in veryl_eda::bram::program_lanes(&names, &bytes)? { *asc = veryl_eda::pnr::patch_ram(asc, map, &m, &words)?.0; }
+                let bin = veryl_eda::pnr::bitstream::asc_to_bin(asc)?;
+                let (d, _) = CHIP.with(|c| -> R<(Design, bitstream::Report)> {
+                    let c = c.borrow();
+                    bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
+                })?;
+                let pins = icebreaker::pins_pcf(&d);
+                Ok((d, Some(pins), Some(bin)))
+            }
+        }
+    });
+    let (d, pcf, bin) = match done {
+        Err(e) if e == "cpu" => return Ok(json!({ "ok": true, "bytes": bytes.len(), "bin": null })),
+        r => r?,
+    };
+    BOARD.with(|x| -> R<()> {
+        let mut x = x.borrow_mut();
+        let (od, opcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+        let warnings = b.warnings.clone();
+        *b = icebreaker::board(d.clone(), pcf.as_deref())?;
+        b.warnings = warnings;
+        attach(b, periph);
+        *od = d;
+        *opcf = pcf;
+        Ok(())
+    })?;
+    Ok(json!({ "ok": true, "bytes": bytes.len(), "bin": bin.map(|b| base64(&b)) }))
+}
+
+/// Compile C for RvSoc: { src, name?, mem? (RAM bytes), run? (max instructions on the
+/// instruction-set simulator), input? (serial bytes for it) } ->
+/// { ok, compiled, asm, listing, bin (base64), size, end, symbols, errors: [{file, line, msg}], run? }
+/// (compile errors are a normal answer: ok with compiled = false)
+fn cc(v: &Value) -> R<Value> {
+    use veryl_eda::rv;
+    let src = v.get("src").and_then(|s| s.as_str()).ok_or("missing src")?;
+    let name = v.get("name").and_then(|s| s.as_str()).unwrap_or("main.c");
+    let mem = v.get("mem").and_then(|m| m.as_u64()).unwrap_or(8192) as u32;
+    let o = match rv::cc::compile(name, src, &rv::cc::Options { mem_size: mem }) {
+        Ok(o) => o,
+        Err(es) => return Ok(json!({ "ok": true, "compiled": false, "errors": es.iter().map(|e| json!({ "file": e.file, "line": e.line, "msg": e.msg })).collect::<Vec<_>>() })),
+    };
+    let mut out = json!({
+        "ok": true, "compiled": true, "asm": o.asm, "listing": rv::asm::listing_text(&o.program), "bin": base64(&o.program.bytes),
+        "size": o.program.bytes.len(), "end": o.program.end, "mem": mem,
+        "symbols": o.program.symbols.iter().filter(|s| !s.0.starts_with('.')).map(|s| json!([s.0, s.1])).collect::<Vec<_>>(), "errors": [],
+    });
+    if let Some(n) = v.get("run").and_then(|r| r.as_u64()) {
+        let mut s = rv::iss::Iss::new(&o.program.bytes, mem as usize);
+        if let Some(i) = v.get("input").and_then(|i| i.as_str()) { s.rx.extend(i.bytes()); }
+        let r = s.run(n);
+        out["run"] = json!({ "tx": String::from_utf8_lossy(&s.tx), "halted": r.as_ref().ok() == Some(&true), "error": r.err(),
+            "instret": s.instret, "cycles": s.cycles, "led": s.led });
+    }
+    Ok(out)
 }
 
 /// attach peripherals to the board (kept for power cycles):
@@ -453,7 +598,8 @@ fn board_reset() -> R<Value> {
     BOARD.with(|x| {
         let mut x = x.borrow_mut();
         let (d, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
-        *b = veryl_eda::board::icebreaker::board(d.clone(), pcf.as_deref())?;
+        let cpu = LOADED.with(|l| match l.borrow().as_ref() { Some(Loaded::Cpu(p, m)) => Some((p.clone(), *m)), _ => None });
+        *b = match cpu { Some((p, m)) => cpu_board(&p, m, pcf.as_deref().unwrap_or(""))?, None => veryl_eda::board::icebreaker::board(d.clone(), pcf.as_deref())? };
         attach(b, periph);
         Ok(json!({ "ok": true, "cycle": 0 }))
     })
@@ -540,6 +686,9 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "board_load" => board_load(v),
         "board_flash" => board_flash(v),
         "board_load_bin" => board_load_bin(v),
+        "board_program" => board_program(v),
+        "board_load_cpu" => board_load_cpu(v),
+        "cc" => cc(v),
         "board_run" => board_run(v),
         "board_reset" => board_reset(),
         "board_periph" => board_periph(v),

@@ -398,14 +398,25 @@ pub fn elaborated(b: &Builder, alias: &HashMap<u32, Bit>, ports: &[Port], nets: 
 /// Optimize the netlist after elaboration: `rebuild` it, then replace
 /// flip-flops that can never leave their initial 0 (next state is their own
 /// output or 0, reset value 0) by the constant, and repeat until nothing changes.
+/// A memory that is never written at all is exempt: a block RAM can be given
+/// initial contents (a program, see `bram::set_mem_init`), so it is a ROM, not 0.
 pub fn optimize(b: Builder, alias: &HashMap<u32, Bit>, ports: Vec<Port>, nets: Vec<(String, Vec<Bit>)>, name: &str) -> R<Netlist> {
     let mut nl = rebuild(b, alias, ports, nets, name)?;
     loop {
-        let mut stuck: HashMap<u32, Bit> = HashMap::new();
-        nl.cells.retain(|c| {
+        let is_stuck = |c: &Cell| {
             let (q, d) = (c.out(), c.port("D"));
             let zero_reset = c.port("R").is_none() || c.typ.ends_with("0_");
-            if c.is_ff() && zero_reset && (d == Some(q) || d == Some(Bit::C0)) {
+            c.is_ff() && zero_reset && (d == Some(q) || d == Some(Bit::C0))
+        };
+        let cand: std::collections::HashSet<Bit> = nl.cells.iter().filter(|c| is_stuck(c)).map(|c| c.out()).collect();
+        let rom: std::collections::HashSet<Bit> = nl.nets.iter()
+            .filter_map(|(n, _)| n.strip_prefix("$mem:").and_then(|r| r.strip_suffix(":clk")))
+            .filter_map(|m| nl.nets.iter().find(|(n, _)| n == m))
+            .filter(|(_, b)| !b.is_empty() && b.iter().all(|x| cand.contains(x))).flat_map(|(_, b)| b.iter().copied()).collect();
+        let mut stuck: HashMap<u32, Bit> = HashMap::new();
+        nl.cells.retain(|c| {
+            let q = c.out();
+            if is_stuck(c) && !rom.contains(&q) {
                 if let Bit::W(w) = q { stuck.insert(w, Bit::C0); }
                 return false;
             }

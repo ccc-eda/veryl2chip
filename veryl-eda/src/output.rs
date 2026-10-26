@@ -48,9 +48,10 @@ pub fn to_json(nl: &Netlist) -> String {
         for g in &mut groups { g.1.sort_by_key(|x| x.0); }
         let dirs: Vec<String> = groups.iter().map(|(p, _)| format!("\"{}\": \"{}\"", p, port_dir(p))).collect();
         let conns: Vec<String> = groups.iter().map(|(p, v)| format!("\"{}\": [{}]", p, v.iter().map(|x| bit(x.1)).collect::<Vec<_>>().join(", "))).collect();
-        let params: Vec<String> = c.params.iter().map(|(k, v)| format!("\"{}\": \"{}\"", k, v)).collect();
-        format!("        \"$veryl${}\": {{ \"hide_name\": 1, \"type\": \"{}\", \"parameters\": {{ {} }}, \"attributes\": {{}}, \"port_directions\": {{ {} }}, \"connections\": {{ {} }} }}",
-            i, c.typ, params.join(", "), dirs.join(", "), conns.join(", "))
+        let params: Vec<String> = c.params.iter().filter(|(k, _)| *k != crate::bram::SLOT).map(|(k, v)| format!("\"{}\": \"{}\"", k, v)).collect();
+        let attrs: Vec<String> = c.params.iter().filter(|(k, _)| *k == crate::bram::SLOT).map(|(_, v)| format!("\"veryl_mem\": \"{}\"", v)).collect();
+        format!("        \"$veryl${}\": {{ \"hide_name\": 1, \"type\": \"{}\", \"parameters\": {{ {} }}, \"attributes\": {{ {} }}, \"port_directions\": {{ {} }}, \"connections\": {{ {} }} }}",
+            i, c.typ, params.join(", "), attrs.join(", "), dirs.join(", "), conns.join(", "))
     }).collect();
     writeln!(s, "{}\n      }},", cells.join(",\n")).unwrap();
     writeln!(s, "      \"netnames\": {{").unwrap();
@@ -98,7 +99,7 @@ pub fn to_verilog(nl: &Netlist) -> String {
             t if !t.starts_with("$_") => {
                 // iCE40 primitive (models: yosys techlibs/ice40/cells_sim.v) or vlib
                 // standard cell / SRAM macro (models: asic::lib::verilog_models)
-                let params: Vec<String> = c.params.iter().map(|(k, v)| format!(".{}({}'b{})", k, v.len(), v)).collect();
+                let params: Vec<String> = c.params.iter().filter(|(k, _)| *k != crate::bram::SLOT).map(|(k, v)| format!(".{}({}'b{})", k, v.len(), v)).collect();
                 // indexed pins "NAME[i]" form one bus port (missing input bits read 0)
                 let mut groups: Vec<(&str, Vec<(usize, Bit)>)> = vec![];
                 for (p, b) in &c.conns {

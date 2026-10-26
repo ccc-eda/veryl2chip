@@ -57,6 +57,8 @@ pub struct Ram {
     pub write_mode: u8,
     /// INIT_0..INIT_F, 256 bits each, msb first
     pub init: Vec<String>,
+    /// the memory block it holds (`bram::SLOT`: NAME:BLOCK), if known
+    pub slot: Option<String>,
 }
 
 pub struct Packed {
@@ -312,7 +314,8 @@ pub fn pack(nl: &Netlist) -> R<Packed> {
         let wire = |p: &str| p.replace('[', "_").replace(']', "");
         let mode = |k: &str| c.params.iter().find(|x| x.0 == k).map(|x| u8::from_str_radix(&x.1, 2).unwrap_or(0)).unwrap_or(0);
         let mut ram = Ram { ins: vec![], outs: vec![], read_mode: mode("READ_MODE"), write_mode: mode("WRITE_MODE"),
-            init: crate::bram::INIT.iter().map(|k| c.params.iter().find(|x| x.0 == *k).map(|x| x.1.clone()).unwrap_or_else(|| "0".repeat(256))).collect() };
+            init: crate::bram::INIT.iter().map(|k| c.params.iter().find(|x| x.0 == *k).map(|x| x.1.clone()).unwrap_or_else(|| "0".repeat(256))).collect(),
+            slot: c.params.iter().find(|x| x.0 == crate::bram::SLOT).map(|x| x.1.clone()) };
         for (p, b) in &c.conns {
             if is_out(p) {
                 if cx.users.contains_key(b) || ported(*b, &port_bits) { ram.outs.push((wire(p), *b)); }

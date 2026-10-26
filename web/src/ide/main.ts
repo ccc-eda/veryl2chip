@@ -13,6 +13,7 @@ import { WaveView } from '../wave';
 import { saveAs } from '../zip';
 import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
 import { CodeEditor, Marker } from './editor';
+import { langOf } from './highlight';
 
 declare const VERYL_WASM_B64: string;
 
@@ -96,9 +97,10 @@ const WELCOME = '\u2605welcome';
 const BOARD_TAB = '\u26a1board';
 /** the course tutorial (Traditional Chinese) */
 const TUTORIAL = 'https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md';
-const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n === BOARD_TAB ? tr('⚡ 虛擬 iCEBreaker', '⚡ Virtual iCEBreaker') : n;
+const ASM_TAB = '\u2699asm';
+const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n === BOARD_TAB ? tr('⚡ 虛擬 iCEBreaker', '⚡ Virtual iCEBreaker') : n === ASM_TAB ? tr('組合語言', 'Assembly') : n;
 /** tabs that are not files */
-const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB;
+const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === ASM_TAB;
 
 function file(name: string): VFile | undefined { return proj.files.find(f => f.name === name); }
 
@@ -145,7 +147,7 @@ function showActive(): void {
   if (!a) a = openTabs().find(n => n === FLOW_TAB || file(n)) ?? WELCOME;
   proj.active = a;
   if (!openTabs().includes(a)) openTabs().push(a);
-  const isFile = !!file(a);
+  const isFile = !!file(a) || a === ASM_TAB;
   $('editorHost').classList.toggle('hidden', !isFile);
   $('synOverlay').classList.toggle('hidden', a !== FLOW_TAB);
   syncStage();
@@ -156,7 +158,16 @@ function showActive(): void {
     else if (board.isRunning) { boardWasRunning = true; board.stop(); }
   }
   $('welcome').classList.toggle('hidden', a !== WELCOME);
-  if (isFile) {
+  if (a === ASM_TAB) {
+    // the compiled C program: address, machine code, assembly (read only)
+    const text = cprog?.compiled ? cprog.listing! : cFile() ? tr('（程式有錯誤，還沒有組合語言）', '(the program has errors: no assembly yet)') : tr('（這個專案沒有 .c 檔）', '(this project has no .c file)');
+    ed.readOnly = true;
+    ed.lang = 'asm';
+    if (ed.value !== text || $('editorHost').dataset.file !== a) { ed.value = text; $('editorHost').dataset.file = a; }
+    ed.setMarkers([]);
+  } else if (isFile) {
+    ed.readOnly = false;
+    ed.lang = langOf(a);
     if (ed.value !== file(a)!.src || $('editorHost').dataset.file !== a) { ed.value = file(a)!.src; $('editorHost').dataset.file = a; }
     markers();
     ed.focus();
@@ -177,7 +188,7 @@ function renderTabs(): void {
     const f = file(n);
     const errs = problems.some(p => p.file === n && p.severity === 'error');
     t.className = 'tab' + (n === proj.active ? ' cur' : '') + (f && original(n) !== undefined && original(n) !== f.src ? ' dirty' : '') + (errs ? ' err' : '');
-    t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB ? '' : n === WELCOME ? '★' : f?.name.endsWith('.veryl') ? '◆' : '▤'}</span><span class="nm">${esc(tabName(n))}</span><span class="x" title="${tr('關閉', 'Close')}"></span>`;
+    t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === ASM_TAB ? '' : n === WELCOME ? '★' : f?.name.endsWith('.veryl') ? '◆' : f?.name.endsWith('.c') ? 'C' : '▤'}</span><span class="nm">${esc(tabName(n))}</span><span class="x" title="${tr('關閉', 'Close')}"></span>`;
     t.onclick = () => { proj.active = n; persist(); showActive(); };
     t.onauxclick = e => { if (e.button === 1) closeTab(n); };
     t.querySelector('.x')!.addEventListener('click', e => { e.stopPropagation(); closeTab(n); });
@@ -208,7 +219,7 @@ function renderFiles(): void {
     const n = problems.filter(p => p.file === f.name && p.severity === 'error').length;
     const changed = original(f.name) !== undefined && original(f.name) !== f.src;
     d.className = 'item' + (f.name === proj.active ? ' cur' : '');
-    d.innerHTML = `<span class="ic">${f.name.endsWith('.veryl') ? '◆' : '▤'}</span><span class="nm">${esc(f.name)}</span>`
+    d.innerHTML = `<span class="ic">${f.name.endsWith('.veryl') ? '◆' : f.name.endsWith('.c') ? 'C' : '▤'}</span><span class="nm">${esc(f.name)}</span>`
       + `<span class="acts"><button class="icon" data-a="ren" title="${tr('重新命名', 'Rename')}">✎</button><button class="icon" data-a="del" title="${tr('刪除', 'Delete')}">🗑</button></span>`
       + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed ? `<span class="tag dirty-dot" title="${tr('與範例原始碼不同', 'Changed from the example')}">M</span>` : '');
     d.onclick = e => {
@@ -254,14 +265,15 @@ function validName(name: string): string | null {
 }
 
 function newFile(): void {
-  let name = prompt(tr('新檔名（.veryl）', 'New file name (.veryl)'), `module${proj.files.length}.veryl`)?.trim();
+  let name = prompt(tr('新檔名（.veryl，或 .c：給 RISC-V SoC 的 C 程式）', 'New file name (.veryl, or .c: a C program for the RISC-V SoC)'), `module${proj.files.length}.veryl`)?.trim();
   if (!name) return;
   if (!/\.\w+$/.test(name)) name += '.veryl';
   const bad = validName(name);
   if (bad) { alert(bad); return; }
   const base = name.replace(/\.\w+$/, '').replace(/(^|[_-])(\w)/g, (_, _a, c: string) => c.toUpperCase()).replace(/\W/g, '');
   const m = /^[A-Za-z]/.test(base) ? base : 'M' + base;
-  proj.files.push({ name, src: name.endsWith('.veryl') ? newModule(m) : '' });
+  if (name.endsWith('.c') && cFile()) { alert(tr('一個專案只能有一個 .c 檔', 'A project has one .c file')); return; }
+  proj.files.push({ name, src: name.endsWith('.veryl') ? newModule(m) : name.endsWith('.c') ? C_TEMPLATE : '' });
   openFile(name);
   changed();
 }
@@ -494,11 +506,67 @@ async function check(): Promise<void> {
   } catch (e) {
     errs = parseErrors(String((e as Error).message ?? e), 'check');
   }
+  if (cFile()) {
+    try { errs.push(...cProblems(await compileC(core))); } catch (e) { errs.push({ msg: String((e as Error).message ?? e), severity: 'error', from: 'check' }); }
+  } else cprog = null;
   if (gen !== checkGen) return;
+  if (proj.active === ASM_TAB) showActive();
   problems = [...errs, ...problems.filter(p => p.from === 'run')];
   if (errs.length) problems = problems.filter(p => p.from === 'check' || !p.file);
   refreshTops();
   renderProblems();
+}
+
+// ---------------------------------------------------------------- C programs (RISC-V SoC)
+
+const C_TEMPLATE = `// A C program for the RISC-V SoC (RvSoc in rvsoc.veryl): ⚡ Virtual board compiles it
+// into the SoC's block RAM. Library: printf, putchar, getchar, puts, delay_ms, millis, rand,
+// strlen ...; peripherals: LED, BUTTONS, SWITCHES, TIMER, UART_DATA, UART_STATUS.
+
+int main(void) {
+    int n = 0;
+    printf("Hello from C!\\n");
+    while (1) {
+        LED = n++;
+        delay_ms(200);
+    }
+}
+`;
+
+interface CProgram { compiled: boolean; bin?: string; listing?: string; size?: number; end?: number; mem?: number; errors: { file: string; line: number; msg: string }[] }
+/** the last compiled C program */
+let cprog: CProgram | null = null;
+/** the hardware last flashed (veryl files, top, pins, mode): only the program changed -> swap it */
+let boardHw = '';
+
+/** the project's C program (one .c file) */
+function cFile(): VFile | undefined { return proj.files.find(f => f.name.endsWith('.c')); }
+
+async function compileC(c: Core): Promise<CProgram> {
+  const f = cFile()!;
+  cprog = await c.call<CProgram>({ cmd: 'cc', src: f.src, name: f.name });
+  return cprog;
+}
+
+function cProblems(r: CProgram): typeof problems {
+  const f = cFile();
+  return r.errors.map(e => e.file === f?.name
+    ? { file: f.name, line: e.line, col: 1, msg: e.msg, severity: 'error' as const, from: 'check' as const }
+    : { msg: `${e.file}:${e.line}: ${e.msg}`, severity: 'error' as const, from: 'check' as const });
+}
+
+/** run the C program on the instruction-set simulator: its serial output in the Output panel */
+async function runC(): Promise<void> {
+  if (!core || !cFile()) { alert(tr('這個專案沒有 .c 檔', 'This project has no .c file')); return; }
+  const f = cFile()!;
+  const input = prompt(tr('要從序列埠送給程式的文字（可以空白）', 'Text the program receives on the serial port (may be empty)'), '') ?? '';
+  const r = await core.call<CProgram & { run?: { tx: string; halted: boolean; error: string | null; instret: number; cycles: number; led: number } }>({ cmd: 'cc', src: f.src, name: f.name, run: 5_000_000, input: input ? input + '\r' : '' });
+  if (!r.compiled) { problems = [...cProblems(r), ...problems.filter(p => p.from === 'run')]; renderProblems(); panel('problems'); return; }
+  const x = r.run!;
+  $('p-output').textContent = x.tx.replace(/\r\n/g, '\n') + '\n' + (x.error ?? '') + tr(
+    `── ${f.name}：${x.halted ? '執行完畢' : '執行了 500 萬個指令後停止'}，${x.instret} 個指令、${x.cycles} 個時脈（12 MHz 下 ${(x.cycles / 12e3).toFixed(1)} ms），LED = 0x${x.led.toString(16)}（指令集模擬器，不是硬體）`,
+    `── ${f.name}: ${x.halted ? 'finished' : 'stopped after 5 million instructions'}, ${x.instret} instructions, ${x.cycles} clock cycles (${(x.cycles / 12e3).toFixed(1)} ms at 12 MHz), LED = 0x${x.led.toString(16)} (instruction-set simulator, not the hardware)`);
+  panel('output');
 }
 
 /** "file:line:col: message" lines (continuation lines join the message) */
@@ -780,6 +848,7 @@ function ensureBoard(): VirtualBoard {
     flashBoard();
   };
   board.onLoaded = info => {
+    boardHw = '';
     problems = problems.filter(p => p.from !== 'run');
     for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
     renderProblems();
@@ -792,15 +861,42 @@ async function flashBoard(): Promise<void> {
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能燒錄）', 'No synthesizable module (#[test] modules cannot be flashed)')); return; }
   ensureBoard();
   // what is plugged in: the project's choice, else its example's
-  board!.setSetup(proj.board ?? examples().find(e => e.id === proj.from)?.board ?? DEFAULT_SETUP);
+  const exBoard = examples().find(e => e.id === proj.from)?.board;
+  board!.setSetup({ ...(proj.board ?? exBoard ?? DEFAULT_SETUP), mode: proj.board?.mode ?? exBoard?.mode ?? board!.mode });
   openFile(BOARD_TAB);
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
   setBusy(true, tr('⚡ 燒錄到虛擬板…', '⚡ Flashing the virtual board…'));
   try {
-    const info = await board!.flash(proj.files.filter(f => f.name.endsWith('.veryl')), top, pcfOf(proj));
-    $('sbTest').textContent = tr(`⚡ ${info.top} 已燒錄到虛擬板`, `⚡ ${info.top} flashed to the virtual board`);
+    // a C program: compile it; when only the program changed, swap it in (no synthesis, no place and route)
+    let program: string | undefined;
+    if (cFile()) {
+      const r = await compileC(await getBoardCore());
+      if (!r.compiled) {
+        problems = [...cProblems(r), ...problems.filter(p => p.from === 'run')];
+        $('sbTest').textContent = tr('✗ C 程式有錯誤', '✗ The C program has errors');
+        panel('problems');
+        setBusy(false);
+        renderProblems();
+        return;
+      }
+      program = r.bin;
+    }
+    const files = proj.files.filter(f => f.name.endsWith('.veryl'));
+    const hw = JSON.stringify([files, top, pcfOf(proj) ?? '', board!.mode]);
+    if (program && hw === boardHw && board!.loaded?.program_mem) {
+      await board!.program(program);
+      $('sbTest').textContent = tr(`⚡ 新程式（${cprog!.size} 位元組）已放進虛擬板的 block RAM`, `⚡ The new program (${cprog!.size} bytes) is in the board's block RAM`);
+      setBusy(false);
+      return;
+    }
+    const info = await board!.flash(files, top, pcfOf(proj), program);
+    boardHw = hw;
+    $('sbTest').textContent = program
+      ? tr(`⚡ ${info.top} 和 C 程式（${cprog!.size} 位元組）已燒錄到虛擬板`, `⚡ ${info.top} and the C program (${cprog!.size} bytes) flashed to the virtual board`)
+      : tr(`⚡ ${info.top} 已燒錄到虛擬板`, `⚡ ${info.top} flashed to the virtual board`);
     problems = problems.filter(p => p.from !== 'run');
     for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
+    if (program && !info.program_mem) problems.push({ msg: tr(`虛擬板：${info.top} 沒有程式記憶體（RvSoc 的 RvMem），C 程式沒有放進去`, `Virtual board: ${info.top} has no program memory (RvSoc's RvMem): the C program is not in it`), severity: 'warning', from: 'run' });
   } catch (e) {
     problems = problems.filter(p => p.from !== 'run');
     problems.push(...parseErrors(String((e as Error).message ?? e), 'run'));
@@ -878,6 +974,8 @@ function commands(): Cmd[] {
     ...[...flow(false).slice(3), ...flow(true).slice(3), ...flow(false).slice(0, 3)].map(([k, l]) => ({ label: `${tr('流程：', 'Flow: ')}${l}`, run: () => runSynth(k) })),
     { label: tr('流程：⇄ FPGA vs ASIC 比較', 'Flow: ⇄ FPGA vs ASIC'), run: () => runSynth('cmp') },
     { label: tr('⚡ 燒錄到虛擬板', '⚡ Flash to the virtual board'), run: flashBoard },
+    { label: tr('C：檢視組合語言', 'C: view the assembly'), run: () => openFile(ASM_TAB) },
+    { label: tr('C：在指令集模擬器上執行（輸出到「輸出」面板）', 'C: run on the instruction-set simulator (Output panel)'), run: runC },
     { label: tr('新增檔案', 'New file'), run: newFile },
     { label: tr('新專案', 'New project'), run: newProject },
     { label: tr('匯入 .veryl 檔', 'Import .veryl files'), run: () => $<HTMLInputElement>('importIn').click() },
@@ -955,7 +1053,7 @@ function wire(): void {
   ed = new CodeEditor($('editorHost'));
   ed.onChange = text => {
     const f = file(proj.active ?? '');
-    if (!f) return;
+    if (!f || ed.readOnly) return;
     f.src = text;
     // the file's problems are stale now: the check finds syntax errors again, the next run the others
     problems = problems.filter(p => p.file !== f.name);

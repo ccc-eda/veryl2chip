@@ -14,6 +14,7 @@ pub mod netsim;
 pub mod output;
 pub mod pnr;
 pub mod power;
+pub mod rv;
 pub mod value;
 
 #[cfg(test)]

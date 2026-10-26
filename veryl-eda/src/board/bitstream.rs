@@ -251,6 +251,7 @@ pub fn decode(chip: &Chip, cfg: &Config) -> R<(Design, Report)> {
             mask: w16(bus("MASK", 16, &mut d, &mut pin)),
             write_mode: cb(0) | cb(1) << 1, read_mode: cb(2) | cb(3) << 1,
             init: cfg.ram.get(&(x, y)).cloned().unwrap_or_else(|| vec![0; 256]),
+            slot: None, tile: Some((x, y)),
         };
         for i in 0..16 { if let Some(n) = rw(&format!("RDATA_{}", i)) { drive(n, format!("RAM {},{}", x, y), &mut uf, &mut driven, &mut rep); } }
         d.rams.push(ram);

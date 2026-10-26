@@ -10,7 +10,11 @@
     .text
     .globl _start
 _start:
+#if DATA > 0 && DATA < 0x800
+    addi  x31, x0, DATA           # a small base (RvSoc's testbench memory is 1 KB)
+#else
     lui   x31, %hi(DATA)
+#endif
     # ---------- U-type: lui / auipc ----------
     lui   x1, 0x12345
     addi  x1, x1, 0x678          # x1 = 0x12345678

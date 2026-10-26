@@ -41,6 +41,9 @@ pub struct Ram {
     pub wclk: u32, pub wclke: u32, pub we: u32, pub waddr: [u32; 11], pub wdata: [u32; 16], pub mask: [u32; 16],
     pub read_mode: usize, pub write_mode: usize,
     pub init: Vec<u16>,
+    /// which memory block it holds (`bram::SLOT`, from a netlist) / where it is (from a bitstream)
+    pub slot: Option<String>,
+    pub tile: Option<(i32, i32)>,
 }
 
 /// what the engine simulates
@@ -119,6 +122,7 @@ impl Design {
                         wclk: net(p("WCLK"), &mut d), wclke: net(c.port("WCLKE").unwrap_or(Bit::C1), &mut d), we: net(p("WE"), &mut d),
                         waddr: a(bus("WADDR", 11, &mut d, &mut net)), wdata: w(bus("WDATA", 16, &mut d, &mut net)), mask: w(bus("MASK", 16, &mut d, &mut net)),
                         read_mode: mode("READ_MODE"), write_mode: mode("WRITE_MODE"), init,
+                        slot: c.params.iter().find(|x| x.0 == crate::bram::SLOT).map(|x| x.1.clone()), tile: None,
                     };
                     d.rams.push(ram);
                 }
@@ -362,6 +366,8 @@ impl Engine {
         }
     }
 
+    /// the current contents of RAM `i` (256 × 16 bits)
+    pub fn ram(&self, i: usize) -> &[u16] { &self.mem[i] }
     pub fn input(&self, name: &str) -> Option<u32> { self.d.inputs.iter().find(|x| x.0 == name).map(|x| x.1) }
     pub fn output(&self, name: &str) -> Option<u32> { self.d.outputs.iter().find(|x| x.0 == name).map(|x| x.1) }
 }
@@ -388,6 +394,24 @@ pub struct Board {
     pub uart: Option<periph::Uart>,
     pub segs: Vec<periph::Seg>,
     pub vga: Option<periph::Vga>,
+    /// the CPU as an instruction-set simulator instead of gates (see `Board::cpu`)
+    pub cpu: Option<Box<Cpu>>,
+}
+
+/// RvSoc (examples/src/rvsoc.veryl) with its CPU as an instruction-set simulator: the same
+/// memory map and cycle counts, fast enough for real time. Pins from the pcf: o_led[k] (the LED
+/// register), i_btn[k] / i_sw[k] (the buttons register), i_rst (BTN_N), the serial port (o_tx / i_rx).
+pub struct Cpu {
+    pub iss: crate::rv::iss::Iss,
+    /// (pin_out index, LED register bit)
+    led: Vec<(usize, u32)>,
+    /// (input net, buttons register bit)
+    ins: Vec<(u32, u32)>,
+    rst: Option<u32>,
+    next_rx: u64,
+    /// the CPU cycle up to which the outputs are accounted (an instruction can run past a window)
+    acct: u64,
+    pub error: Option<String>,
 }
 
 impl Board {
@@ -415,13 +439,153 @@ impl Board {
         if clk.is_none() && (!d.ffs.is_empty() || !d.rams.is_empty()) { warnings.push(format!("nothing is connected to the clock pin {}", clock_pin)); }
         let eng = Engine::new(d)?;
         let n = pin_out.len();
-        Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings, prev: vec![0; n], edges: vec![0; n], uart: None, segs: vec![], vga: None })
+        Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings, prev: vec![0; n], edges: vec![0; n], uart: None, segs: vec![], vga: None, cpu: None })
+    }
+
+    /// RvSoc's pins (o_led[8], o_tx, i_btn[3], i_sw[8], i_rx, i_rst, i_clk) on the board with
+    /// the CPU as an instruction-set simulator running `program` in `mem` bytes of RAM
+    pub fn cpu(program: &[u8], mem: usize, pcf: &str, clock_pin: u32) -> R<Board> {
+        if !mem.is_power_of_two() || program.len() > mem { return Err(format!("the program ({} bytes) does not fit {} bytes of RAM", program.len(), mem)); }
+        let mut d = Design::default();
+        let net = |d: &mut Design| { d.nets += 1; d.nets as u32 - 1 };
+        d.nets = 2;
+        let mut ins: Vec<(String, u32)> = vec![];
+        for name in ["i_clk", "i_rst", "i_rx"].iter().map(|s| s.to_string()).chain((0..3).map(|k| format!("i_btn[{}]", k))).chain((0..8).map(|k| format!("i_sw[{}]", k))) {
+            let n = net(&mut d);
+            ins.push((name, n));
+        }
+        let mut outs: Vec<(String, u32)> = vec![];
+        for name in (0..8).map(|k| format!("o_led[{}]", k)).chain(std::iter::once("o_tx".to_string())) {
+            let n = net(&mut d);
+            outs.push((name, n));
+        }
+        let map = crate::pnr::parse_pcf(pcf);
+        d.inputs = ins.into_iter().filter(|(n, _)| map.contains_key(n)).collect();
+        d.outputs = outs.into_iter().filter(|(n, _)| map.contains_key(n)).collect();
+        let mut b = Board::new(d, pcf, clock_pin)?;
+        let mut iss = crate::rv::iss::Iss::new(program, mem);
+        let led = b.pin_out.iter().enumerate().filter_map(|(i, p)| {
+            let name = b.eng.d.outputs.iter().find(|o| o.1 == p.1)?.0.clone();
+            Some((i, name.strip_prefix("o_led[")?.strip_suffix(']')?.parse().ok()?))
+        }).collect();
+        let inputs = b.eng.d.inputs.clone();
+        let input = |n: &str| inputs.iter().find(|x| x.0 == n).map(|x| x.1);
+        let ins = (0..3).filter_map(|k| input(&format!("i_btn[{}]", k)).map(|n| (n, k))).chain((0..8).filter_map(|k| input(&format!("i_sw[{}]", k)).map(|n| (n, 8 + k)))).collect();
+        let rst = input("i_rst");
+        // the reset button is active low: released = 1 (the board drives its idle level)
+        if let Some(r) = rst { b.eng.v[r as usize] = 1; }
+        if let Some(rx) = input("i_rx") { b.eng.v[rx as usize] = 1; }
+        iss.tx_cycles = 0;
+        let acct = iss.cycles;
+        b.cpu = Some(Box::new(Cpu { iss, led, ins, rst, next_rx: 0, acct, error: None }));
+        Ok(b)
+    }
+
+    /// a new program in the CPU's memory (cpu boards), from reset
+    pub fn load_program(&mut self, program: &[u8]) -> R<()> {
+        let c = self.cpu.as_mut().ok_or("not a CPU board")?;
+        let mem = c.iss.mem.len();
+        if program.len() > mem { return Err(format!("the program ({} bytes) does not fit {} bytes of RAM", program.len(), mem)); }
+        let tx = c.iss.tx_cycles;
+        c.iss = crate::rv::iss::Iss::new(program, mem);
+        c.iss.tx_cycles = tx;
+        c.acct = c.iss.cycles;
+        c.error = None;
+        Ok(())
+    }
+
+    /// `n` cycles of a CPU board: instruction by instruction; outputs held for the instruction's cycles
+    fn run_cpu(&mut self, n: u64) {
+        let c = self.cpu.as_mut().unwrap();
+        if let Some(u) = self.uart.as_ref() { c.iss.tx_cycles = (u.cpb * 10.0).round() as u64; }
+        let mut left = n;
+        // the rest of an instruction that ran past the last window
+        if c.iss.cycles > c.acct {
+            let d = (c.iss.cycles - c.acct).min(left);
+            Self::account(&mut self.pin_out, &mut self.prev, &mut self.edges, &mut self.eng.v, &mut self.segs, &c.led, c.iss.led, d);
+            c.acct += d;
+            left -= d;
+        }
+        while left > 0 {
+            if c.rst.is_some_and(|r| self.eng.v[r as usize] == 0) {
+                // held in reset
+                c.iss.reset();
+                c.acct = c.iss.cycles;
+                Self::account(&mut self.pin_out, &mut self.prev, &mut self.edges, &mut self.eng.v, &mut self.segs, &c.led, 0, left);
+                break;
+            }
+            c.iss.btn = c.ins.iter().fold(0, |a, (net, bit)| a | (self.eng.v[*net as usize] as u32) << bit);
+            if let Some(u) = self.uart.as_mut() {
+                if c.iss.cycles >= c.next_rx && c.iss.rx.is_empty() {
+                    if let Some(byte) = u.queue.pop_front() { c.iss.rx.push_back(byte); c.next_rx = c.iss.cycles + (u.cpb * 10.0) as u64; }
+                }
+            }
+            let c0 = c.iss.cycles;
+            if c.error.is_none() {
+                if let Err(e) = c.iss.step() { c.error = Some(e); }
+            }
+            if c.error.is_some() { c.iss.cycles += 2; }
+            let d = (c.iss.cycles - c0).min(left);
+            Self::account(&mut self.pin_out, &mut self.prev, &mut self.edges, &mut self.eng.v, &mut self.segs, &c.led, c.iss.led, d);
+            c.acct = c0 + d;
+            left -= d;
+            if !c.iss.tx.is_empty() {
+                let t = std::mem::take(&mut c.iss.tx);
+                if let Some(u) = self.uart.as_mut() { u.received.extend(t); }
+            }
+        }
+        self.cycle += n;
+        self.window += n;
+    }
+
+    /// outputs (the LED register) for `d` cycles: duty, edges, seven-segment lighting
+    fn account(pin_out: &mut [(u32, u32, u64)], prev: &mut [u8], edges: &mut [u64], v: &mut [u8], segs: &mut [periph::Seg], led: &[(usize, u32)], reg: u32, d: u64) {
+        for &(k, bit) in led {
+            let x = ((reg >> bit) & 1) as u8;
+            let p = &mut pin_out[k];
+            v[p.1 as usize] = x;
+            p.2 += x as u64 * d;
+            edges[k] += (x != prev[k]) as u64;
+            prev[k] = x;
+        }
+        for s in segs.iter_mut() {
+            for (dg, (sel, lvl)) in s.sels.iter().enumerate() {
+                if sel.map(|n| (v[n as usize] != 0) == *lvl).unwrap_or(true) {
+                    for (k, seg) in s.segs.iter().enumerate() {
+                        if let Some(n) = seg { if (v[*n as usize] != 0) == s.on { s.lit[dg][k] += d; } }
+                    }
+                }
+            }
+        }
     }
 
     /// drive an input pin (buttons, switches); pins the design does not use are ignored
+    /// The words of memory `name` as they are now: its blocks are found by their slot
+    /// (a design from a netlist) or by their tile in `map` (from a bitstream, `pnr::Output::ram_map`)
+    pub fn mem_words(&self, name: &str, map: &[crate::pnr::RamPos]) -> Vec<u64> {
+        let mut words: Vec<u64> = vec![];
+        for (i, r) in self.eng.d.rams.iter().enumerate() {
+            let slot = r.slot.clone().or_else(|| map.iter().find(|p| Some((p.x, p.y)) == r.tile).map(|p| p.slot.clone()));
+            let Some((m, k)) = slot.as_deref().and_then(|s| s.rsplit_once(':')) else { continue };
+            let Ok(k) = k.parse::<usize>() else { continue };
+            if m != name { continue; }
+            let (mode, ram) = (r.read_mode, self.eng.ram(i));
+            let bw = 16 >> mode;
+            if words.len() < 256 << mode { words.resize(256 << mode, 0); }
+            for (a, w) in words.iter_mut().enumerate().take(256 << mode) {
+                let lane = (a >> 8) & ((1 << mode) - 1);
+                for d in 0..bw {
+                    if (ram[a & 0xff] >> ((d << mode) | lane)) & 1 == 1 && k * bw + d < 64 { *w |= 1 << (k * bw + d); }
+                }
+            }
+        }
+        words
+    }
+
     pub fn set_pin(&mut self, pin: u32, val: bool) {
         if let Some(n) = self.pin_in.get(&pin).copied() {
             if Some(n) == self.clk { return; }
+            if self.cpu.is_some() { self.eng.v[n as usize] = val as u8; return; }
             self.eng.set(n, val);
             self.eng.propagate();
         }
@@ -457,6 +621,7 @@ impl Board {
     /// `n` board clock cycles: the serial line into the FPGA, rising edge,
     /// outputs and peripherals sampled, falling edge
     pub fn run(&mut self, n: u64) {
+        if self.cpu.is_some() { self.run_cpu(n); return; }
         let periph = self.uart.is_some() || !self.segs.is_empty() || self.vga.is_some();
         for i in 0..n {
             if let Some(u) = self.uart.as_mut() {

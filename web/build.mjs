@@ -31,11 +31,17 @@ console.log(`wasm.js      ${(wasm.length / 1e6).toFixed(1)} MB wasm`);
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
 // English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
-const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 其他: 'Other' };
+const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 其他: 'Other' };
 const EN = {
   lab_gates: { title_en: 'Breadboard lab: logic gates', note_en: 'two switches (PMOD1B, each with a pull-down) → four LEDs for AND, OR, XOR, NOT (PMOD1A, each with a series resistor); the breadboard comes wired' },
   lab_counter: { title_en: 'Lab: one press, plus one', note_en: 'each BTN1 press adds one (synchronizer + rising edge); the 8-bit count on the LED module in PMOD1A; BTN2 clears' },
   lab_traffic: { title_en: 'Lab: traffic-light state machine', note_en: 'green 5 s → yellow 1 s → red 4 s; pressing BTN1 (pedestrian button) during green leaves it 1 more second; three LEDs on the breadboard (PMOD1A pins 1-3, each with a resistor)' },
+  c_hello: { title_en: 'C: Hello (serial port, LEDs)', note_en: 'a C program on the RISC-V SoC you built in Veryl: ⚡ Virtual board compiles it into the block RAM; prints on the USB terminal, counts on the LEDs, echoes in upper case' },
+  c_knight: { title_en: 'C: running light', note_en: 'the tutorial\'s Knight Rider in software; BTN1 faster, BTN2 slower (rising edges detected in C)' },
+  c_guess: { title_en: 'C: guess the number', note_en: 'a game on the USB terminal: read_line, atoi, rand seeded by the time you take to press Enter' },
+  c_sevenseg: { title_en: 'C: seven-segment display', note_en: '00-99 on the 7-segment module (PMOD1A), multiplexed in software; BTN1 clears' },
+  c_music: { title_en: 'C: music on the buzzer', note_en: 'square waves on PMOD1A pin 1 (the buzzer module): Twinkle, Twinkle' },
+  c_switches: { title_en: 'C: switches', note_en: 'the 8 switches (PMOD1B) on the 8 LEDs (PMOD1A) and on the terminal in binary / hex' },
   tut_blinky: { title_en: 'Lesson 1: Blinky', note_en: 'tutorial/README.tw.md lesson 1: a counter blinks the LEDs; iCEBreaker pins (onboard + break-off LEDs)' },
   tut_uart: { title_en: 'Lesson 3: UART echo', note_en: 'tutorial lesson 3: talk to the computer over the USB serial port (pins 9 / 6, 115200 baud): greets with Hi!, echoes with the case swapped' },
   sevenseg: { title_en: 'Seven-segment counter 00-99', note_en: 'two multiplexed digits on PMOD1A (the virtual 7-segment module); BTN1 clears' },
@@ -73,6 +79,20 @@ const EX = [
     note: 'BTN1 每按一下加一（同步器 + 抓上升緣），8 位元計數顯示在 PMOD1A 的 LED 模組；BTN2 歸零', board: { uart: false, baud: 115200, pmod1a: 'led8', pmod1b: '' } },
   { id: 'lab_traffic', group: '實驗', title: '實驗：紅綠燈狀態機', files: ['examples/src/traffic.veryl'], synth: 'TrafficLight', pcf: 'examples/traffic.pcf',
     note: '綠 5 秒 → 黃 1 秒 → 紅 4 秒；綠燈時按 BTN1（行人按鈕）綠燈只再亮 1 秒；三顆 LED 在麵包板上（PMOD1A 腳 1–3，各串電阻）', board: {"uart": false, "baud": 115200, "pmod1a": "", "pmod1b": "", "breadboard": true, "bb": [{"id": 1, "kind": "wire", "a": "gnd", "b": "r:top-:1", "color": "#3e63dd"}, {"id": 3, "kind": "wire", "a": "p:4", "b": "h:2:a", "color": "#f76b15"}, {"id": 4, "kind": "led", "a": "h:2:c", "b": "h:3:c", "color": "#ff3b30"}, {"id": 5, "kind": "res", "a": "h:3:e", "b": "r:top-:3"}, {"id": 7, "kind": "wire", "a": "p:2", "b": "h:6:a", "color": "#f76b15"}, {"id": 8, "kind": "led", "a": "h:6:c", "b": "h:7:c", "color": "#ffcc00"}, {"id": 9, "kind": "res", "a": "h:7:e", "b": "r:top-:7"}, {"id": 11, "kind": "wire", "a": "p:47", "b": "h:10:a", "color": "#f76b15"}, {"id": 12, "kind": "led", "a": "h:10:c", "b": "h:11:c", "color": "#34c759"}, {"id": 13, "kind": "res", "a": "h:11:e", "b": "r:top-:11"}]} },
+  ...[
+    ['c_hello', 'hello', 'C：Hello（序列埠、LED）', '在你用 Veryl 做的 RISC-V SoC 上跑 C 程式：⚡ 虛擬板會編譯它並放進 block RAM；在 USB 終端機打招呼、LED 計數、把收到的字轉成大寫送回', { uart: true, pmod1a: 'led8', pmod1b: '' }],
+    ['c_knight', 'knight', 'C：跑馬燈', '教學第 2 課的跑馬燈改用軟體做；BTN1 加快、BTN2 變慢（在 C 裡偵測上升緣）', { uart: false, pmod1a: 'led8', pmod1b: '' }],
+    ['c_guess', 'guess', 'C：猜數字', '在 USB 終端機上玩的遊戲：read_line、atoi，用按 Enter 花的時間當亂數種子', { uart: true, pmod1a: 'led8', pmod1b: '' }],
+    ['c_sevenseg', 'sevenseg', 'C：七段顯示器', '00–99 顯示在七段模組（PMOD1A），用軟體多工掃描；BTN1 歸零', { uart: false, pmod1a: 'seg7', pmod1b: '' }],
+    ['c_music', 'music', 'C：蜂鳴器音樂', 'PMOD1A 腳 1 的方波（蜂鳴器模組）：小星星', { uart: true, pmod1a: 'buzzer', pmod1b: '' }],
+    ['c_switches', 'switches', 'C：開關', 'PMOD1B 的 8 個開關顯示在 PMOD1A 的 8 顆 LED，並在終端機印出二進位 / 十六進位', { uart: true, pmod1a: 'led8', pmod1b: 'sw8' }],
+  ].map(([id, f, title, note, b], i) => ({
+    id, group: 'C 程式', title, note, synth: 'RvBoard', pcf: 'examples/rvsoc.pcf', board: { baud: 115200, mode: 'cpu', ...b },
+    files: ['examples/c/' + f + '.c', 'examples/src/rvsoc.veryl', 'examples/src/rv32i.veryl', 'examples/src/sync_ram.veryl', 'examples/src/uart.veryl', 'examples/src/rvsoc_rom.veryl', 'examples/src/rv32i_rom.veryl'],
+    // the C examples share one SoC: the hardware checks of npm test run on the first
+    ...(i ? { same_hw: 'c_hello' } : {}),
+    asic: false,
+  })),
   { id: 'adder', group: '基礎', title: 'Adder 加法器', files: ['examples/src/adder.veryl'], synth: 'Adder' },
   { id: 'max3', group: '基礎', title: 'Max3 function', files: ['examples/src/max3.veryl'], synth: 'Max3' },
   { id: 'alu_pkg', group: '基礎', title: 'AluUnit package + enum', files: ['examples/src/alu_pkg.veryl'], synth: 'AluUnit' },

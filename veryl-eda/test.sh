@@ -30,7 +30,7 @@ soc:ProgRom:comb soc:RiscvSoc:bmc80 rv32i_rom:RiscvTestRom:comb
 sync_ram:SyncRam:bmc4 bram_tests:Bram2048x2:bmc4 bram_tests:BramMix:bmc12
 lang:Div:comb lang:HsTop:bmc24 lang:Wide:comb
 fifo:Fifo:bmc6 uart:UartLoop:bmc24 vga:VgaTiming:bmc8 vga:VgaDemo:bmc8 sevenseg:SevenSeg:bmc8 gates:Gates:comb
-button_counter:ButtonCounter:bmc8 traffic:TrafficLight:bmc8"
+button_counter:ButtonCounter:bmc8 traffic:TrafficLight:bmc8 rvsoc_small:RvSocSmall:bmc6"
 # designs whose iCE40 netlist (with SB_RAM40_4K) is also proven equivalent, using yosys' cell models
 FPGA_EQ="SyncRam Bram2048x2 BramMix Fifo"
 src() { if [ -f "$EX/src/$1.veryl" ]; then echo "$EX/src/$1.veryl"; else echo "$ROOT/examples/$1.veryl"; fi; }
@@ -41,6 +41,7 @@ for d in $DESIGNS; do
     files="$(src "$f")"
     [ "$f" = soc ] && files="$EX/src/rv32i.veryl $files"
     [ "$f" = bram_tests ] && files="$EX/src/sync_ram.veryl $files"
+    [ "$f" = rvsoc_small ] && files="$EX/src/rv32i.veryl $EX/src/sync_ram.veryl $EX/src/uart.veryl $EX/src/rvsoc.veryl $files"
     "$BIN" --top "$m" -o "$OUT/$m.json" --verilog "$OUT/$m.v" $files | grep -E "^===|cells:" | tr '\n' ' '
     "$YOSYS" -q -p "read_json $OUT/$m.json; check -assert" && printf "| yosys read_json ok | "
     "$BIN" --asic --top "$m" --verilog "$OUT/${m}_asic.v" $files | grep -E "^timing"
@@ -50,7 +51,8 @@ done
 echo "== gate-level simulation: the RTL testbenches on the synthesized netlists"
 # top:files (the module replaced by its netlist; its file's #[test] modules run)
 GATESIM="Adder:adder Max3:max3 AluUnit:alu_pkg GrayConv:gen_rev Seq101:seq101 PktReg:pkt_reg Ram:ram SyncRam:sync_ram
-Top:features BramMix:sync_ram+bram_tests HsTop:lang RiscvCore:rv32i+rv32i_rom Fifo:fifo UartLoop:uart VgaTiming:vga SevenSeg:sevenseg Gates:gates ButtonCounter:button_counter TrafficLight:traffic"
+Top:features BramMix:sync_ram+bram_tests HsTop:lang RiscvCore:rv32i+rv32i_rom Fifo:fifo UartLoop:uart VgaTiming:vga SevenSeg:sevenseg Gates:gates ButtonCounter:button_counter TrafficLight:traffic
+RvSoc:rv32i+rv32i_rom+sync_ram+uart+rvsoc_rom+rvsoc"
 for d in $GATESIM; do
     IFS=: read -r m f <<< "$d"
     files=""
@@ -96,6 +98,7 @@ for d in $DESIGNS; do
     gold="$OUT/gold/target/$f.sv"
     [ "$f" = soc ] && gold="$OUT/gold/target/rv32i.sv $gold"
     [ "$f" = bram_tests ] && gold="$OUT/gold/target/sync_ram.sv $gold"
+    [ "$f" = rvsoc_small ] && gold="$OUT/gold/target/rv32i.sv $OUT/gold/target/sync_ram.sv $OUT/gold/target/uart.sv $OUT/gold/target/rvsoc.sv $gold"
     cat > "$OUT/eq_$m.ys" <<EOF
 read_slang $gold --top examples_$m
 proc; flatten; memory; opt_clean; async2sync

@@ -668,6 +668,18 @@ fn board_speed() {
         println!("board speed: {} ({} LUTs): {:.2} M cycles/s = {:.1}% of 12 MHz, {:.1} evals/cycle", top, luts, n as f64 / s / 1e6, n as f64 / s / 12e6 * 100.0, b.eng.evals as f64 / n as f64);
         assert!(b.cycle == n);
     }
+    // the multi-cycle SoC running a C program (a busy CPU)
+    let src = std::fs::read_to_string(format!("{}/../examples/c/hello.c", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let o = crate::rv::cc::compile("hello.c", &src, &Default::default()).unwrap();
+    let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
+    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &o.program.bytes).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
+    let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    let t0 = std::time::Instant::now();
+    let n = 200_000;
+    b.run(n);
+    let s = t0.elapsed().as_secs_f64();
+    println!("board speed: RvBoard + hello.c: {:.2} M cycles/s = {:.1}% of 12 MHz, {:.1} evals/cycle", n as f64 / s / 1e6, n as f64 / s / 12e6 * 100.0, b.eng.evals as f64 / n as f64);
 }
 
 /// the chip database, when one is installed (the bitstream tests skip without it)
@@ -910,4 +922,204 @@ fn board_vga() {
     }
     let rle = crate::board::periph::rle(px);
     assert!(rle.len() < px.len() / 10, "color bars compress: {} bytes", rle.len());
+}
+
+// ---- the multi-cycle RISC-V SoC with its program in block RAM (examples/src/rvsoc.veryl) ----
+
+const RVSOC: [&str; 4] = ["examples/src/rv32i.veryl", "examples/src/sync_ram.veryl", "examples/src/uart.veryl", "examples/src/rvsoc.veryl"];
+
+/// rv32i_test.S as built for TestRvSoc (data at 0x300): the program bytes and the expected (word, value) results
+fn rvsoc_test_program() -> (Vec<u8>, Vec<(usize, u64)>) {
+    let root = format!("{}/..", env!("CARGO_MANIFEST_DIR"));
+    let rom = std::fs::read_to_string(format!("{}/examples/src/rvsoc_rom.veryl", root)).unwrap();
+    let mut bytes = vec![];
+    for l in rom.lines() {
+        let Some((a, rest)) = l.trim().strip_prefix("10'h").and_then(|r| r.split_once(" : o_inst = 32'h")) else { continue };
+        let a = usize::from_str_radix(a, 16).unwrap();
+        let w = u32::from_str_radix(&rest[..8], 16).unwrap();
+        if bytes.len() < a + 4 { bytes.resize(a + 4, 0); }
+        bytes[a..a + 4].copy_from_slice(&w.to_le_bytes());
+    }
+    let tb = std::fs::read_to_string(format!("{}/examples/src/rvsoc.veryl", root)).unwrap();
+    let exp = tb.lines().filter_map(|l| {
+        let (_, r) = l.split_once("ld_addr = 8'd")?;
+        let (i, r) = r.split_once(';')?;
+        let (_, v) = r.split_once("ld_rdata == 32'h")?;
+        Some((i.parse().ok()?, u64::from_str_radix(&v[..8], 16).ok()?))
+    }).collect::<Vec<_>>();
+    assert_eq!(exp.len(), 41);
+    (bytes, exp)
+}
+
+/// the SoC's 32-bit words from its four byte lanes on a board
+fn rvsoc_words(b: &crate::board::Board, lanes: &[(String, Vec<u64>)], map: &[crate::pnr::RamPos]) -> Vec<u64> {
+    let l: Vec<Vec<u64>> = lanes.iter().map(|(m, _)| b.mem_words(m, map)).collect();
+    (0..l[0].len()).map(|i| (0..4).fold(0, |a, k| a | (l[k][i] & 0xff) << (8 * k))).collect()
+}
+
+/// RvBoard with rv32i_test.S in its block RAMs runs it on the virtual board: from the
+/// netlist, and from a bitstream placed and routed without the program and patched afterwards
+/// (the same bitstream as placing and routing the netlist with the program)
+#[test]
+fn rvsoc_program_on_board() {
+    let (bytes, exp) = rvsoc_test_program();
+    let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let empty = ice40_of(&RVSOC, "RvBoard", &[]);
+    let lanes = crate::bram::program_lanes(&crate::bram::mem_names(&empty), &bytes).unwrap();
+    assert_eq!(lanes.len(), 4);
+    let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
+    for (m, w) in &lanes { assert_eq!(crate::bram::set_mem_init(&mut nl, m, w), 4, "{}: 2048×8 = four 512×8 blocks", m); }
+    let check = |b: &mut crate::board::Board, map: &[crate::pnr::RamPos], what: &str| {
+        b.set_pin(10, false);
+        b.run(3);
+        b.set_pin(10, true);
+        b.run(2000);
+        let w = rvsoc_words(b, &lanes, map);
+        for (i, v) in &exp { assert_eq!(w[*i], *v, "{}: word {} (0x{:x})", what, i, i * 4); }
+    };
+    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    check(&mut b, &[], "netlist");
+    let Some(chip) = chip() else { eprintln!("no chipdb: bitstream part skipped"); return };
+    let o = pnr_of(&chip, &empty, &pcf);
+    let map = o.ram_map();
+    assert_eq!(map.len(), 20);
+    let mut asc = o.asc.clone();
+    for (m, w) in &lanes { let (a, n) = crate::pnr::patch_ram(&asc, &map, m, w).unwrap(); assert_eq!(n, 4); asc = a; }
+    assert!(asc == pnr_of(&chip, &nl, &pcf).asc, "patching the program equals placing and routing it");
+    let bin = crate::pnr::bitstream::asc_to_bin(&asc).unwrap();
+    let (dd, rep) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let mut b = crate::board::icebreaker::board_from_pins(dd).unwrap();
+    check(&mut b, &map, "bitstream");
+}
+
+// ---- the C compiler (src/rv): programs on the instruction-set simulator and on RvSoc ----
+
+/// a C test program (src/rv/tests) compiled and run on the ISS: its serial output
+fn cc_run(name: &str) -> (Vec<u8>, String, u64) {
+    let dir = format!("{}/src/rv/tests", env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(format!("{}/{}.c", dir, name)).unwrap();
+    let o = crate::rv::cc::compile(&format!("{}.c", name), &src, &Default::default()).unwrap_or_else(|e| panic!("{:?}", e));
+    let mut s = crate::rv::iss::Iss::new(&o.program.bytes, 8192);
+    assert!(s.run(20_000_000).unwrap(), "{} did not halt", name);
+    (o.program.bytes, String::from_utf8_lossy(&s.tx).to_string(), s.cycles)
+}
+
+/// each program prints what the host C compiler's build of it prints (the .out files,
+/// from `cc -funsigned-char -fwrapv`; RISC-V's char is unsigned)
+#[test]
+fn cc_programs() {
+    let dir = format!("{}/src/rv/tests", env!("CARGO_MANIFEST_DIR"));
+    let mut n = 0;
+    for f in std::fs::read_dir(&dir).unwrap() {
+        let p = f.unwrap().path();
+        if p.extension().map(|e| e == "c") != Some(true) { continue; }
+        let name = p.file_stem().unwrap().to_string_lossy().to_string();
+        let want = std::fs::read_to_string(p.with_extension("out")).unwrap();
+        let (_, got, _) = cc_run(&name);
+        assert_eq!(got.replace("\r\n", "\n"), want, "{}", name);
+        n += 1;
+    }
+    assert!(n >= 3);
+}
+
+/// compile errors point at the line
+#[test]
+fn cc_errors() {
+    let e = |src: &str| crate::rv::cc::compile("t.c", src, &Default::default()).err().unwrap_or_default();
+    let x = e("int main(void) {\n  int a;\n  b = 1;\n  return 0;\n}\n");
+    assert!(x.iter().any(|d| d.line == 3 && d.msg.contains("'b' is not declared")), "{:?}", x);
+    let x = e("int main(void) {\n  int *p;\n  p = 5;\n  foo(1);\n}\n");
+    assert!(x.iter().any(|d| d.line == 3 && d.msg.contains("cast")), "{:?}", x);
+    assert!(x.iter().any(|d| d.line == 4 && d.msg.contains("foo is not declared")), "{:?}", x);
+    let x = e("int f(int a) { return a; }\nint main(void) { return f(1, 2) }\n");
+    assert!(x.iter().any(|d| d.line == 2), "{:?}", x);
+    let x = e("int main(void) { struct s x; }\n");
+    assert!(!x.is_empty());
+}
+
+/// the assembler round trip: every RV32I instruction the compiler can emit, assembled and executed
+#[test]
+fn asm_and_iss() {
+    let p = crate::rv::asm::assemble(".text\n_start:\n li sp, 0x1000\n li a0, 0x12345678\n li a1, -5\n add a2, a0, a1\n la t0, val\n lw t1, 0(t0)\n sw a2, 4(t0)\n lbu t2, 3(t0)\n lb t3, 2(t0)\n call f\n j .\nf:\n addi a0, a0, 1\n ret\n .data\nval: .word 0x80ff0102, 0\n").unwrap();
+    let mut s = crate::rv::iss::Iss::new(&p.bytes, 8192);
+    assert!(s.run(100).unwrap());
+    let r = |n: &str| s.x[crate::rv::asm::reg(n).unwrap() as usize];
+    assert_eq!((r("a0"), r("a2"), r("t1"), r("t2"), r("t3")), (0x12345679, 0x12345673, 0x80ff0102, 0x80, 0xffffffff));
+    assert!(crate::rv::asm::assemble("addi a0, a0, 5000").is_err());
+}
+
+/// a compiled C program on the gate-level RvBoard (program in its block RAMs) on the virtual
+/// board prints over the USB serial port exactly what it prints on the ISS
+#[test]
+fn cc_on_rvsoc() {
+    let (bytes, want, cycles) = cc_run("pointers");
+    let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
+    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &bytes).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
+    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    b.attach_uart(9, 6, 104.0);
+    b.set_pin(10, false);
+    b.run(3);
+    b.set_pin(10, true);
+    // the serial port is slower than the ISS assumes: 10 bits × 104 cycles per character
+    b.run(cycles + want.len() as u64 * 1100 + 10_000);
+    let u = b.uart.as_ref().unwrap();
+    assert_eq!(String::from_utf8_lossy(&u.received), want);
+    assert_eq!(u.framing_errors, 0);
+}
+
+/// a C example (examples/c) compiled
+fn c_example(name: &str) -> Vec<u8> {
+    let src = std::fs::read_to_string(format!("{}/../examples/c/{}.c", env!("CARGO_MANIFEST_DIR"), name)).unwrap();
+    crate::rv::cc::compile(&format!("{}.c", name), &src, &Default::default()).unwrap().program.bytes
+}
+
+/// the CPU board (RvSoc's pins, the CPU as an instruction-set simulator): the serial port at
+/// its real speed, switches to LEDs, the reset button, the seven-segment display; and its speed
+#[test]
+fn cpu_board() {
+    let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut b = crate::board::Board::cpu(&c_example("hello"), 8192, &pcf, 35).unwrap();
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    b.attach_uart(9, 6, 104.0);
+    b.run(60_000);
+    let got = String::from_utf8_lossy(&b.uart.as_ref().unwrap().received).to_string();
+    // 1040 cycles per byte: about 57 bytes in 60000 cycles
+    assert!(got.starts_with("Hello from C") && got.len() > 40 && got.len() < 70, "{:?} ({} bytes)", got, got.len());
+    b.uart.as_mut().unwrap().queue.extend(b"ok!");
+    b.run(100_000);
+    assert!(String::from_utf8_lossy(&b.uart.as_ref().unwrap().received).ends_with("OK!"));
+    // the LEDs count every 200 ms
+    b.run(2_400_000 * 2);
+    let led = |b: &crate::board::Board| [4, 2, 47, 45, 3, 48, 46, 44].iter().enumerate().fold(0, |a, (i, p)| a | (b.pin(*p).unwrap() as u32) << i);
+    assert_eq!(led(&b), 2);
+    // switches -> LEDs; the reset button restarts the program
+    b.load_program(&c_example("switches")).unwrap();
+    for (i, p) in [43, 38, 34, 31, 42, 36, 32, 28].iter().enumerate() { b.set_pin(*p, i % 3 == 0); }
+    b.run(100_000);
+    assert_eq!(led(&b), 0b0100_1001);
+    b.set_pin(10, false);
+    b.run(1000);
+    assert_eq!(led(&b), 0);
+    b.set_pin(10, true);
+    b.run(100_000);
+    assert_eq!(led(&b), 0b0100_1001);
+    // seven-segment: 00 then counting; both digits lit about half the time
+    let mut b = crate::board::Board::cpu(&c_example("sevenseg"), 8192, &pcf, 35).unwrap();
+    b.attach_seg([Some(4), Some(2), Some(47), Some(45), Some(3), Some(48), Some(46), None], &[(44, false), (44, true)], true);
+    b.run(12_000_000 / 4 * 3 + 50_000);
+    b.take_segs(1);
+    b.take_duty();
+    b.run(100_000);
+    let w = b.window;
+    let s = b.take_segs(w);
+    let pattern = |d: &[f64; 8]| d[..7].iter().enumerate().fold(0u8, |a, (k, x)| a | ((*x > 0.2) as u8) << k);
+    assert_eq!((pattern(&s[0][0]), pattern(&s[0][1])), (0x4f, 0x3f), "3 and 0 after 0.75 s: {:?}", s);
+    // speed
+    let mut b = crate::board::Board::cpu(&c_example("knight"), 8192, &pcf, 35).unwrap();
+    let t0 = std::time::Instant::now();
+    b.run(12_000_000);
+    println!("CPU board: {:.1} x real time", 1.0 / t0.elapsed().as_secs_f64());
 }

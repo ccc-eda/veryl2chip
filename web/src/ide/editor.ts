@@ -2,7 +2,7 @@
 // line-number gutter, problem markers and the current line. The textarea
 // grows to the text, so one scroll container moves everything together.
 
-import { highlight } from './highlight';
+import { highlight, Lang } from './highlight';
 
 export interface Marker { line: number; col: number; msg: string; severity: 'error' | 'warning' }
 
@@ -21,6 +21,10 @@ export class CodeEditor {
   /** keyboard shortcuts the page handles (return true when handled) */
   onKey: (e: KeyboardEvent) => boolean = () => false;
   readonly lineHeight = 19;
+  /** the language of the text (highlighting) */
+  private _lang: Lang = 'veryl';
+  get lang(): Lang { return this._lang; }
+  set lang(l: Lang) { if (l !== this._lang) { this._lang = l; this.render(); } }
 
   constructor(host: HTMLElement) {
     host.classList.add('ed');
@@ -81,7 +85,7 @@ export class CodeEditor {
 
   private paint(): void {
     const text = this.ta.value;
-    const hl = highlight(text);
+    const hl = highlight(text, this._lang);
     const bad = new Map<number, Marker>();
     for (const m of this.markers) if (!bad.has(m.line) || m.severity === 'error') bad.set(m.line, m);
     this.pre.innerHTML = hl.map((h, i) => {

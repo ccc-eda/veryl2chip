@@ -34,5 +34,9 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M15 | 麵包板：零件（LED、電阻、按鈕、開關、導線）接在 PMOD 腳與 3V3 / GND 上，數位電路模型（強連接、經電阻的弱電位＝上拉 / 下拉、LED 亮度＝正極電位 ×（1 − 負極電位）），短路 / 缺限流電阻 / 輸入浮接警告；腳位檔變成專案檔 `pins.pcf` 與腳位表；實驗分享連結與 `.lab.json`；邏輯閘麵包板實驗 | 模型單元測試（npm test）、瀏覽器實測真值表、分享連結來回 |
 | M16 | 虛擬實驗課：講義 `tutorial/labs.tw.md`（8 個實驗，每個都有直接燒進虛擬板的連結 `ide.html#ex=…&board=1`、檢查點、動手改、思考題）；新實驗 `ButtonCounter`（上升緣）與 `TrafficLight`（狀態機，麵包板上三顆 LED） | veryl test / veryl-sim / 三種閘級模擬、npm test 在虛擬板上按按鈕檢查計數與紅綠燈、麵包板接線無警告、全面形式驗證 |
 | M16+ | 合成介面改成 VS Code 式：「⚙ 合成」按鈕換成標題列的後端（FPGA / ASIC）＋階段選單（最後一項是 FPGA vs ASIC 比較）；流程分頁只剩一行麵包屑＋圖示按鈕（ⓘ 說明浮框、連線、退火動畫、⬇ 下載選單、縮放），進度與錯誤在同一行；數字移到狀態列；拿掉側欄的合成流程 | 瀏覽器實測 FPGA / ASIC / 比較、下載選單、ⓘ；展示頁不變；npm test |
+| M17 | 多週期 RISC-V SoC `RvSoc`（`examples/src/rvsoc.veryl`）：暫存器檔（兩份同步讀取 RAM）與 8 KB 記憶體（四個位元組通道）在 block RAM，記憶體映射的 LED / 按鈕 / 開關 / UART / 計時器，載入埠；`RvBoard` 1844 LUT + 20 BRAM、Fmax 13.3 MHz | `TestRvSoc` 跑 rv32i_test.S（官方 veryl test、veryl-sim、三種閘級模擬）；`RvSocSmall` 形式等價 |
+| M18 | 程式放在 block RAM：`MEM_SLOT`、`bram::set_mem_init`、`--program`、`pnr::patch_ram`（只改寫 `.ram_data`）；wasm `board_program` 換程式不重新合成 | 改寫後的位元流 = 帶程式佈局繞線的位元流，在虛擬板上跑完 ISA 測試 |
+| M19 | C 編譯器（`src/rv/cc.rs`，C 子集 → RV32I 組合語言）、組譯器、指令集模擬器、執行期函式庫（printf…）；CLI `--cc`；IDE：`.c` 檔、C / 組合語言上色、即時錯誤、組合語言分頁、ISS 執行 | 測試程式與主機 C 編譯器輸出相同；C 程式在閘級 RvBoard 上的序列埠輸出與 ISS 相同 |
+| M20 | C 程式範例（Hello、跑馬燈、猜數字、七段、蜂鳴器、開關）、虛擬板的 CPU 模式（ISS 驅動同樣的腳位與周邊，即時速度）、講義第二部分 | npm test：所有 C 範例、網表 / 位元流 / CPU 三種模式的問候、回聲與換程式 |
 
 每個 M 完成就 commit。

@@ -3155,8 +3155,8 @@ target = { type = "directory", path = "target" }
         <button class="tb-btn" data-a="flash" title="${tr("\u5408\u6210\u76EE\u524D\u7684\u8A2D\u8A08\u4E26\u71D2\u9304\u5230\u865B\u64EC\u677F", "Synthesize the current design and flash it to the virtual board")}">${tr("\u26A1 \u71D2\u9304", "\u26A1 Flash")}</button>
         <button class="tb-btn" data-a="run" disabled>\u23F8</button>
         <button class="tb-btn" data-a="power" disabled title="${tr("\u91CD\u65B0\u4E0A\u96FB\uFF08\u5F9E\u982D\u958B\u59CB\uFF09", "Power cycle (start over)")}">\u27F2</button>
-        <select data-a="mode" title="${tr("\u71D2\u9304\u4EC0\u9EBC\uFF1A\u4F4D\u5143\u6D41\uFF1D\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u7684\u771F\u5BE6\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u6A21\u64EC\uFF09\uFF1B\u7DB2\u8868\uFF1D\u6620\u5C04\u5F8C\u7684\u7DB2\u8868\uFF08\u5FEB\uFF0C\u4E0D\u4F48\u5C40\u7E5E\u7DDA\uFF09", "What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route)")}">
-          <option value="bitstream">${tr("\u4F4D\u5143\u6D41\uFF08\u771F\u5BE6\uFF09", "bitstream (real)")}</option><option value="netlist">${tr("\u7DB2\u8868\uFF08\u5FEB\u901F\uFF09", "netlist (fast)")}</option></select>
+        <select data-a="mode" title="${tr("\u71D2\u9304\u4EC0\u9EBC\uFF1A\u4F4D\u5143\u6D41\uFF1D\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u7684\u771F\u5BE6\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u6A21\u64EC\uFF09\uFF1B\u7DB2\u8868\uFF1D\u6620\u5C04\u5F8C\u7684\u7DB2\u8868\uFF08\u5FEB\uFF0C\u4E0D\u4F48\u5C40\u7E5E\u7DDA\uFF09\uFF1BCPU\uFF1DRISC-V SoC \u7684 C \u7A0B\u5F0F\uFF0CCPU \u7528\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\u8DD1\uFF08\u5373\u6642\u901F\u5EA6\uFF0C\u5468\u908A\u548C\u8173\u4F4D\u76F8\u540C\uFF09", "What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route); CPU = the RISC-V SoC's C program with the CPU as an instruction-set simulator (real time, same pins and peripherals)")}">
+          <option value="bitstream">${tr("\u4F4D\u5143\u6D41\uFF08\u771F\u5BE6\uFF09", "bitstream (real)")}</option><option value="netlist">${tr("\u7DB2\u8868\uFF08\u5FEB\u901F\uFF09", "netlist (fast)")}</option><option value="cpu">${tr("CPU\uFF08C \u7A0B\u5F0F\uFF0C\u5373\u6642\uFF09", "CPU (C program, real time)")}</option></select>
         <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u4EFB\u4F55 iCE40UP5K \u7684 .bin\uFF08\u4F8B\u5982 nextpnr + icepack \u505A\u7684\uFF1B\u4E5F\u53EF\u4EE5\u62D6\u653E\u5230\u677F\u5B50\u4E0A\uFF09", "Load any iCE40UP5K .bin (e.g. from nextpnr + icepack; or drop it on the board)")}">${tr("\u{1F4C2} .bin", "\u{1F4C2} .bin")}</button>
         <button class="tb-btn ghost" data-a="pins" disabled title="${tr("\u8173\u4F4D\u6307\u5B9A\uFF1A\u8A2D\u8A08\u7684\u6BCF\u500B\u57E0\u63A5\u5230\u677F\u5B50\u7684\u54EA\u652F\u8173\uFF08\u5BEB\u5165 pins.pcf\uFF09", "Pin assignment: which board pin each port uses (written to pins.pcf)")}">${tr("\u{1F4CC} \u8173\u4F4D", "\u{1F4CC} Pins")}</button>
         <button class="tb-btn ghost hidden" data-a="download" title="${tr("\u4E0B\u8F09\u9019\u500B\u4F4D\u5143\u6D41\uFF08iceprog \u53EF\u4EE5\u71D2\u9032\u771F\u5BE6\u7684 iCEBreaker\uFF09", "Download this bitstream (iceprog flashes it to a real iCEBreaker)")}">\u2B07 .bin</button>
@@ -3194,7 +3194,7 @@ target = { type = "directory", path = "target" }
       };
       this.q("[data-a=download]").onclick = () => this.download();
       this.q("[data-a=pins]").onclick = () => this.pinTable();
-      for (const k of ["uart", "baud", "pmod1a", "pmod1b", "breadboard"]) this.q(`[data-a=${k}]`).addEventListener("change", () => this.setupFromUi());
+      for (const k of ["uart", "baud", "pmod1a", "pmod1b", "breadboard", "mode"]) this.q(`[data-a=${k}]`).addEventListener("change", () => this.setupFromUi());
       this.bb = new Breadboard(this.q(".bb"));
       this.bb.onChange = (layout) => {
         if (layout) {
@@ -3256,6 +3256,7 @@ target = { type = "directory", path = "target" }
       this.q("[data-a=pmod1b]").value = this.setup.pmod1b;
       this.q("[data-a=pmod1b]").disabled = this.setup.pmod1a === "vga";
       this.q("[data-a=breadboard]").checked = !!this.setup.breadboard;
+      if (this.setup.mode) this.q("[data-a=mode]").value = this.setup.mode;
       this.q(".bb").classList.toggle("hidden", !this.setup.breadboard);
       this.bb.blocked = /* @__PURE__ */ new Set([...this.setup.pmod1a ? SLOT.pmod1a : [], ...this.setup.pmod1b || this.setup.pmod1a === "vga" ? SLOT.pmod1b : []]);
       this.bb.setParts(this.setup.bb ?? []);
@@ -3270,7 +3271,8 @@ target = { type = "directory", path = "target" }
         pmod1a: this.q("[data-a=pmod1a]").value,
         pmod1b: this.q("[data-a=pmod1b]").value,
         breadboard: this.q("[data-a=breadboard]").checked,
-        bb: this.bb.parts.map((p) => ({ ...p }))
+        bb: this.bb.parts.map((p) => ({ ...p })),
+        mode: this.mode
       };
       this.setSetup(s);
       this.onSetup(this.setup);
@@ -3389,24 +3391,37 @@ target = { type = "directory", path = "target" }
     get mode() {
       return this.q("[data-a=mode]").value;
     }
-    /** synthesize `top` and power the board up with it */
-    async flash(files, top, pcf) {
+    /** synthesize `top` and power the board up with it (and `program`, base64, in its program memory) */
+    async flash(files, top, pcf, program) {
       this.setRunning(false);
       const gen = ++this.gen;
       const core2 = await this.core();
       let info;
-      if (this.mode === "bitstream") {
+      if (this.mode === "cpu") {
+        if (!program) throw new Error(tr("CPU \u6A21\u5F0F\u8DD1\u7684\u662F C \u7A0B\u5F0F\uFF1A\u5C08\u6848\u88E1\u8981\u6709\u4E00\u500B .c \u6A94\uFF08\u8A2D\u8A08\u8981\u7528 RvSoc\uFF09", "The CPU mode runs a C program: the project needs a .c file (and the RvSoc design)"));
+        this.stat(tr("\u8F09\u5165 C \u7A0B\u5F0F\uFF08CPU \u7528\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\uFF09\u2026", "Loading the C program (the CPU as an instruction-set simulator)\u2026"));
+        info = await core2.call({ cmd: "board_load_cpu", program, pcf: pcf ?? null, top });
+      } else if (this.mode === "bitstream") {
         this.stat(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\u2026", "Loading the chip database\u2026"));
         await core2.chipdb();
         this.stat(tr("\u5408\u6210\u3001\u4F48\u5C40\u7E5E\u7DDA\u3001\u7522\u751F\u4F4D\u5143\u6D41\u4E26\u71D2\u9304\u2026", "Synthesis, place and route, bitstream, flashing\u2026"));
-        info = await core2.call({ cmd: "board_flash", files, top, pcf: pcf ?? null });
+        info = await core2.call({ cmd: "board_flash", files, top, pcf: pcf ?? null, program: program ?? null });
       } else {
         this.stat(tr("\u5408\u6210\u4E26\u71D2\u9304\u7DB2\u8868\u2026", "Synthesizing and flashing the netlist\u2026"));
-        info = await core2.call({ cmd: "board_load", files, top, pcf: pcf ?? null });
+        info = await core2.call({ cmd: "board_load", files, top, pcf: pcf ?? null, program: program ?? null });
       }
       if (gen !== this.gen) return info;
       this.start(info);
       return info;
+    }
+    /** a new program (base64) for the design on the board: no synthesis, no place and route */
+    async program(program) {
+      if (!this.info) throw new Error("no design on the board");
+      this.setRunning(false);
+      ++this.gen;
+      this.stat(tr("\u63DB\u7A0B\u5F0F\u2026", "Loading the program\u2026"));
+      const r = await (await this.core()).call({ cmd: "board_program", program });
+      this.start({ ...this.info, bin: r.bin ?? this.info.bin, program: r.bytes });
     }
     /** any iCE40UP5K bitstream from a file */
     async loadBin(f) {
@@ -3704,7 +3719,7 @@ ${lines.join("\n")}
     foot() {
       const i = this.info;
       const used = i.pins.filter((p) => p.input || p.output).map((p) => `${p.name}\u2194${p.input ?? p.output}`);
-      const what = i.mode === "netlist" ? `${tr("\u7DB2\u8868", "netlist")}\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\uFF08${tr("\u672A\u4F48\u5C40\u7E5E\u7DDA", "not placed and routed")}\uFF09` : `${i.mode === "bin" ? tr("\u4E0A\u50B3\u7684\u4F4D\u5143\u6D41", "uploaded bitstream") : tr("\u4F4D\u5143\u6D41", "bitstream")}\uFF1A${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}` + (i.fmax ? `\uFF0CF<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? " \u26A0" : ` \u2265 12 MHz \u2713`}` : "");
+      const what = i.mode === "cpu" ? tr(`CPU \u6A21\u5F0F\uFF1AC \u7A0B\u5F0F ${i.program ?? 0} \u4F4D\u5143\u7D44\uFF0CCPU \u7528\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\uFF08\u548C RvSoc \u4E00\u6A23\u7684\u8A18\u61B6\u9AD4\u6620\u5C04\u8207\u6642\u8108\u6578\uFF09\uFF0C\u5468\u908A\u8207\u8173\u4F4D\u7167 pins.pcf`, `CPU mode: a ${i.program ?? 0}-byte C program, the CPU as an instruction-set simulator (RvSoc's memory map and cycle counts), peripherals and pins from pins.pcf`) : i.mode === "netlist" ? `${tr("\u7DB2\u8868", "netlist")}\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\uFF08${tr("\u672A\u4F48\u5C40\u7E5E\u7DDA", "not placed and routed")}\uFF09` : `${i.mode === "bin" ? tr("\u4E0A\u50B3\u7684\u4F4D\u5143\u6D41", "uploaded bitstream") : tr("\u4F4D\u5143\u6D41", "bitstream")}\uFF1A${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}` + (i.fmax ? `\uFF0CF<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? " \u26A0" : ` \u2265 12 MHz \u2713`}` : "");
       this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.slice(0, 3).join("\uFF1B"))}${i.warnings.length > 3 ? tr(`\u2026\uFF08\u5171 ${i.warnings.length} \u689D\uFF0C\u898B\u300C\u554F\u984C\u300D\u9762\u677F\uFF09`, `\u2026 (${i.warnings.length} in all, see Problems)`) : ""}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
     }
     /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
@@ -3760,7 +3775,20 @@ ${lines.join("\n")}
   function esc3(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
-  function highlight(src) {
+  var C_KEYWORDS = new Set("if else while for do switch case default break continue return goto sizeof typedef struct union enum static extern const volatile register".split(" "));
+  var C_TYPES = new Set("void char short int long signed unsigned float double va_list".split(" "));
+  var C_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)|(^\s*#\s*\w+)|([A-Za-z_]\w*)/g;
+  var ASM_TOKEN = /(#.*|\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(-?0[xX][0-9a-fA-F]+|-?\d+)|(\.[A-Za-z_]\w*)|([A-Za-z_.$][\w.$]*:)|([A-Za-z_]\w*)/g;
+  var REGS = /^(x([12]?\d|3[01])|zero|ra|sp|gp|tp|fp|t[0-6]|s([0-9]|1[01])|a[0-7])$/;
+  function langOf(name) {
+    if (name.endsWith(".veryl")) return "veryl";
+    if (/\.[ch]$/.test(name)) return "c";
+    if (/\.(s|S|asm)$/.test(name)) return "asm";
+    return "text";
+  }
+  function highlight(src, lang = "veryl") {
+    if (lang === "text") return src.split("\n").map(esc3);
+    if (lang === "c" || lang === "asm") return highlightC(src, lang);
     const out = [];
     let inBlock = false;
     for (const line of src.split("\n")) {
@@ -3808,6 +3836,62 @@ ${lines.join("\n")}
     }
     return out;
   }
+  function highlightC(src, lang) {
+    const out = [];
+    let inBlock = false;
+    const re = lang === "c" ? C_TOKEN : ASM_TOKEN;
+    for (const line of src.split("\n")) {
+      let h = "";
+      let i = 0;
+      if (inBlock) {
+        const e = line.indexOf("*/");
+        if (e < 0) {
+          out.push(`<span class="t-com">${esc3(line)}</span>`);
+          continue;
+        }
+        h += `<span class="t-com">${esc3(line.slice(0, e + 2))}</span>`;
+        i = e + 2;
+        inBlock = false;
+      }
+      re.lastIndex = i;
+      let m;
+      let first = true;
+      while (m = re.exec(line)) {
+        h += esc3(line.slice(i, m.index));
+        const t = m[0];
+        if (m[1]) h += `<span class="t-com">${esc3(t)}</span>`;
+        else if (m[2]) {
+          const e = line.indexOf("*/", m.index + 2);
+          const end = e < 0 ? line.length : e + 2;
+          h += `<span class="t-com">${esc3(line.slice(m.index, end))}</span>`;
+          if (e < 0) inBlock = true;
+          re.lastIndex = end;
+          i = end;
+          if (inBlock) break;
+          continue;
+        } else if (m[3]) h += `<span class="t-str">${esc3(t)}</span>`;
+        else if (m[4]) h += `<span class="t-num">${esc3(t)}</span>`;
+        else if (lang === "c") {
+          if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
+          else if (C_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
+          else if (C_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
+          else if (/^[A-Z][A-Z0-9_]+$/.test(t)) h += `<span class="t-name">${t}</span>`;
+          else h += t;
+        } else {
+          if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
+          else if (m[6]) h += `<span class="t-name">${esc3(t)}</span>`;
+          else if (REGS.test(t)) h += `<span class="t-type">${t}</span>`;
+          else if (first) h += `<span class="t-kw">${t}</span>`;
+          else h += t;
+          if (m[7]) first = false;
+        }
+        i = re.lastIndex;
+      }
+      if (i < line.length) h += esc3(line.slice(i));
+      out.push(h);
+    }
+    return out;
+  }
 
   // src/ide/editor.ts
   var CodeEditor = class {
@@ -3828,6 +3912,8 @@ ${lines.join("\n")}
       /** keyboard shortcuts the page handles (return true when handled) */
       __publicField(this, "onKey", () => false);
       __publicField(this, "lineHeight", 19);
+      /** the language of the text (highlighting) */
+      __publicField(this, "_lang", "veryl");
       host.classList.add("ed");
       this.scroller = el("div", "ed-scroll");
       this.gutter = el("div", "ed-gutter");
@@ -3848,6 +3934,15 @@ ${lines.join("\n")}
       });
       for (const ev of ["keyup", "click", "select", "focus"]) this.ta.addEventListener(ev, () => this.cursor());
       this.ta.addEventListener("keydown", (e) => this.key(e));
+    }
+    get lang() {
+      return this._lang;
+    }
+    set lang(l) {
+      if (l !== this._lang) {
+        this._lang = l;
+        this.render();
+      }
     }
     get value() {
       return this.ta.value;
@@ -3893,7 +3988,7 @@ ${lines.join("\n")}
     }
     paint() {
       const text = this.ta.value;
-      const hl = highlight(text);
+      const hl = highlight(text, this._lang);
       const bad = /* @__PURE__ */ new Map();
       for (const m of this.markers) if (!bad.has(m.line) || m.severity === "error") bad.set(m.line, m);
       this.pre.innerHTML = hl.map((h, i) => {
@@ -4059,8 +4154,9 @@ ${lines.join("\n")}
   var WELCOME = "\u2605welcome";
   var BOARD_TAB = "\u26A1board";
   var TUTORIAL = "https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md";
-  var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n === BOARD_TAB ? tr("\u26A1 \u865B\u64EC iCEBreaker", "\u26A1 Virtual iCEBreaker") : n;
-  var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB;
+  var ASM_TAB = "\u2699asm";
+  var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n === BOARD_TAB ? tr("\u26A1 \u865B\u64EC iCEBreaker", "\u26A1 Virtual iCEBreaker") : n === ASM_TAB ? tr("\u7D44\u5408\u8A9E\u8A00", "Assembly") : n;
+  var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === ASM_TAB;
   function file(name) {
     return proj.files.find((f) => f.name === name);
   }
@@ -4103,7 +4199,7 @@ ${lines.join("\n")}
     if (!a) a = openTabs().find((n) => n === FLOW_TAB || file(n)) ?? WELCOME;
     proj.active = a;
     if (!openTabs().includes(a)) openTabs().push(a);
-    const isFile = !!file(a);
+    const isFile = !!file(a) || a === ASM_TAB;
     $2("editorHost").classList.toggle("hidden", !isFile);
     $2("synOverlay").classList.toggle("hidden", a !== FLOW_TAB);
     syncStage();
@@ -4120,7 +4216,18 @@ ${lines.join("\n")}
       }
     }
     $2("welcome").classList.toggle("hidden", a !== WELCOME);
-    if (isFile) {
+    if (a === ASM_TAB) {
+      const text = cprog?.compiled ? cprog.listing : cFile() ? tr("\uFF08\u7A0B\u5F0F\u6709\u932F\u8AA4\uFF0C\u9084\u6C92\u6709\u7D44\u5408\u8A9E\u8A00\uFF09", "(the program has errors: no assembly yet)") : tr("\uFF08\u9019\u500B\u5C08\u6848\u6C92\u6709 .c \u6A94\uFF09", "(this project has no .c file)");
+      ed.readOnly = true;
+      ed.lang = "asm";
+      if (ed.value !== text || $2("editorHost").dataset.file !== a) {
+        ed.value = text;
+        $2("editorHost").dataset.file = a;
+      }
+      ed.setMarkers([]);
+    } else if (isFile) {
+      ed.readOnly = false;
+      ed.lang = langOf(a);
       if (ed.value !== file(a).src || $2("editorHost").dataset.file !== a) {
         ed.value = file(a).src;
         $2("editorHost").dataset.file = a;
@@ -4143,7 +4250,7 @@ ${lines.join("\n")}
       const f = file(n);
       const errs = problems.some((p) => p.file === n && p.severity === "error");
       t.className = "tab" + (n === proj.active ? " cur" : "") + (f && original(n) !== void 0 && original(n) !== f.src ? " dirty" : "") + (errs ? " err" : "");
-      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : "\u25A4"}</span><span class="nm">${esc4(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
+      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === ASM_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : f?.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc4(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
       t.onclick = () => {
         proj.active = n;
         persist();
@@ -4179,7 +4286,7 @@ ${lines.join("\n")}
       const n = problems.filter((p) => p.file === f.name && p.severity === "error").length;
       const changed2 = original(f.name) !== void 0 && original(f.name) !== f.src;
       d.className = "item" + (f.name === proj.active ? " cur" : "");
-      d.innerHTML = `<span class="ic">${f.name.endsWith(".veryl") ? "\u25C6" : "\u25A4"}</span><span class="nm">${esc4(f.name)}</span><span class="acts"><button class="icon" data-a="ren" title="${tr("\u91CD\u65B0\u547D\u540D", "Rename")}">\u270E</button><button class="icon" data-a="del" title="${tr("\u522A\u9664", "Delete")}">\u{1F5D1}</button></span>` + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed2 ? `<span class="tag dirty-dot" title="${tr("\u8207\u7BC4\u4F8B\u539F\u59CB\u78BC\u4E0D\u540C", "Changed from the example")}">M</span>` : "");
+      d.innerHTML = `<span class="ic">${f.name.endsWith(".veryl") ? "\u25C6" : f.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc4(f.name)}</span><span class="acts"><button class="icon" data-a="ren" title="${tr("\u91CD\u65B0\u547D\u540D", "Rename")}">\u270E</button><button class="icon" data-a="del" title="${tr("\u522A\u9664", "Delete")}">\u{1F5D1}</button></span>` + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed2 ? `<span class="tag dirty-dot" title="${tr("\u8207\u7BC4\u4F8B\u539F\u59CB\u78BC\u4E0D\u540C", "Changed from the example")}">M</span>` : "");
       d.onclick = (e) => {
         const a = e.target.dataset.a;
         if (a === "ren") renameFile(f.name);
@@ -4220,7 +4327,7 @@ ${lines.join("\n")}
     return null;
   }
   function newFile() {
-    let name = prompt(tr("\u65B0\u6A94\u540D\uFF08.veryl\uFF09", "New file name (.veryl)"), `module${proj.files.length}.veryl`)?.trim();
+    let name = prompt(tr("\u65B0\u6A94\u540D\uFF08.veryl\uFF0C\u6216 .c\uFF1A\u7D66 RISC-V SoC \u7684 C \u7A0B\u5F0F\uFF09", "New file name (.veryl, or .c: a C program for the RISC-V SoC)"), `module${proj.files.length}.veryl`)?.trim();
     if (!name) return;
     if (!/\.\w+$/.test(name)) name += ".veryl";
     const bad = validName(name);
@@ -4230,7 +4337,11 @@ ${lines.join("\n")}
     }
     const base = name.replace(/\.\w+$/, "").replace(/(^|[_-])(\w)/g, (_, _a, c) => c.toUpperCase()).replace(/\W/g, "");
     const m = /^[A-Za-z]/.test(base) ? base : "M" + base;
-    proj.files.push({ name, src: name.endsWith(".veryl") ? newModule(m) : "" });
+    if (name.endsWith(".c") && cFile()) {
+      alert(tr("\u4E00\u500B\u5C08\u6848\u53EA\u80FD\u6709\u4E00\u500B .c \u6A94", "A project has one .c file"));
+      return;
+    }
+    proj.files.push({ name, src: name.endsWith(".veryl") ? newModule(m) : name.endsWith(".c") ? C_TEMPLATE : "" });
     openFile(name);
     changed();
   }
@@ -4469,11 +4580,67 @@ ${lines.join("\n")}
     } catch (e) {
       errs = parseErrors(String(e.message ?? e), "check");
     }
+    if (cFile()) {
+      try {
+        errs.push(...cProblems(await compileC(core)));
+      } catch (e) {
+        errs.push({ msg: String(e.message ?? e), severity: "error", from: "check" });
+      }
+    } else cprog = null;
     if (gen !== checkGen) return;
+    if (proj.active === ASM_TAB) showActive();
     problems = [...errs, ...problems.filter((p) => p.from === "run")];
     if (errs.length) problems = problems.filter((p) => p.from === "check" || !p.file);
     refreshTops();
     renderProblems();
+  }
+  var C_TEMPLATE = `// A C program for the RISC-V SoC (RvSoc in rvsoc.veryl): \u26A1 Virtual board compiles it
+// into the SoC's block RAM. Library: printf, putchar, getchar, puts, delay_ms, millis, rand,
+// strlen ...; peripherals: LED, BUTTONS, SWITCHES, TIMER, UART_DATA, UART_STATUS.
+
+int main(void) {
+    int n = 0;
+    printf("Hello from C!\\n");
+    while (1) {
+        LED = n++;
+        delay_ms(200);
+    }
+}
+`;
+  var cprog = null;
+  var boardHw = "";
+  function cFile() {
+    return proj.files.find((f) => f.name.endsWith(".c"));
+  }
+  async function compileC(c) {
+    const f = cFile();
+    cprog = await c.call({ cmd: "cc", src: f.src, name: f.name });
+    return cprog;
+  }
+  function cProblems(r) {
+    const f = cFile();
+    return r.errors.map((e) => e.file === f?.name ? { file: f.name, line: e.line, col: 1, msg: e.msg, severity: "error", from: "check" } : { msg: `${e.file}:${e.line}: ${e.msg}`, severity: "error", from: "check" });
+  }
+  async function runC() {
+    if (!core || !cFile()) {
+      alert(tr("\u9019\u500B\u5C08\u6848\u6C92\u6709 .c \u6A94", "This project has no .c file"));
+      return;
+    }
+    const f = cFile();
+    const input = prompt(tr("\u8981\u5F9E\u5E8F\u5217\u57E0\u9001\u7D66\u7A0B\u5F0F\u7684\u6587\u5B57\uFF08\u53EF\u4EE5\u7A7A\u767D\uFF09", "Text the program receives on the serial port (may be empty)"), "") ?? "";
+    const r = await core.call({ cmd: "cc", src: f.src, name: f.name, run: 5e6, input: input ? input + "\r" : "" });
+    if (!r.compiled) {
+      problems = [...cProblems(r), ...problems.filter((p) => p.from === "run")];
+      renderProblems();
+      panel("problems");
+      return;
+    }
+    const x = r.run;
+    $2("p-output").textContent = x.tx.replace(/\r\n/g, "\n") + "\n" + (x.error ?? "") + tr(
+      `\u2500\u2500 ${f.name}\uFF1A${x.halted ? "\u57F7\u884C\u5B8C\u7562" : "\u57F7\u884C\u4E86 500 \u842C\u500B\u6307\u4EE4\u5F8C\u505C\u6B62"}\uFF0C${x.instret} \u500B\u6307\u4EE4\u3001${x.cycles} \u500B\u6642\u8108\uFF0812 MHz \u4E0B ${(x.cycles / 12e3).toFixed(1)} ms\uFF09\uFF0CLED = 0x${x.led.toString(16)}\uFF08\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\uFF0C\u4E0D\u662F\u786C\u9AD4\uFF09`,
+      `\u2500\u2500 ${f.name}: ${x.halted ? "finished" : "stopped after 5 million instructions"}, ${x.instret} instructions, ${x.cycles} clock cycles (${(x.cycles / 12e3).toFixed(1)} ms at 12 MHz), LED = 0x${x.led.toString(16)} (instruction-set simulator, not the hardware)`
+    );
+    panel("output");
   }
   function parseErrors(text, from) {
     const out = [];
@@ -4732,6 +4899,7 @@ ${lines.join("\n")}
       flashBoard();
     };
     board.onLoaded = (info) => {
+      boardHw = "";
       problems = problems.filter((p) => p.from !== "run");
       for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
       renderProblems();
@@ -4745,15 +4913,39 @@ ${lines.join("\n")}
       return;
     }
     ensureBoard();
-    board.setSetup(proj.board ?? examples().find((e) => e.id === proj.from)?.board ?? DEFAULT_SETUP);
+    const exBoard = examples().find((e) => e.id === proj.from)?.board;
+    board.setSetup({ ...proj.board ?? exBoard ?? DEFAULT_SETUP, mode: proj.board?.mode ?? exBoard?.mode ?? board.mode });
     openFile(BOARD_TAB);
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
     setBusy(true, tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F\u2026", "\u26A1 Flashing the virtual board\u2026"));
     try {
-      const info = await board.flash(proj.files.filter((f) => f.name.endsWith(".veryl")), top, pcfOf(proj));
-      $2("sbTest").textContent = tr(`\u26A1 ${info.top} \u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} flashed to the virtual board`);
+      let program;
+      if (cFile()) {
+        const r = await compileC(await getBoardCore());
+        if (!r.compiled) {
+          problems = [...cProblems(r), ...problems.filter((p) => p.from === "run")];
+          $2("sbTest").textContent = tr("\u2717 C \u7A0B\u5F0F\u6709\u932F\u8AA4", "\u2717 The C program has errors");
+          panel("problems");
+          setBusy(false);
+          renderProblems();
+          return;
+        }
+        program = r.bin;
+      }
+      const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
+      const hw = JSON.stringify([files, top, pcfOf(proj) ?? "", board.mode]);
+      if (program && hw === boardHw && board.loaded?.program_mem) {
+        await board.program(program);
+        $2("sbTest").textContent = tr(`\u26A1 \u65B0\u7A0B\u5F0F\uFF08${cprog.size} \u4F4D\u5143\u7D44\uFF09\u5DF2\u653E\u9032\u865B\u64EC\u677F\u7684 block RAM`, `\u26A1 The new program (${cprog.size} bytes) is in the board's block RAM`);
+        setBusy(false);
+        return;
+      }
+      const info = await board.flash(files, top, pcfOf(proj), program);
+      boardHw = hw;
+      $2("sbTest").textContent = program ? tr(`\u26A1 ${info.top} \u548C C \u7A0B\u5F0F\uFF08${cprog.size} \u4F4D\u5143\u7D44\uFF09\u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} and the C program (${cprog.size} bytes) flashed to the virtual board`) : tr(`\u26A1 ${info.top} \u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} flashed to the virtual board`);
       problems = problems.filter((p) => p.from !== "run");
       for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
+      if (program && !info.program_mem) problems.push({ msg: tr(`\u865B\u64EC\u677F\uFF1A${info.top} \u6C92\u6709\u7A0B\u5F0F\u8A18\u61B6\u9AD4\uFF08RvSoc \u7684 RvMem\uFF09\uFF0CC \u7A0B\u5F0F\u6C92\u6709\u653E\u9032\u53BB`, `Virtual board: ${info.top} has no program memory (RvSoc's RvMem): the C program is not in it`), severity: "warning", from: "run" });
     } catch (e) {
       problems = problems.filter((p) => p.from !== "run");
       problems.push(...parseErrors(String(e.message ?? e), "run"));
@@ -4823,6 +5015,8 @@ ${lines.join("\n")}
       ...[...flow(false).slice(3), ...flow(true).slice(3), ...flow(false).slice(0, 3)].map(([k, l]) => ({ label: `${tr("\u6D41\u7A0B\uFF1A", "Flow: ")}${l}`, run: () => runSynth(k) })),
       { label: tr("\u6D41\u7A0B\uFF1A\u21C4 FPGA vs ASIC \u6BD4\u8F03", "Flow: \u21C4 FPGA vs ASIC"), run: () => runSynth("cmp") },
       { label: tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F", "\u26A1 Flash to the virtual board"), run: flashBoard },
+      { label: tr("C\uFF1A\u6AA2\u8996\u7D44\u5408\u8A9E\u8A00", "C: view the assembly"), run: () => openFile(ASM_TAB) },
+      { label: tr("C\uFF1A\u5728\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\u4E0A\u57F7\u884C\uFF08\u8F38\u51FA\u5230\u300C\u8F38\u51FA\u300D\u9762\u677F\uFF09", "C: run on the instruction-set simulator (Output panel)"), run: runC },
       { label: tr("\u65B0\u589E\u6A94\u6848", "New file"), run: newFile },
       { label: tr("\u65B0\u5C08\u6848", "New project"), run: newProject },
       { label: tr("\u532F\u5165 .veryl \u6A94", "Import .veryl files"), run: () => $2("importIn").click() },
@@ -4915,7 +5109,7 @@ ${lines.join("\n")}
     ed = new CodeEditor($2("editorHost"));
     ed.onChange = (text) => {
       const f = file(proj.active ?? "");
-      if (!f) return;
+      if (!f || ed.readOnly) return;
       f.src = text;
       problems = problems.filter((p) => p.file !== f.name);
       changed();

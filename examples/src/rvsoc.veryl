@@ -1,0 +1,541 @@
+// ==========================================
+// 多週期 RISC-V SoC：程式、資料與暫存器檔都放在 block RAM
+// ==========================================
+// 單週期的 RiscvCore（rv32i.veryl）把 32 個暫存器做成正反器，完整版需要
+// 5,400 個 LUT，放不進 iCE40UP5K。這裡的 RvCore 改成多週期：
+//   Fetch  → 送出 pc 的讀取位址（只在重設後與 load 之後）
+//   Decode → 記憶體讀出指令，同一拍用它的 rs1 / rs2 讀暫存器檔
+//   Exec   → 運算、寫回、算下一個 pc 並且立刻送出它的讀取位址（store 同時寫入）
+//   Mem    → load：記憶體讀出資料，寫回，送出 pc 的讀取位址
+// 一般指令 2 拍、load 3 拍。暫存器檔與記憶體都是同步讀取（下一拍才有資料），
+// 合成到 FPGA 時變成 SB_RAM40_4K。需要 rv32i.veryl（RiscvTypes、Alu）、
+// sync_ram.veryl（SyncRam）與 uart.veryl（UartTx、UartRx）。
+//
+// 記憶體映射（位址 bit 28 = 1 是周邊）：
+//   0x0000_0000  8 KB RAM（程式與資料，RvSoc 的 MEM_AW 決定大小）
+//   0x1000_0000  LED      讀寫，8 bit
+//   0x1000_0004  BTN      讀：bit 2..0 = BTN3..BTN1，bit 15..8 = PMOD1B 的 8 個開關
+//   0x1000_0008  UART     寫：送出一個位元組；讀：收到的位元組（讀了就清掉 RXV）
+//   0x1000_000C  UART_ST  讀：bit 0 = TX 忙碌，bit 1 = RXV（有收到的位元組）
+//   0x1000_0010  TIMER    讀：重設後經過的時脈數
+
+module RvCore (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    i_run  : input  logic    , // 0：停在 pc = 0（載入程式時）
+    o_raddr: output logic<32>, // 讀取位址（取指令或 load），下一拍 i_rdata 才有資料
+    o_re   : output logic    ,
+    i_rdata: input  logic<32>,
+    o_waddr: output logic<32>, // 寫入位址（store）
+    o_wstrb: output logic<4> , // 要寫的位元組；0 = 不寫
+    o_wdata: output logic<32>,
+) {
+    import RiscvTypes::*;
+
+    const FETCH : logic<2> = 2'd0;
+    const DECODE: logic<2> = 2'd1;
+    const EXEC  : logic<2> = 2'd2;
+    const MEM   : logic<2> = 2'd3;
+
+    var state : logic<2> ;
+    var pc    : logic<32>;
+    var ir    : logic<32>; // 執行中的指令
+    var lsaddr: logic<32>; // load 的位址（Mem 用來取出 byte / halfword）
+
+    // Decode 那一拍指令還在 i_rdata 上，之後在 ir
+    let cur: logic<32> = if state == DECODE ? i_rdata : ir;
+
+    let opcode : logic<7> = ir[6:0];
+    let rd_idx : logic<5> = ir[11:7];
+    let funct3 : logic<3> = ir[14:12];
+    let rs1_idx: logic<5> = ir[19:15];
+    let rs2_idx: logic<5> = ir[24:20];
+    let funct7 : logic<7> = ir[31:25];
+
+    // --- 暫存器檔：兩份相同的同步讀取 RAM（兩個讀取埠），一起寫入 ---
+    var rf_we  : logic    ;
+    var rf_wd  : logic<32>;
+    var rs1_raw: logic<32>;
+    var rs2_raw: logic<32>;
+
+    inst u_rf1: SyncRam #(ADDR_W: 5, DATA_W: 32) (
+        i_clk  : i_clk      ,
+        i_we   : rf_we      ,
+        i_waddr: rd_idx     ,
+        i_wdata: rf_wd      ,
+        i_re   : 1'b1       ,
+        i_raddr: cur[19:15] ,
+        o_rdata: rs1_raw    ,
+    );
+    inst u_rf2: SyncRam #(ADDR_W: 5, DATA_W: 32) (
+        i_clk  : i_clk      ,
+        i_we   : rf_we      ,
+        i_waddr: rd_idx     ,
+        i_wdata: rf_wd      ,
+        i_re   : 1'b1       ,
+        i_raddr: cur[24:20] ,
+        o_rdata: rs2_raw    ,
+    );
+
+    // x0 永遠是 0（RAM 裡的 x0 從來不寫，但模擬時一開始是 x）
+    let rs1_data: logic<32> = if rs1_idx == 5'd0 ? 32'd0 : rs1_raw;
+    let rs2_data: logic<32> = if rs2_idx == 5'd0 ? 32'd0 : rs2_raw;
+
+    // --- 立即數 ---
+    var imm: logic<32>;
+    always_comb {
+        case opcode {
+            Opcode::IType, Opcode::Load, Opcode::Jalr:
+                imm = {ir[31] repeat 20, ir[31:20]};
+            Opcode::Store:
+                imm = {ir[31] repeat 20, ir[31:25], ir[11:7]};
+            Opcode::Branch:
+                imm = {ir[31] repeat 20, ir[7], ir[30:25], ir[11:8], 1'b0};
+            Opcode::Jal:
+                imm = {ir[31] repeat 12, ir[19:12], ir[20], ir[30:21], 1'b0};
+            Opcode::Lui, Opcode::Auipc:
+                imm = {ir[31:12], 12'd0};
+            default:
+                imm = 32'd0;
+        }
+    }
+
+    // --- ALU 運算 ---
+    let alt: logic = funct7[5] && (opcode == Opcode::RType || funct3 == 3'b101);
+    var alu_op: AluOp;
+    always_comb {
+        if opcode == Opcode::RType || opcode == Opcode::IType {
+            case funct3 {
+                3'b000 : alu_op = if alt ? AluOp::Sub : AluOp::Add;
+                3'b001 : alu_op = AluOp::Sll;
+                3'b010 : alu_op = AluOp::Slt;
+                3'b011 : alu_op = AluOp::Sltu;
+                3'b100 : alu_op = AluOp::Xor;
+                3'b101 : alu_op = if alt ? AluOp::Sra : AluOp::Srl;
+                3'b110 : alu_op = AluOp::Or;
+                default: alu_op = AluOp::And;
+            }
+        } else {
+            alu_op = AluOp::Add; // 位址計算
+        }
+    }
+
+    let alu_b: logic<32> = if opcode == Opcode::RType || opcode == Opcode::Branch ? rs2_data : imm;
+    var alu_out: logic<32>;
+    inst u_alu: Alu (
+        i_op : alu_op  ,
+        i_a  : rs1_data,
+        i_b  : alu_b   ,
+        o_res: alu_out ,
+    );
+
+    // --- 分支條件 ---
+    var take: logic;
+    always_comb {
+        case funct3 {
+            3'b000 : take = rs1_data == rs2_data;
+            3'b001 : take = rs1_data != rs2_data;
+            3'b100 : take = $signed(rs1_data) <: $signed(rs2_data);
+            3'b101 : take = $signed(rs1_data) >= $signed(rs2_data);
+            3'b110 : take = rs1_data <: rs2_data;
+            3'b111 : take = rs1_data >= rs2_data;
+            default: take = 1'b0;
+        }
+    }
+
+    let pc_plus_4 : logic<32> = pc + 32'd4;
+    let branch_tgt: logic<32> = pc + imm;
+    var next_pc   : logic<32>;
+    always_comb {
+        case opcode {
+            Opcode::Jal   : next_pc = branch_tgt;
+            Opcode::Jalr  : next_pc = {alu_out[31:1], 1'b0};
+            Opcode::Branch: next_pc = if take ? branch_tgt : pc_plus_4;
+            default       : next_pc = pc_plus_4;
+        }
+    }
+
+    // --- 寫回 ---
+    var wb_data: logic<32>;
+    always_comb {
+        case opcode {
+            Opcode::Jal, Opcode::Jalr: wb_data = pc_plus_4;
+            Opcode::Lui              : wb_data = imm;
+            Opcode::Auipc            : wb_data = branch_tgt;
+            default                  : wb_data = alu_out;
+        }
+    }
+    let writes: logic = opcode == Opcode::RType || opcode == Opcode::IType || opcode == Opcode::Jal || opcode == Opcode::Jalr || opcode == Opcode::Lui || opcode == Opcode::Auipc;
+
+    // --- load：從讀出的字取出 byte / halfword ---
+    let load_word: logic<32> = i_rdata >> {lsaddr[1:0], 3'b000};
+    var load_data: logic<32>;
+    always_comb {
+        case funct3 {
+            3'b000 : load_data = {load_word[7] repeat 24, load_word[7:0]};
+            3'b001 : load_data = {load_word[15] repeat 16, load_word[15:0]};
+            3'b100 : load_data = {24'd0, load_word[7:0]};
+            3'b101 : load_data = {16'd0, load_word[15:0]};
+            default: load_data = load_word;
+        }
+    }
+
+    // --- store：資料複製到每個位元組位置，加上 byte strobe ---
+    var store_data: logic<32>;
+    var store_strb: logic<4> ;
+    always_comb {
+        case funct3 {
+            3'b000: {
+                store_data = {rs2_data[7:0] repeat 4};
+                store_strb = 4'b0001 << alu_out[1:0];
+            }
+            3'b001: {
+                store_data = {rs2_data[15:0] repeat 2};
+                store_strb = 4'b0011 << alu_out[1:0];
+            }
+            default: {
+                store_data = rs2_data;
+                store_strb = 4'b1111;
+            }
+        }
+    }
+
+    // --- 狀態機與記憶體埠 ---
+    let load : logic = opcode == Opcode::Load;
+    let store: logic = opcode == Opcode::Store;
+
+    always_comb {
+        o_re    = 1'b0;
+        o_raddr = pc;
+        o_waddr = alu_out;
+        o_wdata = store_data;
+        o_wstrb = 4'd0;
+        rf_we   = 1'b0;
+        rf_wd   = wb_data;
+        if i_run {
+            case state {
+                FETCH: o_re = 1'b1;
+                EXEC : {
+                    o_re    = 1'b1;
+                    o_raddr = if load ? alu_out : next_pc;
+                    o_wstrb = if store ? store_strb : 4'd0;
+                    rf_we   = writes && rd_idx != 5'd0;
+                }
+                MEM: {
+                    o_re  = 1'b1;
+                    rf_we = rd_idx != 5'd0;
+                    rf_wd = load_data;
+                }
+                default: {}
+            }
+        }
+    }
+
+    always_ff {
+        if_reset {
+            state  = FETCH;
+            pc     = 32'd0;
+            ir     = 32'd0;
+            lsaddr = 32'd0;
+        } else if !i_run {
+            state = FETCH;
+            pc    = 32'd0;
+        } else {
+            case state {
+                FETCH : state = DECODE;
+                DECODE: {
+                    ir    = i_rdata;
+                    state = EXEC;
+                }
+                EXEC: {
+                    pc     = next_pc;
+                    lsaddr = alu_out;
+                    state  = if load ? MEM : DECODE;
+                }
+                default: state = DECODE; // MEM：下一個指令的讀取已經送出
+            }
+        }
+    }
+}
+
+// 8 KB 記憶體：四個 8 bit 寬的位元組通道，store 依 byte strobe 只寫部分通道
+module RvMem #(
+    param AW: u32 = 11, // 字位址寬度（2^AW 個 32 bit 字）
+) (
+    i_clk  : input  clock    ,
+    i_re   : input  logic    ,
+    i_raddr: input  logic<AW>,
+    o_rdata: output logic<32>,
+    i_wstrb: input  logic<4> ,
+    i_waddr: input  logic<AW>,
+    i_wdata: input  logic<32>,
+) {
+    inst b0: SyncRam #(ADDR_W: AW, DATA_W: 8) (i_clk, i_we: i_wstrb[0], i_waddr, i_wdata: i_wdata[7:0], i_re, i_raddr, o_rdata: o_rdata[7:0]);
+    inst b1: SyncRam #(ADDR_W: AW, DATA_W: 8) (i_clk, i_we: i_wstrb[1], i_waddr, i_wdata: i_wdata[15:8], i_re, i_raddr, o_rdata: o_rdata[15:8]);
+    inst b2: SyncRam #(ADDR_W: AW, DATA_W: 8) (i_clk, i_we: i_wstrb[2], i_waddr, i_wdata: i_wdata[23:16], i_re, i_raddr, o_rdata: o_rdata[23:16]);
+    inst b3: SyncRam #(ADDR_W: AW, DATA_W: 8) (i_clk, i_we: i_wstrb[3], i_waddr, i_wdata: i_wdata[31:24], i_re, i_raddr, o_rdata: o_rdata[31:24]);
+}
+
+// CPU + 記憶體 + 周邊。i_ld = 1 時 CPU 停住，記憶體埠交給載入埠（testbench 用來放程式、讀結果）
+module RvSoc #(
+    param MEM_AW: u32 = 11 , // 2^MEM_AW 個字（11 = 8 KB）
+    param CPB   : u32 = 104, // UART 每位元時脈數（12 MHz / 115200）
+) (
+    i_clk     : input  clock        ,
+    i_rst     : input  reset        ,
+    i_ld      : input  logic        ,
+    i_ld_we   : input  logic        ,
+    i_ld_addr : input  logic<MEM_AW>,
+    i_ld_wdata: input  logic<32>    ,
+    o_ld_rdata: output logic<32>    ,
+    i_btn     : input  logic<3>     ,
+    i_sw      : input  logic<8>     ,
+    i_rx      : input  logic        ,
+    o_tx      : output logic        ,
+    o_led     : output logic<8>     ,
+) {
+    var raddr: logic<32>;
+    var re   : logic    ;
+    var rdata: logic<32>;
+    var waddr: logic<32>;
+    var wstrb: logic<4> ;
+    var wdata: logic<32>;
+
+    inst u_cpu: RvCore (
+        i_clk  : i_clk,
+        i_rst  : i_rst,
+        i_run  : !i_ld,
+        o_raddr: raddr,
+        o_re   : re   ,
+        i_rdata: rdata,
+        o_waddr: waddr,
+        o_wstrb: wstrb,
+        o_wdata: wdata,
+    );
+
+    // --- 記憶體（載入埠優先）---
+    let io_r: logic = raddr[28];
+    let io_w: logic = waddr[28];
+    var mem_rdata: logic<32>;
+    inst u_mem: RvMem #(AW: MEM_AW) (
+        i_clk  : i_clk                                                 ,
+        i_re   : i_ld || (re && !io_r)                                 ,
+        i_raddr: if i_ld ? i_ld_addr : raddr[MEM_AW + 1:2]             ,
+        o_rdata: mem_rdata                                             ,
+        i_wstrb: if i_ld ? {i_ld_we repeat 4} : if io_w ? 4'd0 : wstrb,
+        i_waddr: if i_ld ? i_ld_addr : waddr[MEM_AW + 1:2]             ,
+        i_wdata: if i_ld ? i_ld_wdata : wdata                          ,
+    );
+    assign o_ld_rdata = mem_rdata;
+
+    // --- 周邊 ---
+    var led    : logic<8> ;
+    var timer  : logic<32>;
+    var btn_s  : logic<3> ;
+    var sw_s   : logic<8> ;
+    var rx_s   : logic<2> ;
+    var rx_byte: logic<8> ;
+    var rx_full: logic    ;
+    var tx_go  : logic    ;
+    var tx_byte: logic<8> ;
+    var tx_rdy : logic    ;
+    var rx_v   : logic    ;
+    var rx_d   : logic<8> ;
+    var io_sel : logic    ; // 上一拍讀的是周邊
+    var io_data: logic<32>;
+
+    inst u_tx: UartTx #(CLKS_PER_BIT: CPB) (
+        i_clk  : i_clk  ,
+        i_rst  : i_rst  ,
+        i_valid: tx_go  ,
+        i_data : tx_byte,
+        o_ready: tx_rdy ,
+        o_tx   : o_tx   ,
+    );
+    inst u_rx: UartRx #(CLKS_PER_BIT: CPB) (
+        i_clk  : i_clk  ,
+        i_rst  : i_rst  ,
+        i_rx   : rx_s[1],
+        o_valid: rx_v   ,
+        o_data : rx_d   ,
+    );
+
+    let wr_io: logic = !i_ld && io_w && wstrb != 4'd0;
+    let rd_io: logic = !i_ld && re && io_r;
+
+    always_ff {
+        if_reset {
+            led     = 0;
+            timer   = 0;
+            btn_s   = 0;
+            sw_s    = 0;
+            rx_s    = 2'b11;
+            rx_byte = 0;
+            rx_full = 0;
+            tx_go   = 0;
+            tx_byte = 0;
+            io_sel  = 0;
+            io_data = 0;
+        } else {
+            timer = timer + 32'd1;
+            btn_s = i_btn;
+            sw_s  = i_sw;
+            rx_s  = {rx_s[0], i_rx};
+            tx_go = 0;
+            if wr_io {
+                case waddr[4:2] {
+                    3'd0: led = wdata[7:0];
+                    3'd2: {
+                        tx_go   = 1;
+                        tx_byte = wdata[7:0];
+                    }
+                    default: {}
+                }
+            }
+            if rx_v {
+                rx_byte = rx_d;
+                rx_full = 1;
+            } else if rd_io && raddr[4:2] == 3'd2 {
+                rx_full = 0;
+            }
+            io_sel = rd_io;
+            if rd_io {
+                case raddr[4:2] {
+                    3'd0   : io_data = {24'd0, led};
+                    3'd1   : io_data = {16'd0, sw_s, 5'd0, btn_s};
+                    3'd2   : io_data = {24'd0, rx_byte};
+                    3'd3   : io_data = {30'd0, rx_full, !tx_rdy || tx_go};
+                    3'd4   : io_data = timer;
+                    default: io_data = 32'd0;
+                }
+            }
+        }
+    }
+
+    assign rdata = if io_sel ? io_data : mem_rdata;
+    assign o_led = led;
+}
+
+// FPGA 頂層：iCEBreaker（BTN_N 重設，BTN1-3，USB 序列埠，PMOD1A 的 8 個輸出（LED 模組、七段顯示器…），
+// PMOD1B 的 8 個輸入（開關模組））。
+// 程式放在 block RAM 的初值裡（veryl-eda 把程式寫進位元流）
+module RvBoard (
+    i_clk: input  clock   ,
+    i_rst: input  reset   ,
+    i_btn: input  logic<3>,
+    i_sw : input  logic<8>,
+    i_rx : input  logic   ,
+    o_tx : output logic   ,
+    o_led: output logic<8>,
+) {
+    inst u_soc: RvSoc (
+        i_clk     : i_clk,
+        i_rst     : i_rst,
+        i_ld      : 1'b0 ,
+        i_ld_we   : 1'b0 ,
+        i_ld_addr : 11'd0,
+        i_ld_wdata: 32'd0,
+        o_ld_rdata: _    ,
+        i_btn     : i_btn,
+        i_sw      : i_sw ,
+        i_rx      : i_rx ,
+        o_tx      : o_tx ,
+        o_led     : o_led,
+    );
+}
+
+// 測試：把 rv32i_test.S（資料在 0x300，rvsoc_rom.veryl）載入 1 KB 的記憶體、執行，再讀回簽章
+// （閘級模擬時記憶體是一個個正反器，所以測試用小的記憶體）
+#[test(test_rvsoc)]
+module TestRvSoc {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var ld      : logic    ;
+    var ld_we   : logic    ;
+    var ld_addr : logic<8> ;
+    var ld_rdata: logic<32>;
+    var prog    : logic<32>;
+    var tx      : logic    ;
+    var led     : logic<8> ;
+
+    inst u_prog: RvTestProg (
+        i_addr: {22'd0, ld_addr, 2'b00},
+        o_inst: prog                    ,
+    );
+
+    inst dut: RvSoc #(MEM_AW: 8, CPB: 4) (
+        i_clk     : clk     ,
+        i_rst     : rst     ,
+        i_ld      : ld      ,
+        i_ld_we   : ld_we   ,
+        i_ld_addr : ld_addr ,
+        i_ld_wdata: prog    ,
+        o_ld_rdata: ld_rdata,
+        i_btn     : 3'd0    ,
+        i_sw      : 8'd0    ,
+        i_rx      : 1'b1    ,
+        o_tx      : tx      ,
+        o_led     : led     ,
+    );
+
+    initial {
+        // 1. 載入程式（256 個字）
+        ld      = 1;
+        ld_we   = 1;
+        ld_addr = 0;
+        rst.assert();
+        for _i in 0..256 {
+            clk.next();
+            ld_addr = ld_addr + 8'd1;
+        }
+        // 2. 執行
+        ld_we = 0;
+        ld    = 0;
+        clk.next(1000);
+        // 3. 讀回 0x1000 起的簽章（同步讀取：下一拍才有資料）
+        ld = 1;
+        ld_addr = 8'd239; clk.next(); $assert(ld_rdata == 32'h00000001, "program finished");
+        ld_addr = 8'd192; clk.next(); $assert(ld_rdata == 32'h12345678, "lui + addi");
+        ld_addr = 8'd193; clk.next(); $assert(ld_rdata == 32'h00000010, "auipc");
+        ld_addr = 8'd194; clk.next(); $assert(ld_rdata == 32'hffffffff, "lui + srai");
+        ld_addr = 8'd195; clk.next(); $assert(ld_rdata == 32'hfffffffb, "add");
+        ld_addr = 8'd196; clk.next(); $assert(ld_rdata == 32'h0000000b, "sub");
+        ld_addr = 8'd197; clk.next(); $assert(ld_rdata == 32'hffffffc0, "sll");
+        ld_addr = 8'd198; clk.next(); $assert(ld_rdata == 32'h1fffffff, "srl");
+        ld_addr = 8'd199; clk.next(); $assert(ld_rdata == 32'hffffffff, "sra");
+        ld_addr = 8'd200; clk.next(); $assert(ld_rdata == 32'hc0000000, "slli");
+        ld_addr = 8'd201; clk.next(); $assert(ld_rdata == 32'h0000000f, "srli");
+        ld_addr = 8'd202; clk.next(); $assert(ld_rdata == 32'hfffffffc, "srai");
+        ld_addr = 8'd203; clk.next(); $assert(ld_rdata == 32'hedcba980, "xor");
+        ld_addr = 8'd204; clk.next(); $assert(ld_rdata == 32'hfffffffc, "xori");
+        ld_addr = 8'd205; clk.next(); $assert(ld_rdata == 32'h1234567b, "or");
+        ld_addr = 8'd206; clk.next(); $assert(ld_rdata == 32'h000007f3, "ori");
+        ld_addr = 8'd207; clk.next(); $assert(ld_rdata == 32'h12345678, "and");
+        ld_addr = 8'd208; clk.next(); $assert(ld_rdata == 32'h00000078, "andi");
+        ld_addr = 8'd209; clk.next(); $assert(ld_rdata == 32'h00000001, "slt");
+        ld_addr = 8'd210; clk.next(); $assert(ld_rdata == 32'h00000000, "sltu");
+        ld_addr = 8'd211; clk.next(); $assert(ld_rdata == 32'h00000000, "slti");
+        ld_addr = 8'd212; clk.next(); $assert(ld_rdata == 32'h00000001, "sltiu");
+        ld_addr = 8'd213; clk.next(); $assert(ld_rdata == 32'h00000006, "sll uses rs2[4:0]");
+        ld_addr = 8'd214; clk.next(); $assert(ld_rdata == 32'h000000aa, "beq/bne/blt/bge");
+        ld_addr = 8'd215; clk.next(); $assert(ld_rdata == 32'h0000000a, "bltu/bgeu");
+        ld_addr = 8'd216; clk.next(); $assert(ld_rdata == 32'h0000000f, "backward branch loop");
+        ld_addr = 8'd217; clk.next(); $assert(ld_rdata == 32'h00000000, "jal/jalr skip");
+        ld_addr = 8'd218; clk.next(); $assert(ld_rdata == 32'h00000008, "jalr link");
+        ld_addr = 8'd219; clk.next(); $assert(ld_rdata == 32'hfffffffc, "jal link");
+        ld_addr = 8'd220; clk.next(); $assert(ld_rdata == 32'h00000078, "lb");
+        ld_addr = 8'd221; clk.next(); $assert(ld_rdata == 32'h00000012, "lb offset 3");
+        ld_addr = 8'd222; clk.next(); $assert(ld_rdata == 32'hfffffff8, "lb sign");
+        ld_addr = 8'd223; clk.next(); $assert(ld_rdata == 32'h000000f8, "lbu");
+        ld_addr = 8'd224; clk.next(); $assert(ld_rdata == 32'h00001234, "lh");
+        ld_addr = 8'd225; clk.next(); $assert(ld_rdata == 32'hfffffff8, "lh sign");
+        ld_addr = 8'd226; clk.next(); $assert(ld_rdata == 32'h0000ffff, "lhu");
+        ld_addr = 8'd227; clk.next(); $assert(ld_rdata == 32'h00005678, "lhu offset 0");
+        ld_addr = 8'd228; clk.next(); $assert(ld_rdata == 32'h12f80378, "sb");
+        ld_addr = 8'd229; clk.next(); $assert(ld_rdata == 32'h0003fff8, "sh");
+        ld_addr = 8'd230; clk.next(); $assert(ld_rdata == 32'h56785678, "sh both halves");
+        ld_addr = 8'd231; clk.next(); $assert(ld_rdata == 32'h00000000, "x0 is zero");
+        $finish();
+    }
+}

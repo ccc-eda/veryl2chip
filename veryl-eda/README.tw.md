@@ -12,8 +12,9 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
-              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]
+              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic] [--program PROG.bin]
               a.veryl b.veryl ...
+    veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
 
 在原始碼目錄裡也可以用 `cargo run --release -- ...`。自己的佈局繞線需要 IceStorm 的 `chipdb-5k.txt`（OSS CAD Suite 內附，或以 `VERYL_EDA_CHIPDB` 指定）。
 
@@ -36,7 +37,7 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 通過的地方：spike、官方 `veryl test`、veryl-sim、veryl-eda 合成後的閘級 netlist、以及 iCE40 映射後的 netlist（`cargo test`）。
 
 完整（未被常數 ROM 修剪）的 RiscvCore 映射後需要 5401 個 LUT，超過 UP5K 的 5280 LC——主因是用正反器做的 32×32 暫存器檔；
-要把整套 ISA 測試搬上 FPGA，需要先做 Block RAM（`SB_RAM40_4K`）推論。
+下面的多週期 `RvSoc` 把暫存器檔與記憶體放在 block RAM，放得進去而且還很寬裕。
 
 ## RISC-V CPU 上 FPGA
 `examples/soc.veryl` 的 `RiscvSoc` = `examples/src/rv32i.veryl` 的 `RiscvCore` + 程式 ROM + 16 字資料 RAM + LED 暫存器（位址 0x100）。
@@ -53,6 +54,34 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 | 時序 | 約 17 MHz（板上時脈 12 MHz，通過） |
 | 映射後 netlist 模擬（yosys iCE40 cell 模型） | 第 70 個 cycle LED = 55 |
 | **繞線後位元流**模擬（`icebox_vlog` 轉回 Verilog） | 第 70 個 cycle LED = 55 |
+
+## RISC-V SoC 與 C 程式（`examples/src/rvsoc.veryl`、`src/rv/`）
+`RvCore` 是**多週期**的 RV32I（Decode → Exec，load 多一個 Mem；一般指令 2 拍、load 3 拍），暫存器檔（兩份 `SyncRam` 當兩個讀取埠）
+與記憶體都是同步讀取的 RAM，所以會變成 `SB_RAM40_4K`。`RvSoc` 加上 8 KB、四個位元組通道的記憶體（`RvMem`）、記憶體映射的周邊
+（LED 0x1000_0000、按鈕 + 開關 0x…04、UART 資料 / 狀態 0x…08 / 0x…0C、時脈計數器 0x…10）和給 testbench 用的載入埠；
+`RvBoard` 是 iCEBreaker 的頂層（`examples/rvsoc.pcf`）：1844 LUT + 20 個 block RAM，Fmax 13.3 MHz。
+`TestRvSoc` 載入 `rv32i_test.S`（資料在 0x300，`examples/sw/build.sh` 產生的 `examples/src/rvsoc_rom.veryl`），執行後檢查 41 個結果；
+`veryl-eda/examples/rvsoc_small.veryl`（64 位元組記憶體）由 `test.sh` 證明與 `veryl build` 等價。
+
+**程式放在 block RAM。** 每個存放記憶體的 `SB_RAM40_4K` 帶有 `MEM_SLOT` = `名稱:區塊`（JSON 裡是 yosys attribute）；
+`bram::set_mem_init` 在映射後給記憶體初值，`--program PROG.bin` 從位址 0 填入位元組通道 `*.b0.mem … *.b3.mem`，
+`pnr::patch_ram` 只改寫已佈局繞線的 `.asc` 裡那幾塊的 `.ram_data`：換程式不用重新合成、佈局繞線
+（`cargo test rvsoc_program_on_board`：改寫後的位元流等於帶著程式佈局繞線的結果，並在虛擬板上跑完 ISA 測試）。
+最佳化時，從來不寫入的記憶體（等著被填入的 ROM）會保留，不當成常數 0。
+
+**C 編譯器**（`src/rv/`）：`cc.rs` 編譯 C 的子集——`char`（無號）/ `short` / `int` / `unsigned`、指標、任意維陣列、
+所有 C 運算子、`if` / `while` / `do` / `for` / `switch`、有初值的全域變數、`...` 參數、小型前置處理器（有參數的 `#define`、`#ifdef`）——
+成 RV32I 組合語言：單純的堆疊式程式碼，加上立即數指令、比較直接分支，並以 C 原始碼行當註解。`prelude.c` 是執行期函式庫
+（軟體乘除法、`putchar` / `getchar` / `printf` / `puts` / `read_line`、`delay_ms` / `millis`、`rand`、`strlen` / `strcmp` / `memcpy` …，
+周邊暫存器 `LED`、`BUTTONS`、`SWITCHES`、`TIMER`、`UART_DATA`、`UART_STATUS`）；只保留 `main` 用得到的部分。`asm.rs` 是兩遍組譯器
+（虛擬指令、`%hi` / `%lo`、`.data` / `.rodata` / `.bss`、列表），`iss.rs` 是指令集模擬器，記憶體映射與時脈數都和 RvSoc 相同。
+
+    veryl-eda --cc hello.c -o hello.bin -S hello.s --run       # 編譯、寫出映像檔與組合語言、在 ISS 上執行
+    veryl-eda --top RvBoard --ice40 --pnr veryl --pcf ../examples/rvsoc.pcf --program hello.bin --bin soc.bin ../examples/src/{rv32i,sync_ram,uart,rvsoc}.veryl
+
+測試：`src/rv/tests/*.c` 印出的內容和主機 C 編譯器（`cc -funsigned-char -fwrapv`）編出來的完全相同；`cc_on_rvsoc` 把編譯好的程式
+放進閘級 `RvBoard` 的 block RAM，在虛擬板上執行：序列埠輸出與 ISS 相同。虛擬板的 **CPU 模式**（`Board::cpu`）用 ISS 跑程式，
+腳位與周邊和 RvSoc 一樣，約為真實速度的 5 倍；閘級的 SoC 約為真實速度的 1%。
 
 ## 自己的佈局繞線（`--pnr veryl`，`src/pnr/`）
 只針對 iCE40UP5K，架構資料來自 IceStorm 的 `chipdb-5k.txt`（找不到時用 `VERYL_EDA_CHIPDB` 指定）。

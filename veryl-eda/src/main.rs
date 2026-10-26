@@ -1,25 +1,66 @@
-use veryl_eda::{asic, elab, ice40, netlist, output, pnr};
+use veryl_eda::{asic, bram, elab, ice40, netlist, output, pnr, rv};
 
 use std::path::PathBuf;
 use veryl_parser::Parser;
 
 fn usage() -> ! {
     eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
+    eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc)");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
-    eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven]]");
+    eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
     eprintln!("                 [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]");
     eprintln!("                 FILE.veryl...");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
     eprintln!("  gate-level netlist of yosys internal cells and prints its statistics.");
     eprintln!("  --ice40 maps it to SB_LUT4/SB_DFF* cells; --asc/--bin then run");
     eprintln!("  place & route (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and icepack.");
+    eprintln!("  --program puts a binary (from address 0) into the block RAMs of a byte-lane");
+    eprintln!("  program memory (*.b0.mem .. *.b3.mem, e.g. RvBoard in examples/src/rvsoc.veryl).");
     eprintln!("  --asic maps to the vlib standard cells, places rows, routes and times them.");
     eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
     eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
     std::process::exit(2);
 }
 
+/// `veryl-eda --cc prog.c [-o prog.bin] [-S prog.s] [-L prog.lst] [--run [N]]`: compile C for RvSoc
+fn cc_main(args: &[String]) -> ! {
+    let (mut src, mut out, mut asm_out, mut run, mut mem) = (None::<String>, None::<String>, None::<String>, None::<u64>, 8192u32);
+    let mut lst: Option<String> = None;
+    let mut a = args.iter();
+    while let Some(x) = a.next() {
+        match x.as_str() {
+            "-o" => out = a.next().cloned(),
+            "-S" => asm_out = a.next().cloned(),
+            "-L" => lst = a.next().cloned(),
+            "--run" => run = Some(a.clone().next().and_then(|n| n.parse().ok()).inspect(|_| { a.next(); }).unwrap_or(10_000_000)),
+            "--mem" => mem = a.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| usage()),
+            f if !f.starts_with('-') => src = Some(f.to_string()),
+            _ => usage(),
+        }
+    }
+    let Some(path) = src else { usage() };
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| { eprintln!("{}: {}", path, e); std::process::exit(1) });
+    let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().to_string();
+    let o = match rv::cc::compile(&name, &text, &rv::cc::Options { mem_size: mem }) {
+        Ok(o) => o,
+        Err(es) => { for e in es { eprintln!("{}:{}: error: {}", e.file, e.line, e.msg); } std::process::exit(1) }
+    };
+    eprintln!("{}: {} bytes of code and data, {} with bss (RAM {} bytes)", name, o.program.bytes.len(), o.program.end, mem);
+    if let Some(p) = &asm_out { std::fs::write(p, &o.asm).unwrap(); }
+    if let Some(p) = &lst { std::fs::write(p, rv::asm::listing_text(&o.program)).unwrap(); }
+    if let Some(p) = &out { std::fs::write(p, &o.program.bytes).unwrap(); }
+    if let Some(n) = run {
+        let mut s = rv::iss::Iss::new(&o.program.bytes, mem as usize);
+        let halted = s.run(n).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        print!("{}", String::from_utf8_lossy(&s.tx));
+        eprintln!("{} after {} instructions ({} cycles); LED = 0x{:02x}", if halted { "halted" } else { "stopped" }, s.instret, s.cycles, s.led);
+    }
+    std::process::exit(0)
+}
+
 fn main() {
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    if all.first().map(|a| a == "--cc") == Some(true) { cc_main(&all[1..]); }
     let (mut top, mut json, mut verilog, mut list) = (None::<String>, None::<String>, None::<String>, false);
     let (mut ice40, mut pcf, mut asc, mut bin) = (false, None::<String>, None::<String>, None::<String>);
     let (mut device, mut package) = ("up5k".to_string(), "sg48".to_string());
@@ -27,6 +68,7 @@ fn main() {
     let mut asic_flow = false;
     let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
+    let mut program: Option<String> = None;
     let mut files = vec![];
     let mut a = std::env::args().skip(1);
     while let Some(x) = a.next() {
@@ -42,6 +84,7 @@ fn main() {
             "--pcf" => pcf = a.next(),
             "--asc" => asc = a.next(),
             "--bin" => bin = a.next(),
+            "--program" => program = a.next(),
             "--device" => device = a.next().unwrap_or_else(|| usage()),
             "--package" => package = a.next().unwrap_or_else(|| usage()),
             "--pnr" => pnr_tool = a.next().unwrap_or_else(|| usage()),
@@ -98,6 +141,14 @@ fn main() {
     }
     if ice40 {
         nl = ice40::map(&nl).unwrap_or_else(|e| { eprintln!("iCE40 mapping error: {}", e); std::process::exit(1) });
+        if let Some(p) = &program {
+            let bytes = std::fs::read(p).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
+            let lanes = bram::program_lanes(&bram::mem_names(&nl), &bytes).unwrap_or_else(|e| { eprintln!("--program: {}", e); std::process::exit(1) });
+            for (m, words) in lanes { bram::set_mem_init(&mut nl, &m, &words); }
+            println!("program: {} bytes in the block RAMs", bytes.len());
+        }
+    } else if program.is_some() {
+        eprintln!("--program needs --ice40"); std::process::exit(2);
     }
     for w in warnings { eprintln!("warning: {}", w); }
 

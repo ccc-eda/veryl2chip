@@ -17,7 +17,11 @@ const core = await Veryl.load(fromBase64(ctx.VERYL_WASM_B64));
 
 let bad = 0;
 const expectFail = new Set(['alu_fail']);
-for (const ex of ctx.VERYL_EXAMPLES) {
+// the Veryl files of an example (the C examples also have a .c program); examples on
+// the same hardware as another one (same_hw) are checked as programs, below
+const vfiles = (ex) => ex.files.filter((f) => f.name.endsWith('.veryl'));
+const HW = ctx.VERYL_EXAMPLES.filter((ex) => !ex.same_hw).map((ex) => ({ ...ex, files: vfiles(ex) }));
+for (const ex of HW) {
   const t0 = Date.now();
   let line;
   try {
@@ -35,7 +39,7 @@ for (const ex of ctx.VERYL_EXAMPLES) {
 }
 // post-synthesis simulation: the same testbenches with the design module
 // replaced by its generic / iCE40 / standard-cell netlist give the RTL result
-for (const ex of ctx.VERYL_EXAMPLES) {
+for (const ex of HW) {
   if (!ex.synth) continue;
   const rtl = core.simulate(ex.files).tops.map((t) => `${t.name}:${t.fails}`).join(' ');
   for (const gate of ['opt', 'ice40', 'asic']) {
@@ -57,7 +61,7 @@ for (const ex of ctx.VERYL_EXAMPLES) {
 const cli = path.join(dist, '../../veryl-eda/target/release/veryl-eda');
 const haveCli = fs.existsSync(cli);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'veryl2chip-'));
-for (const ex of ctx.VERYL_EXAMPLES) {
+for (const ex of HW) {
   if (!ex.synth) continue;
   const t0 = Date.now();
   try {
@@ -83,7 +87,7 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   core.loadChipdb(await gunzip(fromBase64(ctx.VERYL_CHIPDB_GZ_B64)));
   console.log(`ok   chipdb loaded (${Date.now() - t0} ms)`);
 }
-for (const ex of ctx.VERYL_EXAMPLES) {
+for (const ex of HW) {
   if (!ex.synth) continue;
   const t0 = Date.now();
   try {
@@ -112,8 +116,9 @@ for (const ex of ctx.VERYL_EXAMPLES) {
 }
 
 // ASIC flow in wasm: same cells, wirelength and Fmax as the CLI; legal rows; no overflow
-for (const ex of ctx.VERYL_EXAMPLES) {
-  if (!ex.synth) continue;
+// (not for the SoC with 8 KB of SRAM macros: detailed routing around big macros is still slow)
+for (const ex of HW) {
+  if (!ex.synth || ex.asic === false) continue;
   const t0 = Date.now();
   try {
     const r = core.call({ cmd: 'asic', files: ex.files, top: ex.synth, seed: 1 });
@@ -290,6 +295,62 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   }
 }
 
+// C programs (src/rv): every C example compiles and runs on the instruction-set simulator; on
+// the virtual board RvBoard runs them from its block RAM: c_hello greets and echoes, then the
+// switches program replaces it without synthesis (board_program), as a netlist and in the bitstream
+{
+  const t0 = Date.now();
+  const problems = [];
+  const ex = (id) => ctx.VERYL_EXAMPLES.find((e) => e.id === id);
+  const cOf = (e) => e.files.find((f) => f.name.endsWith('.c'));
+  const sizes = [];
+  for (const e of ctx.VERYL_EXAMPLES.filter((x) => cOf(x))) {
+    const c = cOf(e);
+    const r = core.call({ cmd: 'cc', src: c.src, name: c.name, run: 300000 });
+    if (!r.compiled) { problems.push(`${e.id}: ${r.errors.map((x) => x.line + ': ' + x.msg).join('; ')}`); continue; }
+    sizes.push(`${c.name} ${r.size}`);
+    if (r.run.error) problems.push(`${e.id}: ${r.run.error}`);
+  }
+  const prog = (id) => { const c = cOf(ex(id)); return core.call({ cmd: 'cc', src: c.src, name: c.name, run: 200000 }); };
+  const hello = prog('c_hello');
+  const sw = prog('c_switches');
+  if (!hello.run.tx.startsWith('Hello from C')) problems.push('hello on the ISS: ' + JSON.stringify(hello.run.tx.slice(0, 40)));
+  const badc = core.call({ cmd: 'cc', src: 'int main(void) {\n  x = 1;\n}\n', name: 'bad.c' });
+  if (badc.compiled || badc.errors[0]?.line !== 2) problems.push('compile error ' + JSON.stringify(badc.errors));
+  const b = ex('c_hello');
+  const vf = b.files.filter((f) => f.name.endsWith('.veryl'));
+  const SW = [43, 38, 34, 31, 42, 36, 32, 28];
+  const onBoard = (what, info) => {
+    if (!info.program_mem || info.program !== hello.size) problems.push(`${what}: program_mem ${info.program_mem}, program ${info.program}`);
+    core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 104 } });
+    let txt = '';
+    const run = (cycles, extra = {}) => { const r = core.call({ cmd: 'board_run', cycles, inputs: [], ...extra }); txt += String.fromCharCode(...r.uart.rx); return r; };
+    run(150000);
+    run(60000, { uart_send: 'ab' });
+    if (!txt.startsWith('Hello from C') || !txt.includes('AB')) problems.push(`${what} hello: ${JSON.stringify(txt.slice(0, 30))}...${JSON.stringify(txt.slice(-20))}`);
+    const p = core.call({ cmd: 'board_program', program: sw.bin });
+    if (p.bytes !== sw.size || (what === 'bitstream') !== !!p.bin) problems.push(`${what} board_program ${p.bytes} bytes, bin ${!!p.bin}`);
+    core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 104 } });
+    txt = '';
+    run(100000, { inputs: SW.map((pin, i) => [pin, i === 0 || i === 7 ? 1 : 0]) });
+    const d = Object.fromEntries(run(1000).duty);
+    if (!txt.includes('switches 10000001 = 0x81 = 129') || d[4] !== 1 || d[44] !== 1 || d[2] !== 0) problems.push(`${what} switches: ${JSON.stringify(txt)} LED ${d[4]} ${d[44]} ${d[2]}`);
+  };
+  onBoard('netlist', core.call({ cmd: 'board_load', files: vf, top: 'RvBoard', pcf: b.pcf, program: hello.bin }));
+  const tb = Date.now();
+  const fl = core.call({ cmd: 'board_flash', files: vf, top: 'RvBoard', pcf: b.pcf, program: hello.bin });
+  if (fl.mode !== 'bitstream' || fl.cells.ram !== 20) problems.push(`flash ${fl.mode}, ${fl.cells.ram} RAMs`);
+  onBoard('bitstream', fl);
+  onBoard('cpu', core.call({ cmd: 'board_load_cpu', program: hello.bin, pcf: b.pcf, top: 'RvBoard' }));
+  // the CPU board's speed (the instruction-set simulator): virtual seconds per second
+  core.call({ cmd: 'board_load_cpu', program: prog('c_knight').bin, pcf: b.pcf, top: 'RvBoard' });
+  const tc = Date.now();
+  core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
+  const cpuSpeed = 0.5 / ((Date.now() - tc) / 1000);
+  if (problems.length) bad++;
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} c        ${sizes.join(', ')} bytes; ISS; RvBoard netlist + bitstream (Fmax ${fl.fmax?.toFixed(1)} MHz, ${((Date.now() - tb) / 1000).toFixed(0)} s) + CPU mode (${cpuSpeed.toFixed(1)}x real time): hello + echo, program swapped to switches${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+}
+
 // breadboard model (src/ide/bbmodel.ts): LEDs, resistors, pull-downs, floating inputs, shorts, buttons
 {
   const esbuild = await import('esbuild');
@@ -339,17 +400,22 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/highlight.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
   const hp = path.join(tmp, 'highlight.cjs');
   fs.writeFileSync(hp, js);
-  const { highlight } = createRequire(import.meta.url)(hp);
+  const { highlight, langOf } = createRequire(import.meta.url)(hp);
   const unesc = (h) => h.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   let n = 0, lossy = '';
   for (const ex of ctx.VERYL_EXAMPLES) for (const f of ex.files) {
     n++;
-    if (unesc(highlight(f.src).join('\n')) !== f.src) lossy ||= `${ex.id}/${f.name}`;
+    if (unesc(highlight(f.src, langOf(f.name)).join('\n')) !== f.src) lossy ||= `${ex.id}/${f.name}`;
   }
+  // C and assembly
+  const hc = highlight('#define LED 1\nint main(void) { /* c */ return 0x1F; } // x', 'c').join('\n');
+  const ha = highlight('loop:\n    addi a0, a0, -1   # count\n    .word 5', 'asm').join('\n');
+  const taggedC = ['t-attr">#define', 't-type">int', 't-kw">return', 't-num">0x1F', 't-com">// x', 't-name">LED'].every((t) => hc.includes(t))
+    && ['t-name">loop:', 't-kw">addi', 't-type">a0', 't-num">-1', 't-com"># count', 't-attr">.word'].every((t) => ha.includes(t));
   const h = highlight("module M { // c\n  var a: logic<8> = 8'hFF; /* x\n y */ $assert(a); }").join('\n');
   const tagged = ['t-kw">module', 't-type">logic', "t-num\">8'hFF", 't-com">// c', 't-com"> y */', 't-sys">$assert', 't-name">M'].every((t) => h.includes(t));
-  if (lossy || !tagged) bad++;
-  console.log(`${lossy || !tagged ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files${lossy ? ': changes ' + lossy : ''}${tagged ? '' : ': tokens not tagged'}`);
+  if (lossy || !tagged || !taggedC) bad++;
+  console.log(`${lossy || !tagged || !taggedC ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files (Veryl, C, assembly)${lossy ? ': changes ' + lossy : ''}${tagged && taggedC ? '' : ': tokens not tagged'}`);
 }
 
 // interface languages: every tr('繁體', 'English') pair in the sources has

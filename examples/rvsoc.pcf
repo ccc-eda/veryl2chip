@@ -1,0 +1,25 @@
+# RvBoard (examples/src/rvsoc.veryl) on an iCEBreaker: BTN_N resets, BTN1-3, the USB serial port,
+# 8 outputs on PMOD1A (the 8-LED module, a 7-segment display, ...), 8 inputs on PMOD1B (the switch module)
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn i_btn[0] 20
+set_io -nowarn i_btn[1] 19
+set_io -nowarn i_btn[2] 18
+set_io -nowarn i_rx     6
+set_io -nowarn o_tx     9
+set_io -nowarn o_led[0] 4
+set_io -nowarn o_led[1] 2
+set_io -nowarn o_led[2] 47
+set_io -nowarn o_led[3] 45
+set_io -nowarn o_led[4] 3
+set_io -nowarn o_led[5] 48
+set_io -nowarn o_led[6] 46
+set_io -nowarn o_led[7] 44
+set_io -nowarn i_sw[0] 43
+set_io -nowarn i_sw[1] 38
+set_io -nowarn i_sw[2] 34
+set_io -nowarn i_sw[3] 31
+set_io -nowarn i_sw[4] 42
+set_io -nowarn i_sw[5] 36
+set_io -nowarn i_sw[6] 32
+set_io -nowarn i_sw[7] 28
