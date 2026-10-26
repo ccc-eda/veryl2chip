@@ -88,6 +88,8 @@ const isFpgaStage = (k: string) => FPGA_STAGES.some(s => s.key === k && s.tag ==
 /** tab ids of the non-file tabs (kept in the saved tab list, so not translated) */
 const FLOW_TAB = '\u2699flow';
 const WELCOME = '\u2605welcome';
+/** the course tutorial (Traditional Chinese) */
+const TUTORIAL = 'https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md';
 const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n;
 
 function file(name: string): VFile | undefined { return proj.files.find(f => f.name === name); }
@@ -374,7 +376,7 @@ function welcome(): void {
   const recent = projects.slice(-8).reverse();
   $('welcome').innerHTML = `<h2>veryl2chip IDE</h2><p>${tr('Veryl → 模擬 → 合成 → FPGA / ASIC，全部在瀏覽器裡。', 'Veryl → simulation → synthesis → FPGA / ASIC, all in the browser.')}</p>
     <div class="cols">
-      <div><h3>${tr('開始', 'Start')}</h3><a data-a="newfile">${tr('＋ 新增 .veryl 檔', '＋ New .veryl file')}</a><a data-a="newproj">${tr('＋ 新專案', '＋ New project')}</a><a data-a="examples">${tr('📚 開啟範例…', '📚 Open an example…')}</a><a data-a="import">${tr('⇪ 匯入 .veryl 檔…', '⇪ Import .veryl files…')}</a></div>
+      <div><h3>${tr('開始', 'Start')}</h3><a data-a="newfile">${tr('＋ 新增 .veryl 檔', '＋ New .veryl file')}</a><a data-a="newproj">${tr('＋ 新專案', '＋ New project')}</a><a data-a="examples">${tr('📚 開啟範例…', '📚 Open an example…')}</a><a data-a="import">${tr('⇪ 匯入 .veryl 檔…', '⇪ Import .veryl files…')}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr('📖 從零開始的教學（寫 Veryl → 燒進 iCEBreaker）', '📖 Tutorial from scratch (write Veryl → flash an iCEBreaker)')}</a></div>
       <div><h3>${tr('最近的專案', 'Recent projects')}</h3>${recent.map(p => `<a data-p="${p.id}">${esc(projName(p))}</a>`).join('')}</div>
       <div><h3>${tr('這個專案', 'This project')}</h3>${proj.files.map(f => `<a data-f="${esc(f.name)}">◆ ${esc(f.name)}</a>`).join('')}<a data-a="flow">${tr('⚙ 合成流程', '⚙ Synthesis flow')}</a></div>
     </div>`;
@@ -879,7 +881,7 @@ async function boot(): Promise<void> {
   wire();
   const hash = location.hash;
   const exId = /ex=([\w-]+)/.exec(hash)?.[1];
-  if (!projects.length) projects.push(fromExample(examples().find(e => e.id === (exId ?? 'seq101')) ?? examples()[0]));
+  if (!projects.length) projects.push(fromExample(examples().find(e => e.id === (exId ?? 'tut_blinky')) ?? examples()[0]));
   proj = projects.find(p => p.id === load<string>('cur', '')) ?? projects[0];
   const ex = exId ? examples().find(e => e.id === exId) : undefined;
   if (ex) {

@@ -80,7 +80,7 @@
     </section>
     <section id="view-help" class="sideview hidden">
       <div class="side-head"><span data-en="Help">說明</span></div>
-      <div class="side-hint help" data-en-html="<p><b>Veryl → chip</b>, all in the browser (WebAssembly), no server needed.</p><table><tr><td>Ctrl/⌘+Enter</td><td>run tests</td></tr><tr><td>Ctrl/⌘+Shift+B</td><td>synthesize</td></tr><tr><td>Ctrl/⌘+Shift+P</td><td>command palette</td></tr><tr><td>Ctrl/⌘+P</td><td>quick open</td></tr><tr><td>Ctrl/⌘+/</td><td>toggle comment</td></tr><tr><td>Tab / Shift+Tab</td><td>indent / outdent</td></tr><tr><td>Ctrl/⌘+S</td><td>save (it saves as you type anyway)</td></tr></table><p>Syntax is checked as you type (the official veryl-parser); errors show in the Problems panel and next to the line numbers.</p><p>Flow: common ① RTL→Logic → ② Logic Netlist → ③ technology-independent optimization → FPGA ④ LUT4 → ⑤ placement (annealing) → ⑥ routing → ⑦ STA; ASIC ④ standard cells → ⑤ row placement → ⑥ CTS + global routing → ⑦ detail routing → ⑧ STA → ⑨ power.</p><p>&quot;Verify all&quot; runs the same testbenches on the RTL and on the three synthesized netlists; the results must agree.</p>">
+      <div class="side-hint help" data-en-html="<p><b>Veryl → chip</b>, all in the browser (WebAssembly), no server needed.</p><table><tr><td>Ctrl/⌘+Enter</td><td>run tests</td></tr><tr><td>Ctrl/⌘+Shift+B</td><td>synthesize</td></tr><tr><td>Ctrl/⌘+Shift+P</td><td>command palette</td></tr><tr><td>Ctrl/⌘+P</td><td>quick open</td></tr><tr><td>Ctrl/⌘+/</td><td>toggle comment</td></tr><tr><td>Tab / Shift+Tab</td><td>indent / outdent</td></tr><tr><td>Ctrl/⌘+S</td><td>save (it saves as you type anyway)</td></tr></table><p>Syntax is checked as you type (the official veryl-parser); errors show in the Problems panel and next to the line numbers.</p><p>Flow: common ① RTL→Logic → ② Logic Netlist → ③ technology-independent optimization → FPGA ④ LUT4 → ⑤ placement (annealing) → ⑥ routing → ⑦ STA; ASIC ④ standard cells → ⑤ row placement → ⑥ CTS + global routing → ⑦ detail routing → ⑧ STA → ⑨ power.</p><p>&quot;Verify all&quot; runs the same testbenches on the RTL and on the three synthesized netlists; the results must agree.</p><p><a href=&quot;https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;>📖 Tutorial from scratch</a> (Traditional Chinese): write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker.</p>">
         <p><b>Veryl → 晶片</b>，全部在瀏覽器裡（WebAssembly），不需要伺服器。</p>
         <table>
           <tr><td>Ctrl/⌘+Enter</td><td>執行測試</td></tr>
@@ -94,6 +94,7 @@
         <p>編輯時會即時語法檢查（官方 veryl-parser）；錯誤顯示在「問題」面板與行號旁。</p>
         <p>流程：共 ① RTL→Logic → ② Logic Netlist → ③ 技術無關最佳化 → FPGA ④ LUT4 → ⑤ 佈局退火 → ⑥ 繞線 → ⑦ STA；ASIC ④ 標準元件 → ⑤ 列式佈局 → ⑥ CTS + 全域繞線 → ⑦ 細部繞線 → ⑧ STA → ⑨ 功耗。</p>
         <p>「全面驗證」用同一組 testbench 跑 RTL 和三種合成後網表，結果必須一致。</p>
+        <p><a href="https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md" target="_blank" rel="noopener">📖 從零開始的教學</a>：寫 Veryl → 模擬 → 看波形 → 合成 → 燒進 iCEBreaker。</p>
       </div>
     </section>
   </aside>

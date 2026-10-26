@@ -1,0 +1,58 @@
+// 第 1 課：閃爍的 LED
+// 12 MHz 時脈驅動一個計數器，用計數器的高位元點亮 LED：
+// 板上紅燈 / 綠燈輪流閃，擴充板的 5 顆 LED 以二進位往上數。
+module Blinky #(
+    param WIDTH: u32 = 24, // 2^24 / 12 MHz ≈ 1.4 秒一輪
+) (
+    i_clk : input  clock   , // 12 MHz
+    i_rst : input  reset   , // 板上按鈕 BTN_N（按下 = 重設）
+    o_ledr: output logic   , // 板上紅燈（低電位點亮）
+    o_ledg: output logic   , // 板上綠燈（低電位點亮）
+    o_led : output logic<5>, // 擴充板 LED1..LED5（高電位點亮）
+) {
+    var cnt: logic<WIDTH>;
+
+    always_ff {
+        if_reset {
+            cnt = 0;
+        } else {
+            cnt = cnt + 1;
+        }
+    }
+
+    assign o_ledr = !cnt[WIDTH - 1];
+    assign o_ledg = cnt[WIDTH - 1];
+    assign o_led  = cnt[WIDTH - 1:WIDTH - 5];
+}
+
+// 測試時把計數器縮成 6 位元，幾十個時脈就能看到 LED 變化
+#[test(test_blinky)]
+module TestBlinky {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var ledr: logic   ;
+    var ledg: logic   ;
+    var led : logic<5>;
+
+    inst dut: Blinky #(
+        WIDTH: 6,
+    ) (
+        i_clk : clk ,
+        i_rst : rst ,
+        o_ledr: ledr,
+        o_ledg: ledg,
+        o_led : led ,
+    );
+
+    initial {
+        rst.assert();
+        $assert(led == 5'd0 && ledr == 1'b1 && ledg == 1'b0, "after reset: count 0, green on");
+        clk.next(37); // cnt = 37 = 6'b100101
+        $assert(led == 5'b10010, "the top 5 bits of 37");
+        $assert(ledr == 1'b0 && ledg == 1'b1, "the top bit is 1: red on, green off");
+        clk.next(27); // cnt = 64 -> wraps to 0
+        $assert(led == 5'd0, "wraps around");
+        $finish();
+    }
+}

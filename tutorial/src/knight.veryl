@@ -1,0 +1,107 @@
+// 第 2 課：跑馬燈（Knight Rider）
+// 一顆亮點在 5 顆 LED 間來回跑；按住 BTN1 暫停。
+// 新觀念：除頻產生 tick、按鈕同步器、多個 always_ff、if 巢狀判斷。
+module KnightRider #(
+    param TICK : u32 = 1_500_000, // 12 MHz / 1.5M = 每秒 8 步
+    param DIV_W: u32 = 21       , // 除頻計數器的寬度（要能放下 TICK - 1）
+) (
+    i_clk: input  clock   ,
+    i_rst: input  reset   ,
+    i_btn: input  logic   , // BTN1（按下 = 1）
+    o_led: output logic<5>,
+) {
+    var div  : logic<DIV_W>;
+    var tick : logic       ; // 每 TICK 個時脈為 1 一拍
+    var btn_s: logic<2>    ; // 兩級同步器：按鈕和時脈不同步
+    var pos  : logic<5>    ; // 目前亮的那一顆（one-hot）
+    var left : logic       ; // 1 = 往左（LED5 方向）跑
+
+    // 除頻：每 TICK 個時脈送出一拍 tick
+    always_ff {
+        if_reset {
+            div  = 0;
+            tick = 0;
+        } else if div == TICK - 1 {
+            div  = 0;
+            tick = 1;
+        } else {
+            div  = div + 1;
+            tick = 0;
+        }
+    }
+
+    // 按鈕經過兩個正反器再使用，避免亞穩態
+    always_ff {
+        if_reset {
+            btn_s = 0;
+        } else {
+            btn_s = {btn_s[0], i_btn};
+        }
+    }
+
+    // 每個 tick 移動一格，碰到兩端就回頭；按住按鈕時不動
+    always_ff {
+        if_reset {
+            pos  = 5'b00001;
+            left = 1;
+        } else if tick && !btn_s[1] {
+            if left {
+                if pos == 5'b10000 {
+                    left = 0;
+                    pos  = 5'b01000;
+                } else {
+                    pos = pos << 1;
+                }
+            } else {
+                if pos == 5'b00001 {
+                    left = 1;
+                    pos  = 5'b00010;
+                } else {
+                    pos = pos >> 1;
+                }
+            }
+        }
+    }
+
+    assign o_led = pos;
+}
+
+// 測試：TICK = 2，每 2 個時脈走一步
+#[test(test_knight)]
+module TestKnightRider {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var btn : logic   ;
+    var led : logic<5>;
+    var held: logic<5>;
+
+    inst dut: KnightRider #(
+        TICK : 2,
+        DIV_W: 2,
+    ) (
+        i_clk: clk,
+        i_rst: rst,
+        i_btn: btn,
+        o_led: led,
+    );
+
+    initial {
+        btn = 0;
+        rst.assert();
+        $assert(led == 5'b00001, "starts at LED1");
+        clk.next(2 * 4 + 1);
+        $assert(led == 5'b10000, "four steps to the left end");
+        clk.next(2 * 2);
+        $assert(led == 5'b00100, "then back to the right");
+        btn = 1; // 按住按鈕
+        clk.next(3); // 同步器要 2 拍才看得到按鈕，這期間可能還會走一步
+        held = led;
+        clk.next(2 * 5);
+        $assert(led == held, "paused while the button is held");
+        btn = 0;
+        clk.next(2 * 2); // 等同步器 + 一步（等太久可能剛好來回一趟又回到原位）
+        $assert(led != held, "moves again after release");
+        $finish();
+    }
+}

@@ -31,8 +31,10 @@ console.log(`wasm.js      ${(wasm.length / 1e6).toFixed(1)} MB wasm`);
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
 // English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
-const GROUP_EN = { 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 其他: 'Other' };
+const GROUP_EN = { 教學: 'Tutorial', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 其他: 'Other' };
 const EN = {
+  tut_blinky: { title_en: 'Lesson 1: Blinky', note_en: 'tutorial/README.tw.md lesson 1: a counter blinks the LEDs; iCEBreaker pins (onboard + break-off LEDs)' },
+  tut_knight: { title_en: 'Lesson 2: Knight Rider', note_en: 'tutorial lesson 2: tick divider, button synchronizer; hold BTN1 to pause' },
   adder: { title_en: 'Adder' },
   max3: { title_en: 'Max3 function' },
   alu_pkg: { title_en: 'AluUnit package + enum' },
@@ -54,6 +56,10 @@ const EN = {
   alu_fail: { title_en: 'Alu (with an assertion that fails on purpose)', note_en: 'What a failing assertion looks like: tb_alu has a "should fail on purpose" assertion' },
 };
 const EX = [
+  { id: 'tut_blinky', group: '教學', title: '第 1 課 Blinky 閃爍 LED', files: ['tutorial/src/blinky.veryl'], synth: 'Blinky', pcf: 'tutorial/icebreaker.pcf',
+    note: 'tutorial/README.tw.md 第 1 課：計數器讓 LED 閃爍；iCEBreaker 腳位（板上與擴充板 LED）' },
+  { id: 'tut_knight', group: '教學', title: '第 2 課 跑馬燈', files: ['tutorial/src/knight.veryl'], synth: 'KnightRider', pcf: 'tutorial/icebreaker.pcf',
+    note: '教學第 2 課：除頻 tick、按鈕同步器；按住 BTN1 暫停' },
   { id: 'adder', group: '基礎', title: 'Adder 加法器', files: ['examples/src/adder.veryl'], synth: 'Adder' },
   { id: 'max3', group: '基礎', title: 'Max3 function', files: ['examples/src/max3.veryl'], synth: 'Max3' },
   { id: 'alu_pkg', group: '基礎', title: 'AluUnit package + enum', files: ['examples/src/alu_pkg.veryl'], synth: 'AluUnit' },

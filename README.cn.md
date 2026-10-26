@@ -3,6 +3,8 @@
 
 **在线直接使用**（免安装）：[展示页](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html)
 
+**从零开始的教程**（课程教材，繁体中文）：[写 Veryl → 仿真 → 看波形 → 综合 → 烧进 iCEBreaker](tutorial/README.tw.md)
+
 Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一直到比特流）与 ASIC 流程
 （标准单元、布局、布线、时序分析），全部用 Rust 编写。
 
