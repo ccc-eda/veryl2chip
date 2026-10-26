@@ -267,28 +267,107 @@ fn board_load(v: &Value) -> R<Value> {
     let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
     let d = Design::from_netlist(&mapped)?;
     let b = icebreaker::board(d.clone(), pcf.as_deref())?;
-    let info = board_info(&top, &mapped, &b, pcf.is_none());
+    let count = |t: &str| mapped.cells.iter().filter(|c| c.typ.starts_with(t)).count();
+    let cells = json!({ "lut": count("SB_LUT4"), "carry": count("SB_CARRY"), "ff": count("SB_DFF"), "ram": count("SB_RAM40_4K") });
+    let mut info = board_info(&top, cells, &b, pcf.is_none(), None);
+    info["mode"] = json!("netlist");
     BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b)));
     Ok(info)
 }
 
-fn board_info(top: &str, nl: &Netlist, b: &veryl_eda::board::Board, default_pcf: bool) -> Value {
+/// synthesize, place and route (own P&R, on the loaded chipdb), write the bitstream,
+/// decode it and power up the board with it: the board runs what would be flashed
+fn board_flash(v: &Value) -> R<Value> {
+    use veryl_eda::board::{bitstream, icebreaker};
+    let (top, (_, mapped)) = synth_netlists(v)?;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
+    let opts = veryl_eda::pnr::Opts {
+        chipdb: None, package: "sg48".into(), pcf: veryl_eda::pnr::parse_pcf(pcf.as_deref().unwrap_or(icebreaker::DEFAULT_PCF)),
+        seed: v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1), verbose: false, timing_driven: true,
+    };
+    let out = CHIP.with(|c| -> R<veryl_eda::pnr::Output> {
+        let c = c.borrow();
+        let chip = c.as_ref().ok_or("chip database not loaded")?;
+        veryl_eda::pnr::place_and_route_on(chip, &mapped, &opts)
+    })?;
+    let bin = veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?;
+    let (d, rep) = CHIP.with(|c| -> R<(veryl_eda::board::Design, bitstream::Report)> {
+        let c = c.borrow();
+        bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
+    })?;
+    let pins_pcf = icebreaker::pins_pcf(&d);
+    let mut b = icebreaker::board(d.clone(), Some(&pins_pcf))?;
+    b.warnings.extend(rep.warnings.iter().cloned());
+    // the design's port on each pin, from the pin assignment the place and route used
+    let names: std::collections::HashMap<u32, String> = veryl_eda::pnr::parse_pcf(&out.pcf).into_iter().filter_map(|(port, pin)| Some((pin.parse().ok()?, port))).collect();
+    for (name, _) in mapped.ports.iter().flat_map(|p| (0..p.bits.len()).map(move |i| (if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }, ()))) {
+        if !opts.pcf.contains_key(&name) {
+            let pin = names.iter().find(|(_, n)| **n == name).map(|(p, _)| p.to_string()).unwrap_or_else(|| "?".into());
+            b.warnings.push(format!("{} has no pin in the pin file: placed on pin {}", name, pin));
+        }
+    }
+    let fmax = out.timing.fmax;
+    if fmax < icebreaker::CLOCK_HZ / 1e6 { b.warnings.push(format!("Fmax {:.1} MHz is below the board's 12 MHz: the real board may not work like this simulation", fmax)); }
+    let cells = json!({ "lut": rep.lcs, "carry": 0, "ff": 0, "ram": rep.rams, "lc": rep.lcs });
+    let mut info = board_info(&top, cells, &b, pcf.is_none(), Some(&names));
+    info["mode"] = json!("bitstream");
+    info["fmax"] = json!(fmax);
+    info["bin"] = json!(base64(&bin));
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b)));
+    Ok(info)
+}
+
+/// any iCE40UP5K bitstream (e.g. from nextpnr + icepack) onto the board
+fn board_load_bin(v: &Value) -> R<Value> {
+    use veryl_eda::board::{bitstream, icebreaker};
+    let b64 = v.get("bin").and_then(|b| b.as_str()).ok_or("missing bin")?;
+    let bin = unbase64(b64)?;
+    let (d, rep) = CHIP.with(|c| -> R<(veryl_eda::board::Design, bitstream::Report)> {
+        let c = c.borrow();
+        bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
+    })?;
+    let pins_pcf = icebreaker::pins_pcf(&d);
+    let mut b = icebreaker::board(d.clone(), Some(&pins_pcf))?;
+    b.warnings.extend(rep.warnings.iter().cloned());
+    let cells = json!({ "lut": rep.lcs, "carry": 0, "ff": 0, "ram": rep.rams, "lc": rep.lcs });
+    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("bitstream");
+    let mut info = board_info(name, cells, &b, false, None);
+    info["mode"] = json!("bin");
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b)));
+    Ok(info)
+}
+
+fn unbase64(s: &str) -> R<Vec<u8>> {
+    let val = |c: u8| -> R<u32> {
+        Ok(match c { b'A'..=b'Z' => c - b'A', b'a'..=b'z' => c - b'a' + 26, b'0'..=b'9' => c - b'0' + 52, b'+' | b'-' => 62, b'/' | b'_' => 63, _ => return Err("bad base64".into()) } as u32)
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for ch in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in ch.iter().enumerate() { n |= val(*c)? << (18 - 6 * i); }
+        out.push((n >> 16) as u8);
+        if ch.len() > 2 { out.push((n >> 8) as u8); }
+        if ch.len() > 3 { out.push(n as u8); }
+    }
+    Ok(out)
+}
+
+fn board_info(top: &str, cells: Value, b: &veryl_eda::board::Board, default_pcf: bool, names: Option<&std::collections::HashMap<u32, String>>) -> Value {
     use veryl_eda::board::icebreaker::{Kind, PINS};
     let pins: Vec<Value> = PINS.iter().map(|p| {
         let (kind, level) = match p.kind {
             Kind::Clock => ("clock", true), Kind::Button { pressed } => ("button", pressed), Kind::Led { on } => ("led", on),
             Kind::Uart { rx } => (if rx { "uart_rx" } else { "uart_tx" }, true), Kind::Pmod => ("pmod", true),
         };
-        let port = b.port_of.get(&p.pin).cloned();
+        let port = names.and_then(|n| n.get(&p.pin).cloned()).or_else(|| b.port_of.get(&p.pin).cloned());
         let input = if b.pin_in.contains_key(&p.pin) { port.clone() } else { None };
         let output = if b.pin_out.iter().any(|x| x.0 == p.pin) { port } else { None };
         json!({ "pin": p.pin, "name": p.name, "kind": kind, "level": level, "input": input, "output": output })
     }).collect();
-    let count = |t: &str| nl.cells.iter().filter(|c| c.typ.starts_with(t)).count();
     json!({
         "ok": true, "top": top, "pins": pins, "warnings": b.warnings, "default_pcf": default_pcf,
-        "clock_hz": veryl_eda::board::icebreaker::CLOCK_HZ,
-        "cells": { "lut": count("SB_LUT4"), "carry": count("SB_CARRY"), "ff": count("SB_DFF"), "ram": count("SB_RAM40_4K") },
+        "clock_hz": veryl_eda::board::icebreaker::CLOCK_HZ, "cells": cells,
     })
 }
 
@@ -403,6 +482,8 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "pnr" => pnr(v),
         "asic" => asic(v),
         "board_load" => board_load(v),
+        "board_flash" => board_flash(v),
+        "board_load_bin" => board_load_bin(v),
         "board_run" => board_run(v),
         "board_reset" => board_reset(),
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),

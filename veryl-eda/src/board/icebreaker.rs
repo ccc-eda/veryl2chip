@@ -73,3 +73,14 @@ pub fn board(d: super::Design, pcf: Option<&str>) -> Result<super::Board, String
     }
     Ok(b)
 }
+
+/// the pin file of a decoded bitstream: its IO is already named by pin
+pub fn pins_pcf(d: &super::Design) -> String {
+    d.inputs.iter().chain(d.outputs.iter()).map(|(p, _)| format!("set_io {} {}\n", p, p)).collect()
+}
+
+/// a decoded bitstream on an iCEBreaker
+pub fn board_from_pins(d: super::Design) -> Result<super::Board, String> {
+    let pcf = pins_pcf(&d);
+    board(d, Some(&pcf))
+}

@@ -47,7 +47,7 @@ The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&targe
 - ⚙ the flow as an editor tab: common ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn, then FPGA ④–⑦ or
   ASIC ④–⑨, and FPGA vs ASIC
 - bottom panel (problems, output, test results, waveform), status bar, command palette (Ctrl/⌘+Shift+P), quick open (Ctrl/⌘+P)
-- ⚡ **virtual iCEBreaker**: flash the design onto a drawn board; LEDs light (brightness from the duty cycle) and buttons can be pressed, with the same pins as the real board (a cycle-by-cycle simulation of the iCE40 netlist, about 0.4× real time for small designs)
+- ⚡ **virtual iCEBreaker**: flash the design onto a drawn board; LEDs light (brightness from the duty cycle) and buttons can be pressed, with the same pins as the real board (it runs the real placed-and-routed bitstream, decoded back into a circuit and simulated cycle by cycle, about 0.3–0.4× real time for small designs; any iCE40UP5K `.bin`, e.g. from nextpnr, can be dropped on it)
 - interface in Traditional Chinese, Simplified Chinese or English (menu in the title bar; the browser's language by default)
 
 `ide.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests.

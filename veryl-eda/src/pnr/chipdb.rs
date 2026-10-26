@@ -100,6 +100,10 @@ pub struct Chip {
     pub ieren: HashMap<(i32, i32, u8), (i32, i32, u8)>,
     /// column buffer source tiles
     pub colbuf_src: Vec<(i32, i32)>,
+    /// (x, y, pio, g): an IO pad that can drive global network g directly (padin)
+    pub gbufpin: Vec<(i32, i32, u8, u8)>,
+    /// config bits outside the tiles: name ("padin_glb_netwk.3") -> (bank, x, y)
+    pub extra_bits: HashMap<String, (usize, usize, usize)>,
 }
 
 fn bitpos(s: &str) -> R<BitPos> {
@@ -136,8 +140,9 @@ impl Chip {
             w: 0, h: 0, tiles: vec![], tile_type: HashMap::new(), dims: HashMap::new(), tile_bits: HashMap::new(),
             by_name: HashMap::new(), net_box: vec![], net_label: vec![], kind: vec![], pips: vec![], groups: vec![], fanout: vec![],
             pins: HashMap::new(), pin_order: vec![], gbufin: vec![], ieren: HashMap::new(), colbuf_src: vec![],
+            gbufpin: vec![], extra_bits: HashMap::new(),
         };
-        enum Sec { None, Pins(bool), Gbufin, Ieren, Colbuf, Bits(String), Net(u32), Mux(u8, u8, u32, u32) }
+        enum Sec { None, Pins(bool), Gbufin, Gbufpin, ExtraBits, Ieren, Colbuf, Bits(String), Net(u32), Mux(u8, u8, u32, u32) }
         let mut sec = Sec::None;
         let mut group_ix: HashMap<(u8, u8, Vec<BitPos>), u32> = HashMap::new();
         for line in text.lines() {
@@ -157,6 +162,8 @@ impl Chip {
                     }
                     ".pins" => sec = Sec::Pins(p[1] == package),
                     ".gbufin" => sec = Sec::Gbufin,
+                    ".gbufpin" => sec = Sec::Gbufpin,
+                    ".extra_bits" => sec = Sec::ExtraBits,
                     ".ieren" => sec = Sec::Ieren,
                     ".colbuf" => sec = Sec::Colbuf,
                     ".net" => sec = Sec::Net(p[1].parse().map_err(|_| "bad .net")?),
@@ -191,6 +198,8 @@ impl Chip {
                     c.pins.insert(p[0].to_string(), (p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap()));
                 },
                 Sec::Gbufin => c.gbufin.push((p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap())),
+                Sec::Gbufpin => c.gbufpin.push((p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap())),
+                Sec::ExtraBits => { c.extra_bits.insert(p[0].to_string(), (p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap())); }
                 Sec::Ieren => {
                     let v: Vec<i32> = p.iter().map(|s| s.parse().unwrap()).collect();
                     c.ieren.insert((v[0], v[1], v[2] as u8), (v[3], v[4], v[5] as u8));

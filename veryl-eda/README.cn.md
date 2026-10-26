@@ -127,7 +127,8 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 （`board/icebreaker.rs`：引脚 35 的 12 MHz 时钟、BTN_N、红绿 LED、扩展板的 LED1–5 与 BTN1–3、PMOD1A/1B、FTDI 串口；引脚来自设计的 pcf，没有的话用教学的）。
 引擎跑在通用的 `Design` 上（4 输入真值表——进位是 3 输入多数表决——触发器、block RAM、具名 IO），采**活动驱动**：
 某条 net 改变时只把它驱动的真值表排入队列，依层级顺序求值（不会有毛刺）；任何时钟 net 上的边缘都会被检测，所以分频时钟与下降沿都能用。
-`cargo test` 在 15 个设计上用每拍随机输入和 netsim 比对。速度（单核）：Blinky 每秒 680 万周期（12 MHz 的 57%），RiscvSoc 每秒 150 万周期；WebAssembly 约为其 75%。
+`cargo test` 在 15 个设计上用每拍随机输入和 netsim 比对。
+**比特流解码**（`board/bitstream.rs`，M13）：把 `.bin`（`pnr::bitstream::bin_to_asc`，自制 icepack 的反向）或 `.asc` 解回 `Design`：激活的 pip（mux 的位等于某个 pip 的样式）以 union-find 并成 net；逻辑单元（LUT 位还原排列、进位、触发器与 tile 的时钟 / 使能 / set-reset 和 `NegClk`）、IO（`PINTYPE`）、全局网络（`fabout`，或经 `padin_glb_netwk` 额外位直接由引脚驱动）与 block RAM（`CBIT` 模式、`.ram_data`）成为驱动者。测试：`bin → asc → bin` 不变；11 个设计（自己的 P&R）与 3 个设计（nextpnr，有安装时）解码后的比特流都与网表逐周期一致。速度（单核）：Blinky 每秒 680 万周期（12 MHz 的 57%），RiscvSoc 每秒 150 万周期；WebAssembly 约为其 75%。
 
 ## 流程
 | 文件 | 内容 |

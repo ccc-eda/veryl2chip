@@ -10,6 +10,7 @@
 //! evaluated in level order (so values settle without glitches), and clock
 //! edges are seen on any clock net (divided clocks, negative edges).
 
+pub mod bitstream;
 pub mod icebreaker;
 
 use crate::netlist::{is_out, Bit, Dir, Netlist};

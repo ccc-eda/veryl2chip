@@ -681,16 +681,27 @@ let boardCore: Promise<Core> | null = null;
 /** the board has its own core (worker), so synthesis does not wait for the simulation */
 function getBoardCore(): Promise<Core> { return (boardCore ??= startCore(fromBase64(VERYL_WASM_B64))); }
 
+function ensureBoard(): VirtualBoard {
+  if (board) return board;
+  board = new VirtualBoard($('boardPane'), getBoardCore);
+  board.flashButton.onclick = () => flashBoard();
+  board.onLoaded = info => {
+    problems = problems.filter(p => p.from !== 'run');
+    for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
+    renderProblems();
+  };
+  return board;
+}
+
 async function flashBoard(): Promise<void> {
   const top = synthTop();
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能燒錄）', 'No synthesizable module (#[test] modules cannot be flashed)')); return; }
-  board ??= new VirtualBoard($('boardPane'), getBoardCore);
-  board.flashButton.onclick = () => flashBoard();
+  ensureBoard();
   openFile(BOARD_TAB);
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
   setBusy(true, tr('⚡ 燒錄到虛擬板…', '⚡ Flashing the virtual board…'));
   try {
-    const info = await board.flash(proj.files.filter(f => f.name.endsWith('.veryl')), top, proj.pcf);
+    const info = await board!.flash(proj.files.filter(f => f.name.endsWith('.veryl')), top, proj.pcf);
     $('sbTest').textContent = tr(`⚡ ${info.top} 已燒錄到虛擬板`, `⚡ ${info.top} flashed to the virtual board`);
     problems = problems.filter(p => p.from !== 'run');
     for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });

@@ -10,7 +10,11 @@ import { tr } from '../i18n';
 interface PinInfo { pin: number; name: string; kind: string; level: boolean; input: string | null; output: string | null }
 interface LoadInfo {
   top: string; pins: PinInfo[]; warnings: string[]; default_pcf: boolean; clock_hz: number;
-  cells: { lut: number; carry: number; ff: number; ram: number };
+  cells: { lut: number; carry: number; ff: number; ram: number; lc?: number };
+  /** bitstream: synthesized, placed, routed, decoded; netlist: the mapped netlist; bin: an uploaded bitstream */
+  mode: 'bitstream' | 'netlist' | 'bin';
+  fmax?: number;
+  bin?: string;
 }
 interface RunResult { cycle: number; duty: [number, number][]; evals: number }
 
@@ -41,6 +45,11 @@ export class VirtualBoard {
         <button class="tb-btn" data-a="flash" title="${tr('合成目前的設計並燒錄到虛擬板', 'Synthesize the current design and flash it to the virtual board')}">${tr('⚡ 燒錄', '⚡ Flash')}</button>
         <button class="tb-btn" data-a="run" disabled>⏸</button>
         <button class="tb-btn" data-a="power" disabled title="${tr('重新上電（從頭開始）', 'Power cycle (start over)')}">⟲</button>
+        <select data-a="mode" title="${tr('燒錄什麼：位元流＝佈局繞線後的真實位元流（解碼回電路模擬）；網表＝映射後的網表（快，不佈局繞線）', 'What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route)')}">
+          <option value="bitstream">${tr('位元流（真實）', 'bitstream (real)')}</option><option value="netlist">${tr('網表（快速）', 'netlist (fast)')}</option></select>
+        <button class="tb-btn ghost" data-a="upload" title="${tr('載入任何 iCE40UP5K 的 .bin（例如 nextpnr + icepack 做的；也可以拖放到板子上）', 'Load any iCE40UP5K .bin (e.g. from nextpnr + icepack; or drop it on the board)')}">${tr('📂 .bin', '📂 .bin')}</button>
+        <button class="tb-btn ghost hidden" data-a="download" title="${tr('下載這個位元流（iceprog 可以燒進真實的 iCEBreaker）', 'Download this bitstream (iceprog flashes it to a real iCEBreaker)')}">⬇ .bin</button>
+        <input type="file" accept=".bin" class="hidden" data-a="file">
         <select data-a="pace" title="${tr('速度', 'Speed')}"><option value="rt">${tr('不超過即時', 'up to real time')}</option><option value="max">${tr('最快', 'fastest')}</option></select>
         <span class="vb-stat"></span>
       </div>
@@ -50,6 +59,12 @@ export class VirtualBoard {
     this.q('[data-a=run]').onclick = () => this.setRunning(!this.running);
     this.q('[data-a=power]').onclick = () => this.power();
     this.q<HTMLSelectElement>('[data-a=pace]').onchange = e => { this.realtime = (e.target as HTMLSelectElement).value === 'rt'; };
+    this.q('[data-a=upload]').onclick = () => this.q<HTMLInputElement>('[data-a=file]').click();
+    this.q<HTMLInputElement>('[data-a=file]').onchange = e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) this.loadBin(f); (e.target as HTMLInputElement).value = ''; };
+    this.q('[data-a=download]').onclick = () => this.download();
+    host.addEventListener('dragover', e => { e.preventDefault(); host.classList.add('drop'); });
+    host.addEventListener('dragleave', () => host.classList.remove('drop'));
+    host.addEventListener('drop', e => { e.preventDefault(); host.classList.remove('drop'); const f = e.dataTransfer?.files?.[0]; if (f) this.loadBin(f); });
     for (const b of this.svg.querySelectorAll<SVGGElement>('[data-btn]')) {
       const pin = +b.dataset.btn!;
       const down = (e: Event) => {
@@ -74,14 +89,67 @@ export class VirtualBoard {
   private q<T extends Element = HTMLButtonElement>(sel: string): T { return this.host.querySelector(sel) as unknown as T; }
   private get svg(): SVGSVGElement { return this.q<SVGSVGElement>('.vb-svg'); }
 
-  /** synthesize + map `top` and power the board up with it */
+  /** the selected mode: the real bitstream (synthesis, place and route, decoding) or the mapped netlist */
+  get mode(): string { return this.q<HTMLSelectElement>('[data-a=mode]').value; }
+
+  /** synthesize `top` and power the board up with it */
   async flash(files: VFile[], top: string, pcf: string | undefined): Promise<LoadInfo> {
     this.setRunning(false);
     const gen = ++this.gen;
-    this.stat(tr('合成並燒錄中…', 'Synthesizing and flashing…'));
     const core = await this.core();
-    const info = await core.call<LoadInfo>({ cmd: 'board_load', files, top, pcf: pcf ?? null });
+    let info: LoadInfo;
+    if (this.mode === 'bitstream') {
+      this.stat(tr('載入晶片資料庫…', 'Loading the chip database…'));
+      await core.chipdb();
+      this.stat(tr('合成、佈局繞線、產生位元流並燒錄…', 'Synthesis, place and route, bitstream, flashing…'));
+      info = await core.call<LoadInfo>({ cmd: 'board_flash', files, top, pcf: pcf ?? null });
+    } else {
+      this.stat(tr('合成並燒錄網表…', 'Synthesizing and flashing the netlist…'));
+      info = await core.call<LoadInfo>({ cmd: 'board_load', files, top, pcf: pcf ?? null });
+    }
     if (gen !== this.gen) return info;
+    this.start(info);
+    return info;
+  }
+
+  /** any iCE40UP5K bitstream from a file */
+  private async loadBin(f: File): Promise<void> {
+    this.setRunning(false);
+    const gen = ++this.gen;
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    try {
+      const core = await this.core();
+      this.stat(tr('載入晶片資料庫…', 'Loading the chip database…'));
+      await core.chipdb();
+      this.stat(tr('解碼位元流…', 'Decoding the bitstream…'));
+      const info = await core.call<LoadInfo>({ cmd: 'board_load_bin', bin: btoa(s), name: f.name });
+      if (gen !== this.gen) return;
+      this.start(info);
+      this.onLoaded(info);
+    } catch (e) {
+      this.stat('✗ ' + String((e as Error).message ?? e));
+    }
+  }
+
+  /** called after an uploaded bitstream is on the board (the IDE shows its warnings) */
+  onLoaded: (info: LoadInfo) => void = () => {};
+
+  private download(): void {
+    if (!this.info?.bin) return;
+    const raw = atob(this.info.bin);
+    const u = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) u[i] = raw.charCodeAt(i);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([u], { type: 'application/octet-stream' }));
+    a.download = `${this.info.top}.bin`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
+  private start(info: LoadInfo): void {
     this.info = info;
     this.held.clear();
     this.latched.clear();
@@ -92,8 +160,8 @@ export class VirtualBoard {
     this.foot();
     this.q('[data-a=run]').disabled = false;
     this.q('[data-a=power]').disabled = false;
+    this.q('[data-a=download]').classList.toggle('hidden', !info.bin);
     this.setRunning(true);
-    return info;
   }
 
   private async power(): Promise<void> {
@@ -202,11 +270,15 @@ export class VirtualBoard {
   private foot(): void {
     const i = this.info!;
     const used = i.pins.filter(p => p.input || p.output).map(p => `${p.name}↔${p.input ?? p.output}`);
-    this.q<HTMLElement>('.vb-foot').innerHTML = `<b>${esc(i.top)}</b>：${i.cells.lut} LUT、${i.cells.carry} CARRY、${i.cells.ff} DFF${i.cells.ram ? `、${i.cells.ram} BRAM` : ''}`
+    const what = i.mode === 'netlist'
+      ? `${tr('網表', 'netlist')}：${i.cells.lut} LUT、${i.cells.carry} CARRY、${i.cells.ff} DFF${i.cells.ram ? `、${i.cells.ram} BRAM` : ''}（${tr('未佈局繞線', 'not placed and routed')}）`
+      : `${i.mode === 'bin' ? tr('上傳的位元流', 'uploaded bitstream') : tr('位元流', 'bitstream')}：${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `、${i.cells.ram} BRAM` : ''}`
+        + (i.fmax ? `，F<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? ' ⚠' : ` ≥ 12 MHz ✓`}` : '');
+    this.q<HTMLElement>('.vb-foot').innerHTML = `<b>${esc(i.top)}</b>　${what}`
       + `　${i.default_pcf ? tr('（專案沒有腳位檔：使用教學的 iCEBreaker 預設腳位）', '(no pin file in the project: the tutorial\'s iCEBreaker pins)') : ''}`
       + `<br>${tr('接線', 'Wiring')}：${esc(used.join('　')) || '—'}`
       + (i.warnings.length ? `<br><span class="vb-warn">⚠ ${esc(i.warnings.join('；'))}</span>` : '')
-      + `<br><span class="vb-hint">${tr('按住按鈕（或按鍵 0 = BTN_N、1–3 = BTN1–3）；Shift+點擊可以鎖住按鈕。這是 iCE40 網表的逐週期模擬：邏輯和真實板相同，速度依設計大小而定；板子的圖是示意圖。', 'Hold a button (or keys 0 = BTN_N, 1–3 = BTN1–3); Shift+click latches it. This is a cycle-by-cycle simulation of the iCE40 netlist: the logic matches the real board, the speed depends on the design size; the board drawing is schematic.')}</span>`;
+      + `<br><span class="vb-hint">${tr('按住按鈕（或按鍵 0 = BTN_N、1–3 = BTN1–3）；Shift+點擊可以鎖住按鈕。位元流模式模擬的是佈局繞線後真正會燒進晶片的位元流（解碼回電路、逐週期模擬），速度依設計大小而定；可以把任何 .bin 拖放到板子上。板子的圖是示意圖。', 'Hold a button (or keys 0 = BTN_N, 1–3 = BTN1–3); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.')}</span>`;
   }
 
   /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */

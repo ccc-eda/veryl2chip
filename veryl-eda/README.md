@@ -130,7 +130,8 @@ The web IDE's virtual iCEBreaker: a fast cycle-based simulator of the iCE40-mapp
 (`board/icebreaker.rs`: 12 MHz clock on pin 35, BTN_N, the red / green LEDs, the break-off section's LED1–5 and BTN1–3, PMOD1A/1B, the FTDI UART; pins from the design's pcf, or the tutorial's).
 The engine works on a generic `Design` (4-input truth tables — carries are 3-input majorities — flip-flops, block RAMs, named IO) and is **activity driven**:
 a changed net queues only the tables it feeds, evaluated in level order (no glitches); clock edges are detected on any clock net, so divided clocks and negative edges work.
-`cargo test` checks it against netsim on 15 designs with random inputs every cycle. Speed (one core): Blinky 6.8 M cycles/s (57% of 12 MHz), RiscvSoc 1.5 M cycles/s; in WebAssembly about 75% of that.
+`cargo test` checks it against netsim on 15 designs with random inputs every cycle.
+**Bitstream decoding** (`board/bitstream.rs`, M13): a `.bin` (`pnr::bitstream::bin_to_asc`, the reverse of the own icepack port) or `.asc` is decoded back into a `Design`: enabled pips (a mux's bits equal to a pip's pattern) are joined by union-find into nets; logic cells (LUT bits un-permuted, carry, flip-flop with the tile's clock / enable / set-reset and `NegClk`), IO (`PINTYPE`), global networks (`fabout` or a pad through the `padin_glb_netwk` extra bits) and block RAMs (`CBIT` modes, `.ram_data`) become drivers. Tests: `bin → asc → bin` is identity; the decoded bitstreams of 11 designs (own P&R) and 3 designs (nextpnr, when installed) behave like their netlists cycle by cycle. Speed (one core): Blinky 6.8 M cycles/s (57% of 12 MHz), RiscvSoc 1.5 M cycles/s; in WebAssembly about 75% of that.
 
 ## The flow
 | File | Contents |

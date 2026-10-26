@@ -2731,10 +2731,18 @@ target = { type = "directory", path = "target" }
       __publicField(this, "lastCycle", 0);
       __publicField(this, "speed", { t: 0, c: 0, rate: 0 });
       __publicField(this, "gen", 0);
+      /** called after an uploaded bitstream is on the board (the IDE shows its warnings) */
+      __publicField(this, "onLoaded", () => {
+      });
       host.innerHTML = `<div class="vb-bar">
         <button class="tb-btn" data-a="flash" title="${tr("\u5408\u6210\u76EE\u524D\u7684\u8A2D\u8A08\u4E26\u71D2\u9304\u5230\u865B\u64EC\u677F", "Synthesize the current design and flash it to the virtual board")}">${tr("\u26A1 \u71D2\u9304", "\u26A1 Flash")}</button>
         <button class="tb-btn" data-a="run" disabled>\u23F8</button>
         <button class="tb-btn" data-a="power" disabled title="${tr("\u91CD\u65B0\u4E0A\u96FB\uFF08\u5F9E\u982D\u958B\u59CB\uFF09", "Power cycle (start over)")}">\u27F2</button>
+        <select data-a="mode" title="${tr("\u71D2\u9304\u4EC0\u9EBC\uFF1A\u4F4D\u5143\u6D41\uFF1D\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u7684\u771F\u5BE6\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u6A21\u64EC\uFF09\uFF1B\u7DB2\u8868\uFF1D\u6620\u5C04\u5F8C\u7684\u7DB2\u8868\uFF08\u5FEB\uFF0C\u4E0D\u4F48\u5C40\u7E5E\u7DDA\uFF09", "What to flash: bitstream = the real placed-and-routed bitstream (decoded back into a circuit); netlist = the mapped netlist (fast, no place and route)")}">
+          <option value="bitstream">${tr("\u4F4D\u5143\u6D41\uFF08\u771F\u5BE6\uFF09", "bitstream (real)")}</option><option value="netlist">${tr("\u7DB2\u8868\uFF08\u5FEB\u901F\uFF09", "netlist (fast)")}</option></select>
+        <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u4EFB\u4F55 iCE40UP5K \u7684 .bin\uFF08\u4F8B\u5982 nextpnr + icepack \u505A\u7684\uFF1B\u4E5F\u53EF\u4EE5\u62D6\u653E\u5230\u677F\u5B50\u4E0A\uFF09", "Load any iCE40UP5K .bin (e.g. from nextpnr + icepack; or drop it on the board)")}">${tr("\u{1F4C2} .bin", "\u{1F4C2} .bin")}</button>
+        <button class="tb-btn ghost hidden" data-a="download" title="${tr("\u4E0B\u8F09\u9019\u500B\u4F4D\u5143\u6D41\uFF08iceprog \u53EF\u4EE5\u71D2\u9032\u771F\u5BE6\u7684 iCEBreaker\uFF09", "Download this bitstream (iceprog flashes it to a real iCEBreaker)")}">\u2B07 .bin</button>
+        <input type="file" accept=".bin" class="hidden" data-a="file">
         <select data-a="pace" title="${tr("\u901F\u5EA6", "Speed")}"><option value="rt">${tr("\u4E0D\u8D85\u904E\u5373\u6642", "up to real time")}</option><option value="max">${tr("\u6700\u5FEB", "fastest")}</option></select>
         <span class="vb-stat"></span>
       </div>
@@ -2746,6 +2754,24 @@ target = { type = "directory", path = "target" }
       this.q("[data-a=pace]").onchange = (e) => {
         this.realtime = e.target.value === "rt";
       };
+      this.q("[data-a=upload]").onclick = () => this.q("[data-a=file]").click();
+      this.q("[data-a=file]").onchange = (e) => {
+        const f = e.target.files?.[0];
+        if (f) this.loadBin(f);
+        e.target.value = "";
+      };
+      this.q("[data-a=download]").onclick = () => this.download();
+      host.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        host.classList.add("drop");
+      });
+      host.addEventListener("dragleave", () => host.classList.remove("drop"));
+      host.addEventListener("drop", (e) => {
+        e.preventDefault();
+        host.classList.remove("drop");
+        const f = e.dataTransfer?.files?.[0];
+        if (f) this.loadBin(f);
+      });
       for (const b of this.svg.querySelectorAll("[data-btn]")) {
         const pin = +b.dataset.btn;
         const down = (e) => {
@@ -2790,14 +2816,65 @@ target = { type = "directory", path = "target" }
     get svg() {
       return this.q(".vb-svg");
     }
-    /** synthesize + map `top` and power the board up with it */
+    /** the selected mode: the real bitstream (synthesis, place and route, decoding) or the mapped netlist */
+    get mode() {
+      return this.q("[data-a=mode]").value;
+    }
+    /** synthesize `top` and power the board up with it */
     async flash(files, top, pcf) {
       this.setRunning(false);
       const gen = ++this.gen;
-      this.stat(tr("\u5408\u6210\u4E26\u71D2\u9304\u4E2D\u2026", "Synthesizing and flashing\u2026"));
       const core2 = await this.core();
-      const info = await core2.call({ cmd: "board_load", files, top, pcf: pcf ?? null });
+      let info;
+      if (this.mode === "bitstream") {
+        this.stat(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\u2026", "Loading the chip database\u2026"));
+        await core2.chipdb();
+        this.stat(tr("\u5408\u6210\u3001\u4F48\u5C40\u7E5E\u7DDA\u3001\u7522\u751F\u4F4D\u5143\u6D41\u4E26\u71D2\u9304\u2026", "Synthesis, place and route, bitstream, flashing\u2026"));
+        info = await core2.call({ cmd: "board_flash", files, top, pcf: pcf ?? null });
+      } else {
+        this.stat(tr("\u5408\u6210\u4E26\u71D2\u9304\u7DB2\u8868\u2026", "Synthesizing and flashing the netlist\u2026"));
+        info = await core2.call({ cmd: "board_load", files, top, pcf: pcf ?? null });
+      }
       if (gen !== this.gen) return info;
+      this.start(info);
+      return info;
+    }
+    /** any iCE40UP5K bitstream from a file */
+    async loadBin(f) {
+      this.setRunning(false);
+      const gen = ++this.gen;
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      let s = "";
+      for (let i = 0; i < bytes.length; i += 32768) s += String.fromCharCode(...bytes.subarray(i, i + 32768));
+      try {
+        const core2 = await this.core();
+        this.stat(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\u2026", "Loading the chip database\u2026"));
+        await core2.chipdb();
+        this.stat(tr("\u89E3\u78BC\u4F4D\u5143\u6D41\u2026", "Decoding the bitstream\u2026"));
+        const info = await core2.call({ cmd: "board_load_bin", bin: btoa(s), name: f.name });
+        if (gen !== this.gen) return;
+        this.start(info);
+        this.onLoaded(info);
+      } catch (e) {
+        this.stat("\u2717 " + String(e.message ?? e));
+      }
+    }
+    download() {
+      if (!this.info?.bin) return;
+      const raw = atob(this.info.bin);
+      const u = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) u[i] = raw.charCodeAt(i);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([u], { type: "application/octet-stream" }));
+      a.download = `${this.info.top}.bin`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1e3);
+    }
+    start(info) {
       this.info = info;
       this.held.clear();
       this.latched.clear();
@@ -2808,8 +2885,8 @@ target = { type = "directory", path = "target" }
       this.foot();
       this.q("[data-a=run]").disabled = false;
       this.q("[data-a=power]").disabled = false;
+      this.q("[data-a=download]").classList.toggle("hidden", !info.bin);
       this.setRunning(true);
-      return info;
     }
     async power() {
       if (!this.info) return;
@@ -2932,7 +3009,8 @@ target = { type = "directory", path = "target" }
     foot() {
       const i = this.info;
       const used = i.pins.filter((p) => p.input || p.output).map((p) => `${p.name}\u2194${p.input ?? p.output}`);
-      this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.join("\uFF1B"))}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u9019\u662F iCE40 \u7DB2\u8868\u7684\u9010\u9031\u671F\u6A21\u64EC\uFF1A\u908F\u8F2F\u548C\u771F\u5BE6\u677F\u76F8\u540C\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. This is a cycle-by-cycle simulation of the iCE40 netlist: the logic matches the real board, the speed depends on the design size; the board drawing is schematic.")}</span>`;
+      const what = i.mode === "netlist" ? `${tr("\u7DB2\u8868", "netlist")}\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\uFF08${tr("\u672A\u4F48\u5C40\u7E5E\u7DDA", "not placed and routed")}\uFF09` : `${i.mode === "bin" ? tr("\u4E0A\u50B3\u7684\u4F4D\u5143\u6D41", "uploaded bitstream") : tr("\u4F4D\u5143\u6D41", "bitstream")}\uFF1A${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}` + (i.fmax ? `\uFF0CF<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? " \u26A0" : ` \u2265 12 MHz \u2713`}` : "");
+      this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.join("\uFF1B"))}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
     }
     /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
     drawing() {
@@ -3861,14 +3939,24 @@ target = { type = "directory", path = "target" }
   function getBoardCore() {
     return boardCore ?? (boardCore = startCore(fromBase64(VERYL_WASM_B64)));
   }
+  function ensureBoard() {
+    if (board) return board;
+    board = new VirtualBoard($2("boardPane"), getBoardCore);
+    board.flashButton.onclick = () => flashBoard();
+    board.onLoaded = (info) => {
+      problems = problems.filter((p) => p.from !== "run");
+      for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
+      renderProblems();
+    };
+    return board;
+  }
   async function flashBoard() {
     const top = synthTop();
     if (!top) {
       alert(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08#[test] \u6A21\u7D44\u4E0D\u80FD\u71D2\u9304\uFF09", "No synthesizable module (#[test] modules cannot be flashed)"));
       return;
     }
-    board ?? (board = new VirtualBoard($2("boardPane"), getBoardCore));
-    board.flashButton.onclick = () => flashBoard();
+    ensureBoard();
     openFile(BOARD_TAB);
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
     setBusy(true, tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F\u2026", "\u26A1 Flashing the virtual board\u2026"));

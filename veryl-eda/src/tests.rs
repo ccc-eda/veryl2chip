@@ -669,3 +669,170 @@ fn board_speed() {
         assert!(b.cycle == n);
     }
 }
+
+/// the chip database, when one is installed (the bitstream tests skip without it)
+fn chip() -> Option<crate::pnr::chipdb::Chip> {
+    let path = crate::pnr::chipdb::default_path()?;
+    Some(crate::pnr::chipdb::Chip::load(&path, "sg48").unwrap())
+}
+
+fn pnr_of(chip: &crate::pnr::chipdb::Chip, nl: &crate::netlist::Netlist, pcf: &str) -> crate::pnr::Output {
+    let o = crate::pnr::Opts { chipdb: None, package: "sg48".into(), pcf: crate::pnr::parse_pcf(pcf), seed: 1, verbose: false, timing_driven: false };
+    crate::pnr::place_and_route_on(chip, nl, &o).unwrap()
+}
+
+/// .bin -> .asc -> .bin gives the same bitstream (after the comment header)
+#[test]
+fn bitstream_roundtrip() {
+    let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
+    for (files, top) in [(&["examples/src/sync_ram.veryl"][..], "SyncRam"), (&["examples/src/rv32i.veryl", "veryl-eda/examples/soc.veryl"][..], "RiscvSoc")] {
+        let nl = ice40_of(files, top, &[]);
+        let o = pnr_of(&chip, &nl, "set_io i_clk 35\n");
+        let bin = crate::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
+        let again = crate::pnr::bitstream::asc_to_bin(&crate::pnr::bitstream::bin_to_asc(&bin).unwrap()).unwrap();
+        let body = |b: &[u8]| b[b.windows(4).position(|w| w == [0x7E, 0xAA, 0x99, 0x7E]).unwrap()..].to_vec();
+        assert!(body(&bin) == body(&again), "{}: bitstream changed by bin_to_asc", top);
+    }
+}
+
+/// the decoded bitstream behaves like the netlist it was placed and routed from:
+/// random inputs every cycle, every output equal after every clock
+#[test]
+fn bitstream_decode_matches_netlist() {
+    let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
+    let designs: &[(&[&str], &str, &[(&str, u128)])] = &[
+        (&["examples/src/seq101.veryl"], "Seq101", &[]), (&["examples/src/pkt_reg.veryl"], "PktReg", &[]),
+        (&["veryl-eda/examples/features.veryl"], "Top", &[]), (&["veryl-eda/examples/pnr_tests.veryl"], "AccTest", &[]),
+        (&["examples/src/sync_ram.veryl"], "SyncRam", &[]), (&["examples/src/sync_ram.veryl", "veryl-eda/examples/bram_tests.veryl"], "BramMix", &[]),
+        (&["examples/src/fifo.veryl"], "Fifo", &[]), (&["examples/src/uart.veryl"], "UartLoop", &[]),
+        (&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)]), (&["tutorial/src/knight.veryl"], "KnightRider", &[("TICK", 3), ("DIV_W", 2)]),
+        (&["examples/src/rv32i.veryl", "veryl-eda/examples/soc.veryl"], "RiscvSoc", &[]),
+    ];
+    let mut seed = 777u64;
+    let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+    for (files, top, ov) in designs {
+        let nl = ice40_of(files, top, ov);
+        // pins: any free ones (the place and route picks them), the clock on its global-capable pin
+        let o = pnr_of(&chip, &nl, "set_io i_clk 35\n");
+        let pin_of = crate::pnr::parse_pcf(&o.pcf);
+        let bin = crate::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
+        let (dd, rep) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
+        assert!(rep.warnings.is_empty(), "{}: {:?}", top, rep.warnings);
+        let mut g = crate::board::Engine::new(dd).unwrap();
+        let mut e = crate::board::Engine::new(crate::board::Design::from_netlist(&nl).unwrap()).unwrap();
+        let bit_names = |p: &crate::netlist::Port| -> Vec<String> { (0..p.bits.len()).map(|i| if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }).collect() };
+        let ins: Vec<&crate::netlist::Port> = nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::In && p.name != "i_clk").collect();
+        let outs: Vec<&crate::netlist::Port> = nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::Out).collect();
+        let has_clk = nl.ports.iter().any(|p| p.name == "i_clk");
+        for cycle in 0..300 {
+            for p in &ins {
+                for name in bit_names(p) {
+                    let v = if p.name == "i_rst" { cycle >= 2 && rnd() % 50 != 0 } else { rnd() & 1 == 1 };
+                    if let Some(n) = e.input(&name) { e.set(n, v); }
+                    if let Some(n) = pin_of.get(&name).and_then(|pin| g.input(pin)) { g.set(n, v); }
+                }
+            }
+            e.propagate();
+            g.propagate();
+            if has_clk {
+                for level in [true, false] {
+                    let n = e.input("i_clk").unwrap();
+                    e.set(n, level);
+                    e.propagate();
+                    let n = g.input(&pin_of["i_clk"]).unwrap();
+                    g.set(n, level);
+                    g.propagate();
+                }
+            }
+            for p in &outs {
+                for name in bit_names(p) {
+                    let want = e.get(e.output(&name).unwrap());
+                    let pin = &pin_of[&name];
+                    let got = g.get(g.output(pin).unwrap_or_else(|| panic!("{}: no output pin {} for {}", top, pin, name)));
+                    assert_eq!(got, want, "{}: {} (pin {}) at cycle {}", top, name, pin, cycle);
+                }
+            }
+        }
+        println!("decoded {}: {} LCs, {} RAMs, pins in {:?}, out {:?}", top, rep.lcs, rep.rams, rep.pins_in.len(), rep.pins_out.len());
+    }
+}
+
+/// tutorial lesson 1 from its bitstream, on the board's pins
+#[test]
+fn bitstream_blinky_on_board() {
+    let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
+    let nl = ice40_of(&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)]);
+    let o = pnr_of(&chip, &nl, crate::board::icebreaker::DEFAULT_PCF);
+    let bin = crate::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
+    let (dd, _) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
+    let mut b = crate::board::icebreaker::board_from_pins(dd).unwrap();
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    b.set_pin(10, false);
+    b.run(3);
+    b.set_pin(10, true);
+    b.run(37);
+    let led: Vec<bool> = [26, 27, 25, 23, 21].iter().map(|p| b.pin(*p).unwrap()).collect();
+    assert_eq!(led, [false, true, false, false, true]);
+    assert_eq!((b.pin(11), b.pin(37)), (Some(false), Some(true)));
+}
+
+/// a bitstream from nextpnr (when installed) decodes to the same behavior:
+/// a check against a placer / router other than ours (globals through pads, its own packing)
+#[test]
+fn bitstream_decode_nextpnr() {
+    let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
+    let nextpnr = ["nextpnr-ice40", "/Users/Shared/ccc/oss-cad-suite/bin/nextpnr-ice40"].into_iter()
+        .find(|p| std::process::Command::new(p).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
+    let Some(nextpnr) = nextpnr else { eprintln!("no nextpnr-ice40: skipped"); return };
+    let soc_pcf = format!("{}/examples/icebreaker.pcf", env!("CARGO_MANIFEST_DIR"));
+    let dir = std::env::temp_dir().join(format!("veryl-eda-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tut_pcf = dir.join("tut.pcf");
+    std::fs::write(&tut_pcf, crate::board::icebreaker::DEFAULT_PCF).unwrap();
+    let designs: &[(&[&str], &str, &[(&str, u128)], &std::path::Path)] = &[
+        (&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)], &tut_pcf),
+        (&["tutorial/src/knight.veryl"], "KnightRider", &[("TICK", 3), ("DIV_W", 2)], &tut_pcf),
+        (&["examples/src/rv32i.veryl", "veryl-eda/examples/soc.veryl"], "RiscvSoc", &[], std::path::Path::new(&soc_pcf)),
+    ];
+    let mut seed = 99u64;
+    let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+    for (files, top, ov, pcf) in designs {
+        let nl = ice40_of(files, top, ov);
+        let (json, asc) = (dir.join(format!("{}.json", top)), dir.join(format!("{}.asc", top)));
+        std::fs::write(&json, crate::output::to_json(&nl)).unwrap();
+        let out = std::process::Command::new(nextpnr).args(["--up5k", "--package", "sg48", "--json"]).arg(&json).arg("--pcf").arg(pcf).arg("--asc").arg(&asc).output().unwrap();
+        assert!(out.status.success(), "nextpnr failed on {}: {}", top, String::from_utf8_lossy(&out.stderr));
+        let (dd, rep) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_asc(&std::fs::read_to_string(&asc).unwrap()).unwrap()).unwrap();
+        assert!(rep.warnings.is_empty(), "{}: {:?}", top, rep.warnings);
+        let pin_of = crate::pnr::parse_pcf(&std::fs::read_to_string(pcf).unwrap());
+        let mut g = crate::board::Engine::new(dd).unwrap();
+        let mut e = crate::board::Engine::new(crate::board::Design::from_netlist(&nl).unwrap()).unwrap();
+        for cycle in 0..300 {
+            if let (Some(a), Some(b)) = (e.input("i_rst"), pin_of.get("i_rst").and_then(|p| g.input(p))) {
+                let v = cycle >= 2 && rnd() % 50 != 0;
+                e.set(a, v);
+                g.set(b, v);
+            }
+            if let (Some(a), Some(b)) = (e.input("i_btn"), pin_of.get("i_btn").and_then(|p| g.input(p))) {
+                let v = rnd() % 4 == 0;
+                e.set(a, v);
+                g.set(b, v);
+            }
+            e.propagate();
+            g.propagate();
+            for level in [true, false] {
+                let n = e.input("i_clk").unwrap();
+                e.set(n, level);
+                e.propagate();
+                let n = g.input(&pin_of["i_clk"]).unwrap();
+                g.set(n, level);
+                g.propagate();
+            }
+            for (name, n) in &e.d.outputs {
+                let Some(pin) = pin_of.get(name) else { continue };
+                assert_eq!(g.get(g.output(pin).unwrap()), e.get(*n), "nextpnr {}: {} (pin {}) at cycle {}", top, name, pin, cycle);
+            }
+        }
+        println!("nextpnr {}: {} LCs, pins in {:?}", top, rep.lcs, rep.pins_in);
+    }
+}

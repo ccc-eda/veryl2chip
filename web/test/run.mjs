@@ -185,8 +185,25 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   const after = led();
   core.call({ cmd: 'board_run', cycles: 200, inputs: [] });
   if (first !== 55 || after !== 0 || led() !== 55) problems.push(`SoC LEDs ${first}, after power cycle ${after} -> ${led()}`);
+  // M13: the real bitstream (synthesis, own place and route, .bin, decoded) and the same .bin uploaded
+  b = ex('tut_blinky');
+  const fl = core.call({ cmd: 'board_flash', files: b.files, top: 'Blinky', pcf: b.pcf });
+  if (fl.mode !== 'bitstream' || !(fl.fmax > 12) || !fl.bin || fl.warnings.length) problems.push(`Blinky flash: ${fl.mode}, Fmax ${fl.fmax}, ${fl.warnings.join('; ')}`);
+  d = duty(core.call({ cmd: 'board_run', cycles: 1 << 24, inputs: [] }));
+  if (Math.abs(d[21] - 0.5) > 1e-6 || Math.abs(d[11] - 0.5) > 1e-6) problems.push(`Blinky bitstream duty LED5 ${d[21]}, LEDR_N ${d[11]}`);
+  const up = core.call({ cmd: 'board_load_bin', bin: fl.bin, name: 'Blinky.bin' });
+  if (up.mode !== 'bin' || up.cells.lc !== fl.cells.lc) problems.push(`uploaded .bin: ${up.cells.lc} LCs vs ${fl.cells.lc}`);
+  d = duty(core.call({ cmd: 'board_run', cycles: 1 << 24, inputs: [] }));
+  if (Math.abs(d[21] - 0.5) > 1e-6) problems.push(`uploaded Blinky duty ${d[21]}`);
+  b = ex('tut_knight');
+  core.call({ cmd: 'board_flash', files: b.files, top: 'KnightRider', pcf: b.pcf });
+  core.call({ cmd: 'board_run', cycles: 3_000_000, inputs: [] });
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[20, 1]] });
+  const held2 = pos().join();
+  core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
+  if (pos().join() !== held2 || pos().filter((x) => x === 1).length !== 1) problems.push('KnightRider bitstream: BTN1 does not hold the light');
   if (problems.length) bad++;
-  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    bitstream: Blinky (Fmax ${fl.fmax?.toFixed(1)} MHz) and its uploaded .bin, KnightRider + BTN1; netlist: Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
 }
 
 // project export: the .zip (stored, CRC-32) must unpack, and with the
