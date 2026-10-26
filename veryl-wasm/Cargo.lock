@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "veryl-wasm"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "serde_json",
  "veryl-parser",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "veryl2chip-eda"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "veryl-parser",
  "veryl2chip-sim",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "veryl2chip-sim"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "veryl-parser",
 ]
