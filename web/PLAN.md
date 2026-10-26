@@ -41,4 +41,21 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M21 | `RvCore` 擴充成 RV32IMA + Zicsr：M（反覆式乘除法）、A（LR/SC、AMO）、CSR、machine mode 陷阱（中斷、ecall、ebreak、非法指令、沒對齊）、`mret`、`wfi`；SoC 加 CLINT（mtime、mtimecmp、msip）、UART 收到位元組的外部中斷；組譯器、ISS 跟上；合成：case 的 one-hot 把同值分支合併（暫存器保持只要一個 2 選 1）、LUT 映射加面積回收；RvBoard 3960 LUT、約 12.8 MHz | `rv32ima_test.S` 與 spike 相同（veryl test、veryl-sim、三種閘級模擬、ISS） |
 | M22 | C 的多執行緒：編譯器產生 M 指令、`asm(...)`、naked 函式、函式位址；epilogue 不再讀 sp 以下（中斷會蓋掉）；執行期函式庫的中斷 / CSR / 原子操作；範例 `threads.c`（計時器搶佔、ecall yield / sleep、amoswap 互斥鎖）；講義 C8 | `cargo test threads_on_rvsoc`：閘級 RvBoard 與 ISS 逐週期相同的輸出與 LED；npm test 跑所有 C 範例 |
 
+
+### 往 v2.0：接上 SkyWater SKY130 開源 PDK
+
+目標：同一個 ASIC 流程（對應、佈局、時脈樹、繞線、時序、功耗）除了教學用的 vlib，也能用 SKY130 的
+`sky130_fd_sc_hd` 標準元件庫，產出 OpenROAD / Magic / KLayout 看得懂的 Verilog、DEF 與 GDS。
+PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1v80`、tech LEF、merged LEF、GDS；Apache-2.0），
+`tools/sky130.sh` 下載完整檔案，倉庫裡只放流程用到的元件子集（`veryl-eda/pdk/sky130hd/`，附授權）。
+
+| 版本 | M | 內容 | 驗證 |
+|---|---|---|---|
+| v1.5 | M23 | 讀 Liberty（群組語法、單位、NLDM 表、`function`、`ff`）、LEF、DEF；`Tech` 抽象（列高、site、軌距、元件綁定、腳位存取點、時序由 Tech 提供，vlib 是內建的）；SKY130 元件子集放進倉庫；`--pdk sky130`：對應（沒有 SRAM、負緣正反器加時脈反相器）、unithd 列、IO 腳在格點上、well tap 與 fill、li1 腳位 + met1 短線、NLDM 時序（斜率傳遞、腳位與導線電容、setup / hold 表）、Verilog / DEF 用 sky130 名稱與 Liberty 模型；`--gatesim sky130`、`--map-only`、`--pdk-check` | 綁定與 Liberty 函式真值表一致；test.sh：sky130 網表用 yosys `read_liberty` 證明與 `veryl build` 等價、testbench 通過；cargo test：DEF 讀回對照 LEF（列、site、不重疊、填滿、tap 距離） |
+| v1.6 | M24 | 版圖幾何（每條線、via 的金屬與 cut、短線、電源）與自己的 DRC（短路、間距、cut 間距、最小面積、斷路，含元件內部的 OBS 與腳位形狀）；繞線遵守 sky130 規則：met3 / met4 隔一條軌道、via 不相鄰（棋盤格）、避開正反器的 met1 OBS | 範例 0 個 DRC / 短路 / 斷路 |
+| v1.7 | M25 | GDS II 輸出：PDK 的元件 GDS + 繞線、via、腳位標籤、電源；`--gds` | GDS 用 KLayout（Python 套件）讀回，層、元件數一致 |
+| v1.8 | M26 | 更好的 SKY130 結果：更多元件（nand3、a22oi、o22ai…）的對應、驅動強度（buf_2 / 4 / 8、clkbuf_4 / 8）、大設計的繞線速度 | Fmax、面積比 v1.7 好；test.sh |
+| v1.9 | M27 | IDE：ASIC 後端可選 vlib / SKY130（圖用真實元件尺寸、下載 GDS / DEF / Verilog） | npm test、瀏覽器實測 |
+| v2.0 | M28 | 文件、全面回歸、發布 2.0.0 | npm test、cargo test、test.sh |
+
 每個 M 完成就 commit。

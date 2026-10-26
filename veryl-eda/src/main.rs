@@ -8,15 +8,18 @@ fn usage() -> ! {
     eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc; PROG.s: assemble)");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
-    eprintln!("                 [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]");
+    eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [-v]] [--gatesim opt|ice40|asic|sky130]");
     eprintln!("                 FILE.veryl...");
+    eprintln!("       veryl-eda --pdk-check [DIR]   (read a SKY130 Liberty + LEF directory, check the cell bindings)");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
     eprintln!("  gate-level netlist of yosys internal cells and prints its statistics.");
     eprintln!("  --ice40 maps it to SB_LUT4/SB_DFF* cells; --asc/--bin then run");
     eprintln!("  place & route (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and icepack.");
     eprintln!("  --program puts a binary (from address 0) into the block RAMs of a byte-lane");
     eprintln!("  program memory (*.b0.mem .. *.b3.mem, e.g. RvBoard in examples/src/rvsoc.veryl).");
-    eprintln!("  --asic maps to the vlib standard cells, places rows, routes and times them.");
+    eprintln!("  --asic maps to standard cells (vlib, or SkyWater SKY130 sky130_fd_sc_hd with --pdk sky130),");
+    eprintln!("  places rows, routes and times them; --verilog / --def write the library's names;");
+    eprintln!("  --map-only stops after the technology mapping (a netlist for --verilog).");
     eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
     eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
     std::process::exit(2);
@@ -66,14 +69,39 @@ fn cc_main(args: &[String]) -> ! {
     std::process::exit(0)
 }
 
+/// `veryl-eda --pdk-check [DIR]`: read SKY130's Liberty and LEF files, print what the flow uses
+fn pdk_check(dir: Option<&String>) -> ! {
+    use veryl_eda::pdk;
+    let d = dir.map(PathBuf::from).or_else(pdk::sky130_dir).unwrap_or_else(|| { eprintln!("no SKY130 directory (give one, or set VERYL_EDA_SKY130)"); std::process::exit(1) });
+    let t0 = std::time::Instant::now();
+    let t = pdk::sky130_from_dir(&d).unwrap_or_else(|e| { eprintln!("{}: {}", d.display(), e); std::process::exit(1) });
+    let (lib, lef) = (t.liberty.as_ref().unwrap(), t.lef.as_ref().unwrap());
+    println!("{}: Liberty {} ({} cells, {} V), LEF {} macros, {} layers, {} vias  ({:.2} s)", d.display(), lib.name, lib.cells.len(), lib.voltage, lef.macros.len(), lef.layers.len(), lef.vias.len(), t0.elapsed().as_secs_f64());
+    println!("site {} {} x {} µm, {} tracks per row; routing:", t.site, t.site_w, t.row_h, t.tracks);
+    for l in lef.routing() { println!("  {:5} {} pitch {} width {} spacing {} R {} Ω/sq", l.name, if l.horizontal { "H" } else { "V" }, if l.horizontal { l.pitch.1 } else { l.pitch.0 }, l.width, l.spacing, l.rpersq); }
+    let mut names: Vec<&String> = t.cells.keys().collect();
+    names.sort();
+    println!("logical cell -> library cell (function checked against the Liberty file), width in sites, pin access");
+    for n in names {
+        let b = &t.cells[n];
+        let acc: Vec<String> = b.access.iter().map(|a| format!("{}={}@{},{}", a.0, b.lib_pin(a.0), a.1, a.2)).collect();
+        println!("  {:7} {:28} {:3} {:7.3} µm²  {}", n, b.cell, b.width, b.area, acc.join(" "));
+    }
+    std::process::exit(0)
+}
+
 fn main() {
     let all: Vec<String> = std::env::args().skip(1).collect();
     if all.first().map(|a| a == "--cc") == Some(true) { cc_main(&all[1..]); }
+    if all.first().map(|a| a == "--pdk-check") == Some(true) { pdk_check(all.get(1)); }
     let (mut top, mut json, mut verilog, mut list) = (None::<String>, None::<String>, None::<String>, false);
     let (mut ice40, mut pcf, mut asc, mut bin) = (false, None::<String>, None::<String>, None::<String>);
     let (mut device, mut package) = ("up5k".to_string(), "sg48".to_string());
     let (mut pnr_tool, mut seed, mut verbose) = ("nextpnr".to_string(), 1u64, false);
     let mut asic_flow = false;
+    let mut pdk_name = "vlib".to_string();
+    let mut def_out: Option<String> = None;
+    let mut map_only = false;
     let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
     let mut program: Option<String> = None;
@@ -87,6 +115,9 @@ fn main() {
             "--list" => list = true,
             "--ice40" => ice40 = true,
             "--asic" => asic_flow = true,
+            "--pdk" => pdk_name = a.next().unwrap_or_else(|| usage()),
+            "--def" => def_out = a.next(),
+            "--map-only" => map_only = true,
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "--no-timing-driven" => timing_driven = false,
             "--pcf" => pcf = a.next(),
@@ -103,6 +134,8 @@ fn main() {
         }
     }
     if files.is_empty() { usage(); }
+    let tech = veryl_eda::pdk::by_name(&pdk_name).unwrap_or_else(|e| { eprintln!("--pdk: {}", e); std::process::exit(2) });
+    veryl_eda::pdk::set_tech(Some(tech.clone()));
 
     let mut parsers = vec![];
     for f in &files {
@@ -140,12 +173,20 @@ fn main() {
     };
     if asc.is_some() || bin.is_some() { ice40 = true; }
     let mut asic_out = None;
+    let mut asic_models = false;
     if asic_flow {
         if ice40 { eprintln!("--asic and --ice40 exclude each other"); std::process::exit(2); }
-        let out = asic::flow(&nl, seed).unwrap_or_else(|e| { eprintln!("ASIC flow error: {}", e); std::process::exit(1) });
-        let mut out = out;
-        nl = std::mem::replace(&mut out.mapped, netlist::Netlist { name: String::new(), ports: vec![], nets: vec![], cells: vec![] });
-        asic_out = Some(out);
+        if !tech.is_vlib() { println!("asic: technology {} ({} µm rows, {} µm sites)", tech.name, tech.row_h, tech.site_w); }
+        if map_only {
+            // technology mapping only (no place & route): for the netlist
+            let m = asic::map::map(&nl).unwrap_or_else(|e| { eprintln!("ASIC mapping error: {}", e); std::process::exit(1) });
+            nl = veryl_eda::pdk::to_library(&m);
+            if verilog.is_some() { asic_models = true; }
+        } else {
+            let out = asic::flow(&nl, seed).unwrap_or_else(|e| { eprintln!("ASIC flow error: {}", e); std::process::exit(1) });
+            nl = veryl_eda::pdk::to_library(&out.mapped);
+            asic_out = Some(out);
+        }
     }
     if ice40 {
         nl = ice40::map(&nl).unwrap_or_else(|e| { eprintln!("iCE40 mapping error: {}", e); std::process::exit(1) });
@@ -176,8 +217,9 @@ fn main() {
         let pd = &o.pdn;
         println!("asic: power grid {} rails, {} straps, {} via stacks; {} filler cells", pd.rails, pd.straps.len(), pd.vias.len(), pd.fillers.len());
         let d = &o.detail;
-        println!("asic: detailed routing {:.0} µm (M2 {:.0} / M3 {:.0} / M4 {:.0} / M5 {:.0}), {} vias, {} conflicts, {} opens after {} iterations",
-            d.wirelength, d.per_layer[0], d.per_layer[1], d.per_layer[2], d.per_layer[3], d.vias, d.conflicts, d.opens, d.iters.len());
+        let per: Vec<String> = (0..4).map(|l| format!("{} {:.0}", tech.layers[l], d.per_layer[l])).collect();
+        println!("asic: detailed routing {:.0} µm ({}), {} vias, {} conflicts, {} opens after {} iterations",
+            d.wirelength, per.join(" / "), d.vias, d.conflicts, d.opens, d.iters.len());
         println!("asic: clock tree {} buffers ({}), insertion {:.3} ns, skew {:.3} ns; hold: worst slack {:.3} ns, {} delay buffers",
             o.cts.buffers, o.cts.trees.iter().map(|t| format!("{} sinks / {} levels", t.1, t.3)).collect::<Vec<_>>().join(", "), tm.insertion, tm.skew, tm.hold_slack, o.hold_bufs);
         println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints; ideal clock {:.1} MHz, wirelength-only placement {:.1} MHz)", tm.period, tm.fmax, tm.endpoints, o.fmax_ideal, o.fmax_wl);
@@ -239,9 +281,13 @@ fn main() {
             println!("wrote {}", b);
         }
     }
+    if let (Some(p), Some(o)) = (&def_out, &asic_out) {
+        std::fs::write(p, asic::def(o)).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
+        println!("wrote {}", p);
+    }
     if let Some(p) = verilog {
         let mut v = output::to_verilog(&nl);
-        if asic_out.is_some() { v += &asic::lib::verilog_models(); }
+        if asic_out.is_some() || asic_models { v += &veryl_eda::pdk::verilog_models(); }
         std::fs::write(&p, v).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
         println!("wrote {}", p);
     }

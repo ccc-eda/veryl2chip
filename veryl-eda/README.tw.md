@@ -160,6 +160,33 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
 元件加填充元件恰好鋪滿每個 site；
 `./test.sh` 用 yosys 對 `veryl build` 的輸出做標準元件 netlist 的形式等價驗證。
 
+## SKY130（`--pdk sky130`，`src/pdk/`）
+往 v2.0 的路上，ASIC 後端接上 SkyWater 的開源 SKY130 PDK（`sky130_fd_sc_hd`，典型角落 `tt_025C_1v80`）。流程仍然在
+邏輯元件（INV、NAND2、AOI21、DFFR…）上運作；`Tech`（`src/pdk/mod.rs`）把每個邏輯元件綁到元件庫裡的一個元件：名稱與腳位、
+佔幾個 site、在繞線格點上的腳位存取點、時序，以及列高 / site / 軌距。vlib 是內建的 `Tech`；SKY130 的由它的檔案建立：
+
+- `src/pdk/liberty.rs` 讀 Liberty（群組與屬性、單位、可內插的 NLDM 查表、腳位的 `function` 與 `ff` 群組）；
+  `src/pdk/lef.rs` 讀 LEF（site、各層的軌距 / 寬度 / 間距 / RC、via、元件尺寸與腳位形狀）；`src/pdk/def.rs` 把 DEF 讀回來
+  （檢查流程寫出的東西）。
+- 每個綁定都對照元件庫檢查：綁到的元件的 Liberty 函式必須和邏輯元件的真值表相同（正反器：時脈邊緣、下一個狀態、
+  clear / preset）。`veryl-eda --pdk-check [目錄]` 讀完整的 SKY130 目錄（`sky130_fd_sc_hd__tt_025C_1v80.lib`、
+  `sky130_fd_sc_hd.tlef`、`sky130_fd_sc_hd_merged.lef`，和 OpenROAD-flow-scripts 的 `platforms/sky130hd` 一樣；
+  `tools/sky130.sh` 下載，`VERYL_EDA_SKY130` 指向它）：428 個元件、441 個 macro，0.1 秒。
+- `--asic --pdk sky130` 用 SKY130 跑整個流程。需要的元件隨 veryl-eda 附上（`pdk/sky130hd/`：35 個元件的 Liberty、tech LEF、
+  元件 LEF 與 GDS，由 `tools/sky130_subset.py` 切出；Apache-2.0）；`--pdk sky130:目錄` 改讀完整檔案。
+  - 對應：記憶體維持正反器（這裡沒有 SRAM macro）；沒有 reset 的負緣正反器在時脈加一個反相器。
+  - 佈局在 `unithd` 列上（site 0.46 × 2.72 µm，N / FS 交替），IO 腳各在自己的格點上，每列每 20 µm 一個 well tap
+    （`tapvpwrvgnd_1`，必要時把元件挪開，沒有元件離 tap 超過 14 µm），空位放 `fill_8 … fill_1`。
+  - 腳位存取：每個元件的每支腳在它 `li1` 形狀旁有一個格點；`L1M1_PR` via 放在形狀上，一小段 met1 接到格點。
+    全域繞線的 gcell 是 8 欄 × 1 列，容量依方向（met1 + met3、met2 + met4）。
+  - 時序來自 Liberty 的 NLDM 表：每個 arc 的延遲與輸出斜率依輸入斜率與該網路的負載（接收腳位電容 + 由 tech LEF 算的導線電容）
+    查表，斜率沿路徑傳遞，setup / hold 來自正反器的限制表，導線加上 Elmore RC。
+  - `--verilog` / `--def` 寫出元件庫的元件、腳位、site、層（met1–met4、li1 腳位）與 via 名稱；Verilog 最後接著由 Liberty
+    函式產生的行為模型。`--map-only` 只做對應。
+- `--gatesim sky130` 在 SKY130 網表上跑 testbench；`test.sh` 用 yosys 從 PDK 自己的 Liberty 檔建立的元件模型（`read_liberty`），
+  證明每個設計的 SKY130 網表與 `veryl build` 的輸出等價。`cargo test` 把 DEF 讀回來對照 LEF 檢查（元件在列與 site 上、
+  不重疊、每個 site 都有東西、tap 距離）。
+
 ## 虛擬開發板（`src/board/`）
 網頁 IDE 的虛擬 iCEBreaker：iCE40 映射後網表的快速逐週期模擬器，接到板子的腳位
 （`board/icebreaker.rs`：腳 35 的 12 MHz 時脈、BTN_N、紅綠 LED、擴充板的 LED1–5 與 BTN1–3、PMOD1A/1B、FTDI 序列埠；腳位來自設計的 pcf，沒有的話用教學的）。

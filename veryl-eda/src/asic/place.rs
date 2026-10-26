@@ -4,7 +4,6 @@
 //! IO pins and leave the rest of the die empty). Every move keeps the placement legal (a cell
 //! moves into a free run of sites, or two cells swap places).
 
-use super::lib::{ROW_H, SITE_W};
 use crate::netlist::{Bit, Dir, Netlist};
 use crate::pnr::place::Rng;
 use std::collections::HashMap;
@@ -75,6 +74,7 @@ pub fn special_nets(nl: &Netlist) -> std::collections::HashSet<Bit> {
 /// low temperature with short moves instead of annealing from scratch.
 /// `util`: target row utilization (the die is sized from it).
 pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, start: Option<&[(u32, u32)]>) -> RowPlacement {
+    let (row_h, site_w) = (super::lib::row_h(), super::lib::site_w());
     let n = nl.cells.len();
     let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
     let widths: Vec<u32> = dims.iter().map(|d| d.0).collect();
@@ -84,9 +84,9 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
     // macro area in site-rows, with some room around them
     let macro_area: f64 = (0..n).filter(|c| fixed[*c]).map(|c| (widths[c] * heights[c]) as f64 * 1.1).sum();
     let need = total as f64 / util + macro_area;
-    let side = (need * SITE_W * ROW_H).sqrt();
+    let side = (need * site_w * row_h).sqrt();
     let max_h = *heights.iter().max().unwrap_or(&1);
-    let mut rows = ((side / ROW_H).round() as u32).max(1).max(max_h + 1);
+    let mut rows = ((side / row_h).round() as u32).max(1).max(max_h + 1);
     let max_w = *widths.iter().max().unwrap_or(&1);
     let mut sites = ((need / rows as f64).ceil() as u32).max(max_w + 2);
     // macros: shelf packing from the bottom left (grow the die until they fit)
@@ -106,7 +106,7 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         rows += 1;
         sites += sites / 20 + 1;
     }
-    let (w, h) = (sites as f64 * SITE_W, rows as f64 * ROW_H);
+    let (w, h) = (sites as f64 * site_w, rows as f64 * row_h);
     let used_sites: u32 = (0..n).map(|c| widths[c] * heights[c]).sum();
 
     // IO pins evenly around the die: inputs on the left and top, outputs right and bottom
@@ -121,6 +121,24 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
     };
     for (k, (name, b)) in ins.iter().enumerate() { let (x, y) = around(k, ins.len(), true); pins.push(Pin { name: name.clone(), dir: Dir::In, x, y, bit: *b }); }
     for (k, (name, b)) in outs.iter().enumerate() { let (x, y) = around(k, outs.len(), false); pins.push(Pin { name: name.clone(), dir: Dir::Out, x, y, bit: *b }); }
+    // on the routing grid (columns of a site, rows of a track), every pin on its own node:
+    // a taken node moves the pin along its edge
+    let (px, py) = (site_w, row_h / super::detail::TRACKS as f64);
+    let (gx, gy) = (sites, rows * super::detail::TRACKS);
+    let mut taken = std::collections::HashSet::new();
+    // (vlib's grid is square and its pins already far enough apart: they stay where they are)
+    for p in pins.iter_mut().filter(|_| !crate::pdk::tech().is_vlib()) {
+        let (mut x, mut y) = ((p.x / px).round() as i64, (p.y / py).round() as i64);
+        let vertical_edge = x == 0 || x == gx as i64;
+        for k in 0..(gx + gy) as i64 * 2 {
+            let d = if k % 2 == 0 { k / 2 } else { -(k + 1) / 2 };
+            let (tx, ty) = if vertical_edge { (x, (y + d).clamp(0, gy as i64)) } else { ((x + d).clamp(0, gx as i64), y) };
+            if !taken.contains(&(tx, ty)) { x = tx; y = ty; break; }
+        }
+        taken.insert((x, y));
+        p.x = x as f64 * px;
+        p.y = y as f64 * py;
+    }
 
     let special = special_nets(nl);
     let pnets: Vec<PNet> = nets(nl, &pins).into_iter().filter(|p| !special.contains(&p.bit)).collect();
@@ -195,7 +213,7 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
     }
 
     // ---- annealing ----
-    let cx = |c: usize, pos: &Vec<(u32, u32)>| ((pos[c].1 as f64 + widths[c] as f64 / 2.0) * SITE_W, (pos[c].0 as f64 + heights[c] as f64 / 2.0) * ROW_H);
+    let cx = |c: usize, pos: &Vec<(u32, u32)>| ((pos[c].1 as f64 + widths[c] as f64 / 2.0) * site_w, (pos[c].0 as f64 + heights[c] as f64 / 2.0) * row_h);
     let hpwl = |k: usize, pos: &Vec<(u32, u32)>| -> f64 {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for &c in &pnets[k].cells { let (x, y) = cx(c, pos); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }

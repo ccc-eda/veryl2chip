@@ -160,6 +160,33 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 单元加填充单元恰好铺满每个 site；
 `./test.sh` 用 yosys 对 `veryl build` 的输出做标准单元 netlist 的形式等价验证。
 
+## SKY130（`--pdk sky130`，`src/pdk/`）
+往 v2.0 的路上，ASIC 后端接上 SkyWater 的开源 SKY130 PDK（`sky130_fd_sc_hd`，典型角落 `tt_025C_1v80`）。流程仍然在
+逻辑单元（INV、NAND2、AOI21、DFFR…）上运作；`Tech`（`src/pdk/mod.rs`）把每个逻辑单元绑到单元库里的一个单元：名称与引脚、
+占几个 site、在布线格点上的引脚访问点、时序，以及行高 / site / 轨距。vlib 是内置的 `Tech`；SKY130 的由它的文件创建：
+
+- `src/pdk/liberty.rs` 读 Liberty（群组与属性、单位、可内插的 NLDM 查表、引脚的 `function` 与 `ff` 群组）；
+  `src/pdk/lef.rs` 读 LEF（site、各层的轨距 / 宽度 / 间距 / RC、via、单元尺寸与引脚形状）；`src/pdk/def.rs` 把 DEF 读回来
+  （检查流程写出的东西）。
+- 每个绑定都对照单元库检查：绑到的单元的 Liberty 函数必须和逻辑单元的真值表相同（触发器：时钟边缘、下一个状态、
+  clear / preset）。`veryl-eda --pdk-check [目錄]` 读完整的 SKY130 目录（`sky130_fd_sc_hd__tt_025C_1v80.lib`、
+  `sky130_fd_sc_hd.tlef`、`sky130_fd_sc_hd_merged.lef`，和 OpenROAD-flow-scripts 的 `platforms/sky130hd` 一样；
+  `tools/sky130.sh` 下载，`VERYL_EDA_SKY130` 指向它）：428 个单元、441 个 macro，0.1 秒。
+- `--asic --pdk sky130` 用 SKY130 跑整个流程。需要的单元随 veryl-eda 附上（`pdk/sky130hd/`：35 个单元的 Liberty、tech LEF、
+  单元 LEF 与 GDS，由 `tools/sky130_subset.py` 切出；Apache-2.0）；`--pdk sky130:目錄` 改读完整文件。
+  - 对应：存储器维持触发器（这里没有 SRAM macro）；没有 reset 的下降沿触发器在时钟加一个反相器。
+  - 布局在 `unithd` 列上（site 0.46 × 2.72 µm，N / FS 交替），IO 引脚各在自己的格点上，每列每 20 µm 一个 well tap
+    （`tapvpwrvgnd_1`，必要时把单元挪开，没有单元离 tap 超过 14 µm），空位放 `fill_8 … fill_1`。
+  - 引脚访问：每个单元的每支引脚在它 `li1` 形状旁有一个格点；`L1M1_PR` via 放在形状上，一小段 met1 接到格点。
+    全局布线的 gcell 是 8 栏 × 1 列，容量依方向（met1 + met3、met2 + met4）。
+  - 时序来自 Liberty 的 NLDM 表：每个 arc 的延迟与输出斜率依输入斜率与该网络的负载（接收引脚电容 + 由 tech LEF 算的导线电容）
+    查表，斜率沿路径传递，setup / hold 来自触发器的限制表，导线加上 Elmore RC。
+  - `--verilog` / `--def` 写出单元库的单元、引脚、site、层（met1–met4、li1 引脚）与 via 名称；Verilog 最后接着由 Liberty
+    函数产生的行为模型。`--map-only` 只做对应。
+- `--gatesim sky130` 在 SKY130 网表上跑 testbench；`test.sh` 用 yosys 从 PDK 自己的 Liberty 档创建的单元模型（`read_liberty`），
+  证明每个设计的 SKY130 网表与 `veryl build` 的输出等价。`cargo test` 把 DEF 读回来对照 LEF 检查（单元在列与 site 上、
+  不重叠、每个 site 都有东西、tap 距离）。
+
 ## 虚拟开发板（`src/board/`）
 网页 IDE 的虚拟 iCEBreaker：iCE40 映射后网表的快速逐周期仿真器，接到板子的引脚
 （`board/icebreaker.rs`：引脚 35 的 12 MHz 时钟、BTN_N、红绿 LED、扩展板的 LED1–5 与 BTN1–3、PMOD1A/1B、FTDI 串口；引脚来自设计的 pcf，没有的话用教学的）。

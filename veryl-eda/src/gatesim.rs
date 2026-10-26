@@ -34,7 +34,9 @@ pub fn netlist_with(lib: &crate::elab::Lib, top: &str, ov: &HashMap<String, Val>
         "opt" | "gate" => Ok(nl),
         "ice40" => crate::ice40::map(&nl),
         "asic" => crate::asic::map::map(&nl),
-        k => Err(format!("unknown netlist kind '{}' (opt, ice40, asic)", k)),
+        // SKY130 mapping (no SRAM macros, negative-edge flip-flops with a clock inverter)
+        "sky130" => crate::pdk::with_tech(crate::pdk::sky130_builtin()?, || crate::asic::map::map(&nl)),
+        k => Err(format!("unknown netlist kind '{}' (opt, ice40, asic, sky130)", k)),
     }
 }
 

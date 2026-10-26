@@ -7,7 +7,7 @@
 //! of buffers and the same wire length, so the skew stays small.
 //! Also: delay buffers in front of flip-flop inputs that violate hold.
 
-use super::lib::{dims, ROW_H, SITE_W};
+use super::lib::{dims, row_h, site_w};
 use super::place::{special_nets, RowPlacement};
 use crate::netlist::{Bit, Cell, Netlist};
 
@@ -34,17 +34,17 @@ impl Grid {
     }
     /// the free run of `w` sites nearest to (x µm, y µm); marks it used
     fn take(&mut self, x: f64, y: f64, w: u32) -> (u32, u32) {
-        let (tr, tx) = (((y / ROW_H) as i64).clamp(0, self.rows as i64 - 1), ((x / SITE_W) as i64 - w as i64 / 2).clamp(0, (self.sites - w) as i64));
+        let (tr, tx) = (((y / row_h()) as i64).clamp(0, self.rows as i64 - 1), ((x / site_w()) as i64 - w as i64 / 2).clamp(0, (self.sites - w) as i64));
         let mut best: Option<(f64, u32, u32)> = None;
         for dr in 0..self.rows as i64 {
             // rows further away than the best found so far cannot win
-            if let Some((d, _, _)) = best { if dr as f64 * ROW_H > d { break; } }
+            if let Some((d, _, _)) = best { if dr as f64 * row_h() > d { break; } }
             for r in [tr - dr, tr + dr] {
                 if r < 0 || r >= self.rows as i64 || (dr == 0 && r != tr) { continue; }
                 let row = &self.occ[r as usize];
                 for s in 0..=(self.sites - w) {
                     if (s..s + w).all(|t| !row[t as usize]) {
-                        let d = dr as f64 * ROW_H + (s as i64 - tx).abs() as f64 * SITE_W;
+                        let d = dr as f64 * row_h() + (s as i64 - tx).abs() as f64 * site_w();
                         if best.map(|b| d < b.0).unwrap_or(true) { best = Some((d, r as u32, s)); }
                     }
                 }
@@ -65,7 +65,7 @@ fn next_wire(nl: &Netlist) -> u32 {
 fn center(nl: &Netlist, pl: &RowPlacement, i: usize) -> (f64, f64) {
     let (w, h) = dims(&nl.cells[i]);
     let (r, x) = pl.pos[i];
-    ((x as f64 + w as f64 / 2.0) * SITE_W, (r as f64 + h as f64 / 2.0) * ROW_H)
+    ((x as f64 + w as f64 / 2.0) * site_w(), (r as f64 + h as f64 / 2.0) * row_h())
 }
 
 /// buffer trees for every clock / asynchronous set-reset net with more than MAX_LEAF sinks
@@ -74,7 +74,7 @@ pub fn build(nl: &mut Netlist, pl: &mut RowPlacement) -> Cts {
     nets.sort();
     let mut grid = Grid::of(nl, pl);
     let mut wire = next_wire(nl);
-    let bw = super::lib::cell("CLKBUF").width;
+    let bw = super::lib::width("CLKBUF");
     let mut out = Cts { trees: vec![], buffers: 0 };
     for net in nets {
         // sinks: (cell, connection index, position)
@@ -123,7 +123,7 @@ pub fn build(nl: &mut Netlist, pl: &mut RowPlacement) -> Cts {
 pub fn fix_hold(nl: &mut Netlist, pl: &mut RowPlacement, fixes: &[(usize, &'static str, usize)]) -> usize {
     let mut grid = Grid::of(nl, pl);
     let mut wire = next_wire(nl);
-    let bw = super::lib::cell("BUF").width;
+    let bw = super::lib::width("BUF");
     let mut n = 0;
     for &(i, pin, count) in fixes {
         let (cx, cy) = center(nl, pl, i);

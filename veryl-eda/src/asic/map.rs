@@ -27,8 +27,10 @@ struct Match {
 }
 
 pub fn map(nl: &Netlist) -> R<Netlist> {
-    // memories with synchronous reads become SRAM macros (one per read port)
-    let (nl_owned, mems) = crate::bram::find_mems(nl);
+    // memories with synchronous reads become SRAM macros (one per read port),
+    // in a technology that has them
+    let tech = crate::pdk::tech();
+    let (nl_owned, mems) = if tech.sram { crate::bram::find_mems(nl) } else { (nl.clone(), vec![]) };
     let nl = &nl_owned;
     let mut macros: Vec<Cell> = vec![];
     for m in &mems {
@@ -176,7 +178,18 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
             cells.push(Cell { typ: m.cell.into(), conns, params: vec![] });
         }
     }
-    for (name, ck, d, r, q) in ffs {
+    // a library without negative-edge flip-flops: an inverter on the clock (one per clock net)
+    let mut inv_clk: HashMap<Bit, Bit> = HashMap::new();
+    for (mut name, mut ck, d, r, q) in ffs {
+        if tech.binding(name).is_none() && (name == "DFFN" || name == "DFFNS") {
+            ck = *inv_clk.entry(ck).or_insert_with(|| {
+                let w = Bit::W(next_wire);
+                next_wire += 1;
+                cells.push(Cell { typ: "INV".into(), conns: vec![("A", ck), ("Y", w)], params: vec![] });
+                w
+            });
+            name = if name == "DFFN" { "DFF" } else { "DFFS" };
+        }
         let lib = cell(name);
         let mut conns = vec![];
         for (k, p) in lib.ins.iter().enumerate() {

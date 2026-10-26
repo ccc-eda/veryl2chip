@@ -29,7 +29,8 @@ pub struct Cell {
     pub params: Vec<(&'static str, String)>,
 }
 
-pub fn is_out(p: &str) -> bool { p == "Y" || p == "Q" || p == "O" || p == "CO" || p.starts_with("RDATA") }
+/// output pins (generic, iCE40, vlib cells; SKY130 X / LO / HI in exported netlists)
+pub fn is_out(p: &str) -> bool { matches!(p, "Y" | "Q" | "O" | "CO" | "X" | "LO" | "HI") || p.starts_with("RDATA") }
 
 impl Cell {
     pub fn out(&self) -> Bit {
@@ -355,8 +356,10 @@ pub fn const_of(bits: &[Bit]) -> Option<u128> {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dir { In, Out }
 
+#[derive(Clone)]
 pub struct Port { pub name: String, pub dir: Dir, pub bits: Vec<Bit> }
 
+#[derive(Clone)]
 pub struct Netlist {
     pub name: String,
     pub ports: Vec<Port>,

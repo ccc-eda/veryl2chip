@@ -14,7 +14,7 @@
 //! else (whole die, occupied nodes forbidden), keeping the old route if that
 //! fails.
 
-use super::lib::{dims, ROW_H, SITE_W};
+use super::lib::{dims, row_h, site_w};
 use super::place::{nets, RowPlacement};
 use super::route::Routing;
 use crate::netlist::{Bit, Netlist};
@@ -26,7 +26,8 @@ pub const LAYERS: usize = 4;
 pub const TRACKS: u32 = 8;
 const VIA_COST: f32 = 4.0;
 
-pub fn layer_name(l: u8) -> &'static str { ["M2", "M3", "M4", "M5"][l as usize] }
+/// the routing layer of grid layer `l` in the current technology
+pub fn layer_name(l: u8) -> String { crate::pdk::tech().layers[l as usize].clone() }
 fn horizontal(l: usize) -> bool { l % 2 == 0 }
 
 pub struct DNet {
@@ -65,6 +66,10 @@ pub fn pin_point(nl: &Netlist, pl: &RowPlacement, i: usize, k: usize) -> (u32, u
     let c = &nl.cells[i];
     let (w, h) = dims(c);
     let (r, s) = pl.pos[i];
+    // library cells: their pin access points (rows alternate N / FS, so odd rows are mirrored)
+    if let Some(&(_, dx, ty, _)) = crate::pdk::tech().binding(&c.typ).and_then(|b| b.access.iter().find(|a| a.0 == c.conns[k].0)) {
+        return (s + dx, r * TRACKS + if r % 2 == 1 { TRACKS - 1 - ty } else { ty });
+    }
     let n = c.conns.len().max(1);
     if h > 1 {
         // macro: pins spread along its top edge, just inside
@@ -110,7 +115,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
             }
         }
         for &k in &p.pins {
-            let q = (LAYERS - 1, (pl.pins[k].x / SITE_W).round().clamp(0.0, (nx - 1) as f64) as u32, (pl.pins[k].y / ROW_H * TRACKS as f64).round().clamp(0.0, (ny - 1) as f64) as u32);
+            let q = (LAYERS - 1, (pl.pins[k].x / site_w()).round().clamp(0.0, (nx - 1) as f64) as u32, (pl.pins[k].y / row_h() * TRACKS as f64).round().clamp(0.0, (ny - 1) as f64) as u32);
             if !t.contains(&q) { t.push(q); }
         }
         // the corridor: gcells of the global route and of the terminals, one gcell around
@@ -279,8 +284,8 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
             if l + 1 < LAYERS && set.contains(&id(l + 1, x, y)) { vias.push((l as u8, x, y)); }
         }
         for q in t { if q.0 == 0 { vias.push((255, q.1, q.2)); } }
-        let len: f64 = segs.iter().map(|s| (s.3 - s.1 + s.4 - s.2) as f64 * SITE_W).sum();
-        for s in &segs { per_layer[s.0 as usize] += (s.3 - s.1 + s.4 - s.2) as f64 * SITE_W; }
+        let len: f64 = segs.iter().map(|s| (s.3 - s.1 + s.4 - s.2) as f64 * site_w()).sum();
+        for s in &segs { per_layer[s.0 as usize] += (s.3 - s.1 + s.4 - s.2) as f64 * site_w(); }
         wl += len;
         nv += vias.len();
         out.push(DNet { bit: *bit, segs, vias, length: len });

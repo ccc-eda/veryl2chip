@@ -7,9 +7,15 @@
 //! CLKBUFs and wires), a path launches at its source's clock arrival and is
 //! checked against its capture clock (setup), and a min-delay pass checks
 //! hold. Asynchronous set/reset nets are not timed.
+//!
+//! With a Liberty library (SKY130) the cell delays come from its NLDM tables:
+//! each arc's delay and output slew at the input slew and the net's load
+//! (sink pin capacitances + wire capacitance from the LEF), slews propagate
+//! along the paths, the flip-flops' setup / hold come from their constraint
+//! tables, and wires add an Elmore RC delay.
 
 use super::lib::cell;
-use super::lib::{ROW_H, SITE_W};
+use super::lib::{row_h, site_w};
 use super::place::RowPlacement;
 use super::route::Routing;
 use crate::netlist::{is_out, Bit, Dir, Netlist};
@@ -49,11 +55,26 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
         .flat_map(|p| p.bits.iter().enumerate().map(move |(i, b)| (*b, if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }))).collect();
     let n = nl.cells.len();
     let is_macro = |i: usize| nl.cells[i].typ == "SRAM";
-    let at = |i: usize| { let (r, x) = pl.pos[i]; let (w, h) = super::lib::dims(&nl.cells[i]); ((x as f64 + w as f64 / 2.0) * SITE_W, (r as f64 + h as f64 / 2.0) * ROW_H) };
+    let at = |i: usize| { let (r, x) = pl.pos[i]; let (w, h) = super::lib::dims(&nl.cells[i]); ((x as f64 + w as f64 / 2.0) * site_w(), (r as f64 + h as f64 / 2.0) * row_h()) };
     let pin_at: HashMap<Bit, (f64, f64)> = pl.pins.iter().map(|p| (p.bit, (p.x, p.y))).collect();
     // where each net starts: its driver cell or input pin
     let src = |b: Bit| -> (f64, f64) { driver.get(&b).map(|&i| at(i)).or_else(|| pin_at.get(&b).copied()).unwrap_or((0.0, 0.0)) };
-    let wire = |b: Bit, to: (f64, f64)| { let s = src(b); wire_delay(*len.get(&b).unwrap_or(&0.0), (s.0 - to.0).abs() + (s.1 - to.1).abs()) };
+    let tech = crate::pdk::tech();
+    let nldm = tech.liberty.is_some();
+    let (rpu, cpu) = tech.wire_rc();
+    // load of every net (pF): sink pin capacitances + wire (+ 2 fF per output port)
+    let mut load: HashMap<Bit, f64> = HashMap::new();
+    if nldm {
+        for c in &nl.cells { for (p, b) in &c.conns { if !is_out(p) { *load.entry(*b).or_default() += tech.pin_cap(&c.typ, p); } } }
+        for p in nl.ports.iter().filter(|p| p.dir == Dir::Out) { for b in &p.bits { *load.entry(*b).or_default() += 0.002; } }
+        for (b, l) in &len { *load.entry(*b).or_default() += cpu * l; }
+    }
+    let wire = |b: Bit, to: (f64, f64)| {
+        let s = src(b);
+        let dist = (s.0 - to.0).abs() + (s.1 - to.1).abs();
+        // Elmore: the driver-to-sink resistance charging half its own wire and a typical pin (Ω·pF = ps)
+        if nldm { rpu * dist * (cpu * dist / 2.0 + 0.002) * 1e-3 } else { wire_delay(*len.get(&b).unwrap_or(&0.0), dist) }
+    };
     let mut arrival = vec![0.0f64; n];
     // time each net leaves its driver (output of a cell, or 0 at an input pin)
     let mut net_at: HashMap<Bit, f64> = HashMap::new();
@@ -63,14 +84,28 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
         let l = cell(&c.typ);
         l.delay + l.load * *fanout.get(&c.out()).unwrap_or(&0) as f64
     };
+    // delay and output slew of cell i from input `pin` (the clock pin for flip-flops)
+    let gate = |i: usize, pin: &str, slew: f64| -> (f64, f64) {
+        let c = &nl.cells[i];
+        if !nldm || c.typ == "SRAM" { return (out_delay(i), 0.0); }
+        tech.arc(&c.typ, pin, slew, load.get(&c.out()).copied().unwrap_or(0.0)).unwrap_or((out_delay(i), 0.1))
+    };
+    // slew of every net (ns); inputs and constants switch in 50 ps
+    let mut slew: HashMap<Bit, f64> = HashMap::new();
+    let slew_of = |b: &Bit, slew: &HashMap<Bit, f64>| slew.get(b).copied().unwrap_or(0.05);
+    // the delay of each cell on its longest arc (for the path report and criticality)
+    let mut cell_d = vec![0.0f64; n];
     // ---- clock arrival at every flip-flop / macro (0 = ideal clock before CTS) ----
     let propagated = nl.cells.iter().any(|c| c.typ == "CLKBUF");
     let mut clk_at: HashMap<Bit, f64> = HashMap::new();
     for (i, c) in nl.cells.iter().enumerate().filter(|(_, c)| c.typ == "CLKBUF") {
         // tree buffers come parent first
         let a = c.port("A").unwrap();
-        let t = clk_at.get(&a).copied().unwrap_or(0.0) + wire(a, at(i)) + out_delay(i);
+        let (d, so) = gate(i, "A", slew_of(&a, &slew));
+        let t = clk_at.get(&a).copied().unwrap_or(0.0) + wire(a, at(i)) + d;
+        cell_d[i] = d;
         clk_at.insert(c.out(), t);
+        slew.insert(c.out(), so);
     }
     let ck_arr = |i: usize| -> f64 {
         if !propagated { return 0.0; }
@@ -90,25 +125,35 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
     let mut pred: Vec<Option<Bit>> = vec![None; n];
     for &i in &seq {
         let c = &nl.cells[i];
-        arrival[i] = ck_arr(i) + out_delay(i);
-        for (p, b) in &c.conns { if is_out(p) { net_at.insert(*b, arrival[i]); min_at.insert(*b, arrival[i]); } }
+        let ck_slew = c.port("CK").map(|b| slew_of(&b, &slew)).unwrap_or(0.05);
+        let (d, so) = gate(i, "CK", ck_slew);
+        cell_d[i] = d;
+        arrival[i] = ck_arr(i) + d;
+        for (p, b) in &c.conns { if is_out(p) { net_at.insert(*b, arrival[i]); min_at.insert(*b, arrival[i]); slew.insert(*b, so); } }
     }
     for (i, c) in nl.cells.iter().enumerate() {
         if c.is_ff() || is_macro(i) || c.typ == "CLKBUF" { continue; }
-        let mut best: (f64, Option<Bit>) = (0.0, None);
+        let mut best: (f64, Option<Bit>, f64) = (0.0, None, 0.0);
         let mut early = f64::MAX;
+        let mut so_max = 0.0f64;
         for (p, b) in &c.conns {
             if is_out(p) || b.is_const() { continue; }
             let w = wire(*b, at(i));
-            let t = *net_at.get(b).unwrap_or(&0.0) + w;
-            if best.1.is_none() || t > best.0 { best = (t, Some(*b)); }
-            early = early.min(min_at.get(b).copied().unwrap_or(0.0) + w);
+            let (d, so) = gate(i, p, slew_of(b, &slew));
+            so_max = so_max.max(so);
+            let t = *net_at.get(b).unwrap_or(&0.0) + w + d;
+            if best.1.is_none() || t > best.0 { best = (t, Some(*b), d); }
+            early = early.min(min_at.get(b).copied().unwrap_or(0.0) + w + d);
         }
-        arrival[i] = best.0 + out_delay(i);
+        // a cell without inputs (tie): its intrinsic delay
+        if best.1.is_none() { best.0 = out_delay(i); best.2 = best.0; }
+        arrival[i] = best.0;
+        cell_d[i] = best.2;
         pred[i] = best.1;
         net_at.insert(c.out(), arrival[i]);
+        slew.insert(c.out(), so_max);
         // a constant (tie cell) never changes: it cannot violate hold
-        min_at.insert(c.out(), if early == f64::MAX { f64::INFINITY } else { early + out_delay(i) });
+        min_at.insert(c.out(), if early == f64::MAX { f64::INFINITY } else { early });
     }
     // endpoints
     let mut worst: (f64, Option<Bit>, String, f64) = (0.0, None, String::new(), 0.0);
@@ -125,7 +170,10 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
         for (p, d) in &c.conns {
             if is_out(p) || matches!(*p, "CK" | "RN" | "SN") || d.is_const() { continue; }
             endpoints += 1;
-            let (su, ho) = if is_macro(i) { (super::lib::SRAM_SETUP, super::lib::SRAM_HOLD) } else { (cell(&c.typ).setup, super::lib::HOLD) };
+            let (su, ho) = if is_macro(i) { (super::lib::SRAM_SETUP, super::lib::SRAM_HOLD) } else if nldm {
+                let (cs, ds) = (c.port("CK").map(|b| slew_of(&b, &slew)).unwrap_or(0.05), slew_of(d, &slew));
+                (tech.constraint(&c.typ, p, true, cs, ds).unwrap_or(cell(&c.typ).setup), tech.constraint(&c.typ, p, false, cs, ds).unwrap_or(super::lib::HOLD))
+            } else { (cell(&c.typ).setup, super::lib::HOLD) };
             let w = wire(*d, at(i));
             let t = net_at.get(d).unwrap_or(&0.0) + w + su - ck;
             if t > worst.0 {
@@ -164,7 +212,8 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
                 Some(&i) => {
                     let c = &nl.cells[i];
                     steps.push(Step { what: label, delay: w, at: arrival[i] + w });
-                    steps.push(Step { what: format!("{}{}", c.typ, if c.is_ff() || is_macro(i) { " clk→Q" } else { "" }), delay: out_delay(i), at: arrival[i] });
+                    let name = if nldm { tech.cell_name(&c.typ).trim_start_matches(crate::pdk::SKY130_PREFIX).to_string() } else { c.typ.clone() };
+                    steps.push(Step { what: format!("{}{}", name, if c.is_ff() || is_macro(i) { " clk→Q" } else { "" }), delay: cell_d[i], at: arrival[i] });
                     crit_cells.push(i);
                     to = at(i);
                     match pred[i] { Some(p) if !c.is_ff() && !is_macro(i) => b = p, _ => {
@@ -195,7 +244,7 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
         let mut t = 0.0f64;
         for &j in users.get(&b).map(|v| v.as_slice()).unwrap_or(&[]) {
             let c = &nl.cells[j];
-            let after = if c.is_ff() { cell(&c.typ).setup } else if is_macro(j) { super::lib::SRAM_SETUP } else { out_delay(j) + tail.get(&c.out()).copied().unwrap_or(0.0) };
+            let after = if c.is_ff() { cell(&c.typ).setup } else if is_macro(j) { super::lib::SRAM_SETUP } else { cell_d[j] + tail.get(&c.out()).copied().unwrap_or(0.0) };
             t = t.max(wire(b, at(j)) + after);
         }
         if let Some(pa) = out_pins.get(&b) { t = t.max(wire(b, *pa)); }

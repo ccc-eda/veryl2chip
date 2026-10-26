@@ -164,6 +164,35 @@ detail routing is rechecked from its segments and vias alone: no grid point shar
 and cells plus fillers covering every site exactly once;
 `./test.sh` proves the standard-cell netlist equivalent to the output of `veryl build` with yosys.
 
+## SKY130 (`--pdk sky130`, `src/pdk/`)
+On the way to v2.0 the ASIC back end learns SkyWater's open SKY130 PDK (`sky130_fd_sc_hd`, the typical corner `tt_025C_1v80`).
+The flow keeps working on logical cells (INV, NAND2, AOI21, DFFR, ...); a `Tech` (`src/pdk/mod.rs`) binds each to a library
+cell: its name and pins, its width in placement sites, its pin access points on the routing grid, its timing, and the row /
+site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its files:
+
+- `src/pdk/liberty.rs` reads Liberty (groups and attributes, units, NLDM lookup tables with interpolation, pin `function`s and
+  `ff` groups); `src/pdk/lef.rs` reads LEF (sites, layers with pitch / width / spacing / RC, vias, cell sizes and pin shapes);
+  `src/pdk/def.rs` reads DEF back (to check what the flow wrote).
+- Each binding is checked against the library: the Liberty function of the bound cell must have the logical cell's truth table
+  (flip-flops: clock edge, next state, clear / preset). `veryl-eda --pdk-check [DIR]` reads a full SKY130 directory
+  (`sky130_fd_sc_hd__tt_025C_1v80.lib`, `sky130_fd_sc_hd.tlef`, `sky130_fd_sc_hd_merged.lef` as in OpenROAD-flow-scripts'
+  `platforms/sky130hd`; `tools/sky130.sh` downloads them, `VERYL_EDA_SKY130` points to them): 428 cells, 441 macros in 0.1 s.
+- `--asic --pdk sky130` runs the whole flow on SKY130. The cells it needs come with veryl-eda (`pdk/sky130hd/`: Liberty, tech LEF,
+  cell LEF and GDS of 35 cells, cut by `tools/sky130_subset.py`; Apache-2.0); `--pdk sky130:DIR` reads the full files instead.
+  - mapping: memories stay flip-flops (no SRAM macro here); the negative-edge flip-flop without reset gets a clock inverter.
+  - placement on `unithd` rows (0.46 × 2.72 µm sites, alternating N / FS), IO pins on their own grid nodes, a well tap
+    (`tapvpwrvgnd_1`) every 20 µm of each row (cells shifted to make room, none farther than 14 µm from a tap), fillers `fill_8 … fill_1`.
+  - pin access: each pin of each cell has a grid node next to its `li1` shape; the `L1M1_PR` via sits on the shape and a short
+    met1 stub joins it to the node. Global routing gcells are 8 columns × 1 row with per-direction capacities (met1 + met3, met2 + met4).
+  - timing from the Liberty NLDM tables: every arc's delay and output slew at its input slew and the net's load (sink pin
+    capacitances + wire capacitance from the tech LEF), slews propagated, setup / hold from the flip-flops' constraint tables,
+    Elmore RC on the wires.
+  - `--verilog` / `--def` write the library's cell, pin, site, layer (met1–met4, li1 pins) and via names; the Verilog ends with
+    behavioural models made from the Liberty functions. `--map-only` stops after the mapping.
+- `--gatesim sky130` runs the testbenches on the SKY130 netlist; `test.sh` proves every design's SKY130 netlist equivalent to
+  `veryl build`'s output with the cell models yosys builds from the PDK's own Liberty file (`read_liberty`). The `cargo test`
+  checks read the DEF back against the LEF (cells on the rows and sites, no overlaps, every site covered, tap distances).
+
 ## Virtual board (`src/board/`)
 The web IDE's virtual iCEBreaker: a fast cycle-based simulator of the iCE40-mapped netlist wired to the board's pins
 (`board/icebreaker.rs`: 12 MHz clock on pin 35, BTN_N, the red / green LEDs, the break-off section's LED1–5 and BTN1–3, PMOD1A/1B, the FTDI UART; pins from the design's pcf, or the tutorial's).

@@ -12,6 +12,7 @@ pub mod ice40;
 pub mod netlist;
 pub mod netsim;
 pub mod output;
+pub mod pdk;
 pub mod pnr;
 pub mod power;
 pub mod rv;

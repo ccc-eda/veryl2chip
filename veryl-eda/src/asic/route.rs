@@ -6,7 +6,6 @@
 //! history cost) on overflowing edges. Vias are counted where a route turns
 //! and where it reaches a pin (M1).
 
-use super::lib::{ROW_H, SITE_W};
 use super::place::{nets, special_nets, RowPlacement};
 use crate::netlist::{Bit, Netlist};
 use std::cmp::Ordering;
@@ -47,19 +46,24 @@ pub fn route(nl: &Netlist, pl: &RowPlacement) -> Routing { route_with(nl, pl, 30
 
 /// global routing with at most `max_iters` negotiation rounds
 pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing {
-    let g = ROW_H;
-    let gx = ((pl.w / g).ceil() as u32).max(1);
+    // gcells: one row high, TRACKS columns wide (square in vlib: 4 µm)
+    let tech = crate::pdk::tech();
+    let (gw, gh) = (super::detail::TRACKS as f64 * tech.site_w, tech.row_h);
+    // tracks per gcell edge and direction (80 % of what the layers hold): vlib CAP;
+    // SKY130 horizontal met1 (6 free of 8) + met3 (4), vertical met2 (8) + met4 (4)
+    let (cap_h, cap_v) = if tech.is_vlib() { (CAP, CAP) } else { (8u16, 10u16) };
+    let gx = ((pl.w / gw).ceil() as u32).max(1);
     let gy = pl.rows.max(1);
     let id = |x: u32, y: u32| y * gx + x;
     let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
     let gcell_of_cell = |c: usize| {
         let (r, s) = pl.pos[c];
         let (w, h) = dims[c];
-        ((((s as f64 + w as f64 / 2.0) * SITE_W) / g).floor().min(gx as f64 - 1.0) as u32, (r + h / 2).min(gy - 1))
+        ((((s as f64 + w as f64 / 2.0) * tech.site_w) / gw).floor().min(gx as f64 - 1.0) as u32, (r + h / 2).min(gy - 1))
     };
     let gcell_of_pin = |k: usize| {
         let p = &pl.pins[k];
-        ((p.x / g).floor().clamp(0.0, gx as f64 - 1.0) as u32, (p.y / g).floor().clamp(0.0, gy as f64 - 1.0) as u32)
+        ((p.x / gw).floor().clamp(0.0, gx as f64 - 1.0) as u32, (p.y / gh).floor().clamp(0.0, gy as f64 - 1.0) as u32)
     };
     let special = special_nets(nl);
     let pn = nets(nl, &pl.pins);
@@ -122,7 +126,7 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
             let t = &terms[ni].1;
             if t.len() < 2 { continue; }
             if it > 0 {
-                let over = trees[ni].iter().any(|&(a, b)| { let (h, e) = edge(a, b); if h { use_h[e] > CAP } else { use_v[e] > CAP } });
+                let over = trees[ni].iter().any(|&(a, b)| { let (h, e) = edge(a, b); if h { use_h[e] > cap_h } else { use_v[e] > cap_v } });
                 if !over { continue; }
             }
             for &(a, b) in &trees[ni] { let (h, e) = edge(a, b); if h { use_h[e] -= 1 } else { use_v[e] -= 1 } }
@@ -152,7 +156,7 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
                         if v == u32::MAX { continue; }
                         let (h, e) = edge(u, v);
                         let (us, hi) = if h { (use_h[e], hist_h[e]) } else { (use_v[e], hist_v[e]) };
-                        let over = (us + 1).saturating_sub(CAP) as f32;
+                        let over = (us + 1).saturating_sub(if h { cap_h } else { cap_v }) as f32;
                         let nd = du + (1.0 + hi) * (1.0 + pres * over);
                         if seen[v as usize] != gen || nd < dist[v as usize] {
                             seen[v as usize] = gen;
@@ -176,8 +180,8 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
         }
         let mut over = 0u32;
         for e in 0..ne {
-            if use_h[e] > CAP { over += (use_h[e] - CAP) as u32; hist_h[e] += 0.5; }
-            if use_v[e] > CAP { over += (use_v[e] - CAP) as u32; hist_v[e] += 0.5; }
+            if use_h[e] > cap_h { over += (use_h[e] - cap_h) as u32; hist_h[e] += 0.5; }
+            if use_v[e] > cap_v { over += (use_v[e] - cap_v) as u32; hist_v[e] += 0.5; }
         }
         iters.push(over);
         if over == 0 { break; }
@@ -196,13 +200,13 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
         }
         let turns = dirs.values().filter(|d| d.0 && d.1).count() as u32;
         let v = turns + npins;
-        let len = trees[ni].len() as f64 * g;
+        let len: f64 = trees[ni].iter().map(|&(a, b)| if edge(a, b).0 { gw } else { gh }).sum();
         wl += len;
         vias += v;
         out.push(NetRoute { bit: *bit, segs, length: len, vias: v, clock: special.contains(bit) });
     }
     let overflow = *iters.last().unwrap_or(&0);
     let used: u64 = use_h.iter().chain(&use_v).map(|u| *u as u64).sum();
-    let demand = used as f64 / (2 * ne) as f64 / CAP as f64;
+    let demand = used as f64 / ne as f64 / (cap_h + cap_v) as f64;
     Routing { gx, gy, nets: out, iters, wirelength: wl, vias, overflow, demand }
 }

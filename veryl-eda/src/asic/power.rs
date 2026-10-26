@@ -14,7 +14,7 @@
 //! after the last strap), so a load I at distance x0 from one end of a
 //! segment of length L drops the voltage at x by r·I·min(x,x0)·(L−max(x,x0))/L.
 
-use super::lib::{dims, ROW_H, SITE_W};
+use super::lib::{dims, row_h, site_w};
 use super::pdn::{Pdn, STRAP_W};
 use super::place::RowPlacement;
 use crate::netlist::{is_out, Bit, Netlist};
@@ -111,9 +111,9 @@ pub fn estimate(nl: &Netlist, pl: &RowPlacement, lengths: &HashMap<Bit, f64>, pd
     let dynamic = (e_nets + e_clock + e_int + e_sram) * 1e-15 * f * 1e3; // mW
     let leakage = leak_nw.iter().sum::<f64>() * 1e-6;
     // ---- IR drop on the rails ----
-    let straps_vdd: Vec<f64> = { let mut v: Vec<f64> = pdn.straps.iter().filter(|s| s.1).map(|s| (s.0 as f64 + STRAP_W as f64 / 2.0) * SITE_W).collect(); v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v };
-    let straps_vss: Vec<f64> = { let mut v: Vec<f64> = pdn.straps.iter().filter(|s| !s.1).map(|s| (s.0 as f64 + STRAP_W as f64 / 2.0) * SITE_W).collect(); v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v };
-    let centre = |i: usize| { let (w, _) = dims(&nl.cells[i]); let (_, x) = pl.pos[i]; (x as f64 + w as f64 / 2.0) * SITE_W };
+    let straps_vdd: Vec<f64> = { let mut v: Vec<f64> = pdn.straps.iter().filter(|s| s.1).map(|s| (s.0 as f64 + STRAP_W as f64 / 2.0) * site_w()).collect(); v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v };
+    let straps_vss: Vec<f64> = { let mut v: Vec<f64> = pdn.straps.iter().filter(|s| !s.1).map(|s| (s.0 as f64 + STRAP_W as f64 / 2.0) * site_w()).collect(); v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v };
+    let centre = |i: usize| { let (w, _) = dims(&nl.cells[i]); let (_, x) = pl.pos[i]; (x as f64 + w as f64 / 2.0) * site_w() };
     // loads per rail: rows r and r+1 share boundary r+1
     let mut rail_loads: HashMap<u32, Vec<(usize, f64)>> = HashMap::new();
     for i in 0..n {
@@ -149,7 +149,7 @@ pub fn estimate(nl: &Netlist, pl: &RowPlacement, lengths: &HashMap<Bit, f64>, pd
         }
     }
     let ir_worst = ir.iter().copied().fold(0.0, f64::max);
-    let _ = ROW_H;
+    let _ = row_h();
     Power {
         freq_mhz, e_nets: e_nets / 1e3, e_clock: e_clock / 1e3, e_internal: e_int / 1e3, e_sram: e_sram / 1e3,
         dynamic, leakage, total: dynamic + leakage, cell, ir, ir_worst, cycles: act.cycles,

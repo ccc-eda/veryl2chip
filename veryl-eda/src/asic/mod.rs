@@ -99,7 +99,8 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     // detailed routing on the track grid; its wire lengths make the final timing
     let t0 = now();
     // power grid and fillers, then detailed routing around the straps
-    let pdn = pdn::build(&mapped, &placement);
+    let taps = pdn::insert_taps(&mapped, &mut placement);
+    let pdn = pdn::build(&mapped, &placement, &taps);
     let detail = detail::route(&mapped, &placement, &routing, &pdn);
     t("detail route", t0);
     let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
@@ -124,57 +125,111 @@ fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EP
 #[cfg(target_arch = "wasm32")]
 fn now() -> f64 { 0.0 }
 
-/// the placement (and pins) as DEF, 1000 database units per µm
+/// the placement (and pins) as DEF, 1000 database units per µm, with the
+/// current technology's cell, pin, site, layer and via names
 pub fn def(o: &Output) -> String {
     use std::fmt::Write;
     let pl = &o.placement;
+    let tech = crate::pdk::tech();
+    let vlib = tech.is_vlib();
+    let (sw, rh) = (lib::site_w(), lib::row_h());
     let u = |x: f64| (x * 1000.0).round() as i64;
+    let orient = |r: u32| if r % 2 == 0 { "N" } else { "FS" };
     let mut s = String::new();
     writeln!(s, "VERSION 5.8 ;\nDIVIDERCHAR \"/\" ;\nBUSBITCHARS \"[]\" ;\nDESIGN {} ;\nUNITS DISTANCE MICRONS 1000 ;", o.mapped.name).unwrap();
     writeln!(s, "DIEAREA ( 0 0 ) ( {} {} ) ;", u(pl.w), u(pl.h)).unwrap();
     for r in 0..pl.rows {
-        writeln!(s, "ROW ROW_{} core 0 {} {} DO {} BY 1 STEP {} 0 ;", r, u(r as f64 * lib::ROW_H), if r % 2 == 0 { "N" } else { "FS" }, pl.sites, u(lib::SITE_W)).unwrap();
+        writeln!(s, "ROW ROW_{} {} 0 {} {} DO {} BY 1 STEP {} 0 ;", r, tech.site, u(r as f64 * rh), orient(r), pl.sites, u(sw)).unwrap();
     }
-    writeln!(s, "COMPONENTS {} ;", o.mapped.cells.len() + o.pdn.fillers.len()).unwrap();
+    // fillers: the library's filler cells (widest first) for each gap
+    let mut fills: Vec<(u32, u32, String)> = vec![];
+    for &(r, x, w) in &o.pdn.fillers {
+        if vlib { fills.push((r, x, format!("FILL{}", w))); continue; }
+        let (mut x, mut left) = (x, w);
+        while left > 0 {
+            let (fw, n) = tech.fillers.iter().find(|f| f.0 <= left).cloned().unwrap_or((left, format!("FILL{}", left)));
+            fills.push((r, x, n));
+            x += fw;
+            left -= fw;
+        }
+    }
+    let tap_name = tech.tap.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    writeln!(s, "COMPONENTS {} ;", o.mapped.cells.len() + fills.len() + o.pdn.taps.len()).unwrap();
     for (i, c) in o.mapped.cells.iter().enumerate() {
         let (r, x) = pl.pos[i];
-        writeln!(s, "  - c{} {} + PLACED ( {} {} ) {} ;", i, c.typ, u(x as f64 * lib::SITE_W), u(r as f64 * lib::ROW_H), if r % 2 == 0 { "N" } else { "FS" }).unwrap();
+        writeln!(s, "  - c{} {} + PLACED ( {} {} ) {} ;", i, tech.cell_name(&c.typ), u(x as f64 * sw), u(r as f64 * rh), orient(r)).unwrap();
     }
-    for (k, &(r, x, w)) in o.pdn.fillers.iter().enumerate() {
-        writeln!(s, "  - fill{} FILL{} + PLACED ( {} {} ) {} ;", k, w, u(x as f64 * lib::SITE_W), u(r as f64 * lib::ROW_H), if r % 2 == 0 { "N" } else { "FS" }).unwrap();
+    for (k, (r, x, n)) in fills.iter().enumerate() {
+        writeln!(s, "  - fill{} {} + PLACED ( {} {} ) {} ;", k, n, u(*x as f64 * sw), u(*r as f64 * rh), orient(*r)).unwrap();
+    }
+    for (k, &(r, x)) in o.pdn.taps.iter().enumerate() {
+        writeln!(s, "  - tap{} {} + PLACED ( {} {} ) {} ;", k, tap_name, u(x as f64 * sw), u(r as f64 * rh), orient(r)).unwrap();
     }
     writeln!(s, "END COMPONENTS\nPINS {} ;", pl.pins.len() + 2).unwrap();
     writeln!(s, "  - VDD + NET VDD + SPECIAL + DIRECTION INOUT + USE POWER ;\n  - VSS + NET VSS + SPECIAL + DIRECTION INOUT + USE GROUND ;").unwrap();
+    // IO pins on the top grid layer, on their grid nodes
+    let top = &tech.layers[3];
+    let half = if vlib { 200 } else { 150 };
+    let tk = rh / detail::TRACKS as f64;
     for p in &pl.pins {
-        writeln!(s, "  - {} + NET {} + DIRECTION {} + PLACED ( {} {} ) N ;", p.name, p.name, if p.dir == crate::netlist::Dir::In { "INPUT" } else { "OUTPUT" }, u(p.x), u(p.y)).unwrap();
+        let (x, y) = if vlib { (p.x, p.y) } else { (p.x + tech.track_x0, p.y + tech.track_y0) };
+        writeln!(s, "  - {} + NET {} + DIRECTION {} + USE SIGNAL\n    + LAYER {} ( {} {} ) ( {} {} ) + PLACED ( {} {} ) N ;", p.name, p.name,
+            if p.dir == crate::netlist::Dir::In { "INPUT" } else { "OUTPUT" }, top, -half, -half, half, half, u(x), u(y)).unwrap();
     }
     writeln!(s, "END PINS").unwrap();
-    // power: M1 rails on the row boundaries, M5 straps, via stacks
-    let tk = lib::ROW_H / detail::TRACKS as f64;
+    // power: rails on the row boundaries, straps on the top layer, via stacks
     writeln!(s, "SPECIALNETS 2 ;").unwrap();
+    let (rail, rail_w) = if vlib { ("M1", 400) } else { ("met1", 480) };
+    let strap_w = u(pdn::STRAP_W as f64 * sw - if vlib { 0.0 } else { 0.06 });
+    let strap_x = |x: u32| if vlib { (x as f64 + 0.5) * sw } else { x as f64 * sw + tech.track_x0 + (pdn::STRAP_W as f64 - 1.0) * sw / 2.0 };
     for (net, vdd) in [("VDD", true), ("VSS", false)] {
         let mut parts = vec![];
-        for r in 0..o.pdn.rails { if (r % 2 == 1) == vdd { parts.push(format!("M1 400 ( 0 {} ) ( {} * )", u(r as f64 * lib::ROW_H), u(pl.w))); } }
-        for &(x, sv) in &o.pdn.straps { if sv == vdd { parts.push(format!("M5 1000 ( {} 0 ) ( * {} )", u((x as f64 + 0.5) * lib::SITE_W), u(pl.h))); } }
-        for &(x, y, sv) in &o.pdn.vias { if sv == vdd { parts.push(format!("M1 0 ( {} {} ) VIA1_5", u(x as f64 * lib::SITE_W), u(y as f64 * tk))); } }
-        writeln!(s, "  - {} ( * {} )\n    + ROUTED {} ;", net, net, parts.join("\n      NEW ")).unwrap();
+        for r in 0..o.pdn.rails { if (r % 2 == 1) == vdd { parts.push(format!("{} {} ( 0 {} ) ( {} * )", rail, rail_w, u(r as f64 * rh), u(pl.w))); } }
+        for &(x, sv) in &o.pdn.straps { if sv == vdd { parts.push(format!("{} {} ( {} 0 ) ( * {} )", top, strap_w, u(strap_x(x)), u(pl.h))); } }
+        for &(x, y, sv) in &o.pdn.vias {
+            if sv != vdd { continue; }
+            if vlib { parts.push(format!("M1 0 ( {} {} ) VIA1_5", u(x as f64 * sw), u(y as f64 * tk))); continue; }
+            // the stack from the rail up to the strap
+            let (px, py) = (u(x as f64 * sw + tech.track_x0), u((y / detail::TRACKS) as f64 * rh));
+            for l in 0..3 { parts.push(format!("{} 0 ( {} {} ) {}", tech.layers[l], px, py, tech.vias[l])); }
+        }
+        let conn = if vlib { format!("( * {} )", net) } else if vdd { "( * VPWR ) ( * VPB )".into() } else { "( * VGND ) ( * VNB )".into() };
+        writeln!(s, "  - {} {}\n    + ROUTED {} ;", net, conn, parts.join("\n      NEW ")).unwrap();
     }
     writeln!(s, "END SPECIALNETS").unwrap();
-    // detailed routes: wires per layer and vias (VIA12 = M1 pin to M2, VIA23 ...)
-    let t = lib::ROW_H / detail::TRACKS as f64;
-    let (ux, uy) = (|x: u32| u(x as f64 * lib::SITE_W), |y: u32| u(y as f64 * t));
+    // detailed routes: wires per layer and vias; a pin via sits on the cell's
+    // pin shape, joined to its grid node by a short stub on the first layer
+    let (ux, uy) = (|x: u32| u(x as f64 * sw + tech.track_x0), |y: u32| u(y as f64 * tk + tech.track_y0));
+    let mut stub: std::collections::HashMap<(u32, u32), f64> = Default::default();
+    if !vlib {
+        for (i, c) in o.mapped.cells.iter().enumerate() {
+            let Some(b) = tech.binding(&c.typ) else { continue };
+            for (k, (p, _)) in c.conns.iter().enumerate() {
+                if let Some(a) = b.access.iter().find(|a| a.0 == *p) { stub.insert(detail::pin_point(&o.mapped, pl, i, k), a.3); }
+            }
+        }
+    }
     let nets: Vec<&detail::DNet> = o.detail.nets.iter().filter(|n| !n.segs.is_empty() || !n.vias.is_empty()).collect();
     writeln!(s, "NETS {} ;", nets.len()).unwrap();
     for n in nets {
         let name = match n.bit { crate::netlist::Bit::W(w) => format!("n{}", w), _ => "const".into() };
         let mut conns = vec![];
-        for (i, c) in o.mapped.cells.iter().enumerate() { for (p, b) in &c.conns { if *b == n.bit { conns.push(format!("( c{} {} )", i, p)); } } }
+        for (i, c) in o.mapped.cells.iter().enumerate() {
+            let bind = tech.binding(&c.typ);
+            for (p, b) in &c.conns { if *b == n.bit { conns.push(format!("( c{} {} )", i, bind.map(|x| x.lib_pin(p)).unwrap_or(p))); } }
+        }
         for p in &pl.pins { if p.bit == n.bit { conns.push(format!("( PIN {} )", p.name)); } }
         let mut parts = vec![];
-        for &(l, x0, y0, x1, y1) in &n.segs { parts.push(format!("{} ( {} {} ) ( {} {} )", detail::layer_name(l), ux(x0), uy(y0), ux(x1), uy(y1))); }
+        for &(l, x0, y0, x1, y1) in &n.segs { parts.push(format!("{} ( {} {} ) ( {} {} )", tech.layers[l as usize], ux(x0), uy(y0), ux(x1), uy(y1))); }
         for &(l, x, y) in &n.vias {
-            let (layer, via) = if l == 255 { ("M1", "VIA12".to_string()) } else { (detail::layer_name(l), format!("VIA{}{}", l + 2, l + 3)) };
-            parts.push(format!("{} ( {} {} ) {}", layer, ux(x), uy(y), via));
+            if l == 255 {
+                let off = stub.get(&(x, y)).copied().unwrap_or(0.0);
+                let px = ux(x) + u(off);
+                if px != ux(x) { parts.push(format!("{} ( {} {} ) ( {} {} )", tech.layers[0], ux(x), uy(y), px, uy(y))); }
+                parts.push(format!("{} ( {} {} ) {}", tech.pin_layer, px, uy(y), tech.pin_via));
+            } else {
+                parts.push(format!("{} ( {} {} ) {}", tech.layers[l as usize], ux(x), uy(y), tech.vias[l as usize]));
+            }
         }
         write!(s, "  - {} {}", name, conns.join(" ")).unwrap();
         if !parts.is_empty() { write!(s, "\n    + ROUTED {}", parts.join("\n      NEW ")).unwrap(); }

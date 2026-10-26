@@ -52,12 +52,19 @@ pub fn cell(name: &str) -> &'static StdCell {
 
 pub fn is_ff(name: &str) -> bool { name.starts_with("DFF") }
 
+/// row height and site width (µm) of the current technology
+pub fn row_h() -> f64 { crate::pdk::tech().row_h }
+pub fn site_w() -> f64 { crate::pdk::tech().site_w }
+
+/// width in sites of a logical cell in the current technology
+pub fn width(name: &str) -> u32 { crate::pdk::tech().binding(name).map(|b| b.width).unwrap_or_else(|| cell(name).width) }
+
 /// hold time of the flip-flops and of the SRAM macro inputs (ns)
 pub const HOLD: f64 = 0.03;
 pub const SRAM_HOLD: f64 = 0.05;
 
 /// area in µm²
-pub fn area(name: &str) -> f64 { cell(name).width as f64 * SITE_W * ROW_H }
+pub fn area(name: &str) -> f64 { let t = crate::pdk::tech(); width(name) as f64 * t.site_w * t.row_h }
 
 // ---- SRAM macros (what a memory compiler would deliver) ----
 // one write port, one synchronous read port: pins CK, WE, WA[i], WD[i], RE,
@@ -75,18 +82,19 @@ pub fn param(c: &crate::netlist::Cell, k: &str) -> usize {
 
 /// SRAM macro size in (sites, rows): bit array plus decoder / sense-amp periphery, roughly square
 pub fn sram_dims(depth: usize, width: usize) -> (u32, u32) {
+    let (row, site) = (row_h(), site_w());
     let area = (depth * width) as f64 * SRAM_BIT * 1.3 + 300.0;
-    let rows = ((area.sqrt() / ROW_H).round() as u32).max(2);
-    let sites = (area / (rows as f64 * ROW_H) / SITE_W).ceil() as u32;
+    let rows = ((area.sqrt() / row).round() as u32).max(2);
+    let sites = (area / (rows as f64 * row) / site).ceil() as u32;
     (sites, rows)
 }
 
 /// (width in sites, height in rows) of any cell of a mapped netlist
 pub fn dims(c: &crate::netlist::Cell) -> (u32, u32) {
-    if c.typ == "SRAM" { sram_dims(param(c, "DEPTH"), param(c, "WIDTH")) } else { (cell(&c.typ).width, 1) }
+    if c.typ == "SRAM" { sram_dims(param(c, "DEPTH"), param(c, "WIDTH")) } else { (width(&c.typ), 1) }
 }
 
-pub fn cell_area(c: &crate::netlist::Cell) -> f64 { let (w, h) = dims(c); w as f64 * SITE_W * h as f64 * ROW_H }
+pub fn cell_area(c: &crate::netlist::Cell) -> f64 { let (w, h) = dims(c); w as f64 * site_w() * h as f64 * row_h() }
 
 /// static pin names "BASE[i]"
 pub fn pin(base: &str, i: usize) -> &'static str {
