@@ -95,6 +95,7 @@ export const HANS_PHRASES: Record<string, string> = {
   '攤平': '展平',
   '即時': '实时',
   '展示版': '演示版',
+  '合成': '综合',
   '匯': '汇',
   '品質': '质量',
   '物件': '对象',

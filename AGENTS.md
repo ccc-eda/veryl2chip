@@ -77,4 +77,4 @@ Separate from veryl-sim on purpose (no shared elab). `elab.rs` lowers the syntax
 - Testbench support is via `$tb::clock_gen` (the inst IS the clock), `$tb::reset_gen` (`rst.assert()` with no args uses the clock recorded from `inst rst: $tb::reset_gen(clk)`), `initial` blocks with `clk.next(n)`.
 - The sim settles combinational logic after every `initial` statement (delta cycles), so clock-less comb testbenches work.
 - `examples/` is a separate Veryl project (own Veryl.toml/lock); `_doc/` holds a Veryl grammar reference (`grammar.md`).
-- README in veryl-sim is in Traditional Chinese; docs there are authoritative for supported syntax.
+- Docs come in three languages: `README.md` (English, the crates.io page), `README.tw.md` (Traditional), `README.cn.md` (Simplified) at the root and in veryl-sim / veryl-eda. Edit the Traditional and English texts; regenerate the Simplified one with `tools/tocn.py` (OpenCC + mainland EDA terms). The veryl-sim README is authoritative for supported syntax.

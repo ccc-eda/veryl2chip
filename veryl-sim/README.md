@@ -1,35 +1,42 @@
-# veryl-sim
+# veryl-sim (crate: `veryl2chip-sim`)
+**English** | [繁體中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-sim/README.tw.md) | [简体中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-sim/README.cn.md)
 
-以 [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) 為前端、類似 Icarus Verilog (`iverilog` + `vvp`) 的 Veryl 事件驅動模擬器。
+An event-driven simulator for [Veryl](https://veryl-lang.org/) testbenches, in the spirit of Icarus Verilog
+(`iverilog` + `vvp`), using [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) as its front end.
 
-    cargo run --release -- [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
+Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>).
 
-- 預設執行所有帶 `#[test(...)]` 屬性的 module；沒有的話執行最後宣告的 module。`--top` 可指定。
-- `--vcd` 輸出波形（GTKWave 可開）；有斷言失敗時 exit code 為 1。
+    cargo install veryl2chip-sim        # installs the `veryl-sim` command
+    veryl-sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
 
-## 架構
-| 檔案 | 內容 |
+In the source tree, `cargo run --release -- ...` works too.
+
+- By default every module with a `#[test(...)]` attribute runs; without any, the last declared module. `--top` picks one.
+- `--vcd` writes waveforms (GTKWave); the exit code is 1 when an assertion fails.
+
+## Architecture
+| File | Contents |
 |---|---|
-| `value.rs` | 4 態 (0/1/x) 位元向量，最多 256 bit（`LIMBS` × 64，可調） |
-| `iface.rs` | interface：收集宣告、展開內容、解析 modport（與 veryl-eda 共用） |
-| `gates.rs` | 閘級模型：模擬時把某個 module 換成合成後的網表（通用閘、iCE40、vlib 標準元件、RAM），testbench 不用改 |
-| `gen.rs`   | generate-for 的索引序列（`rev`、`step +=` 等；與 veryl-eda 共用） |
-| `expr.rs`  | 運算式 IR + 優先權解析器（吃 veryl-parser 的 token 串） |
-| `elab.rs`  | 走訪 veryl-parser 語法樹、展開階層、轉成模擬 IR |
-| `sim.rs`   | 求值、delta-cycle 排程、非阻塞賦值 (NBA)、clock 產生器、VCD |
+| `value.rs` | 4-state (0/1/x) bit vectors, up to 256 bits (`LIMBS` × 64, adjustable) |
+| `iface.rs` | interfaces: collecting declarations, expanding their contents, resolving modports (shared with veryl-eda) |
+| `gates.rs` | gate-level models: a module is simulated from its synthesized netlist (generic gates, iCE40, vlib standard cells, RAMs) under an unchanged testbench |
+| `gen.rs`   | index sequences of generate-for (`rev`, `step +=`, ...; shared with veryl-eda) |
+| `expr.rs`  | expression IR + precedence parser (over veryl-parser's tokens) |
+| `elab.rs`  | walks the veryl-parser syntax tree, expands the hierarchy, builds the simulation IR |
+| `sim.rs`   | evaluation, delta-cycle scheduling, non-blocking assignments (NBA), clock generator, VCD |
 
-## 支援
-module / 參數 (`#(param ..)`, `const`) / port / `var` / `let` / `assign` / `always_comb` / `always_ff`
-(含 `if_reset`、同步/非同步 reset、posedge/negedge) / `if` / `case` / `switch` / `for` / `inst`（含參數覆寫、階層）/
-`initial`（`clk.next(n)`、`rst.assert(clk)`）/ `$tb::clock_gen`、`$tb::reset_gen` /
-package / enum（`Pkg::Enum::Member`）/ package const / struct（欄位存取、整體賦值；第一個欄位在最高位，與 SystemVerilog 相同）/ 一維陣列 /
-使用者 function（不可遞迴）/ generate for（含 `rev`、`step += k` 等）、generate if / `import Pkg::*` /
-interface（`inst b: Bus;`、`port: modport Bus::master`、modport 的 `..input` / `..output` / `..same(m)` / `..converse(m)`；成員以 `b.valid` 存取）/
-最多 256 bit 的寬度 / 時脈域註記（`'a clock`）/
-`$display $write $info $warning $error $fatal $assert $finish $time $clog2 $signed $unsigned $bits $random`。
+## Supported
+module / parameters (`#(param ..)`, `const`) / ports / `var` / `let` / `assign` / `always_comb` / `always_ff`
+(with `if_reset`, synchronous / asynchronous reset, posedge / negedge) / `if` / `case` / `switch` / `for` / `inst` (with parameter overrides, hierarchy) /
+`initial` (`clk.next(n)`, `rst.assert(clk)`) / `$tb::clock_gen`, `$tb::reset_gen` /
+packages / enums (`Pkg::Enum::Member`) / package constants / structs (field access and whole-value assignment; the first field is the MSB, as in SystemVerilog) / 1-D arrays /
+user functions (not recursive) / generate for (with `rev`, `step += k`, ...), generate if / `import Pkg::*` /
+interfaces (`inst b: Bus;`, `port: modport Bus::master`, modport defaults `..input` / `..output` / `..same(m)` / `..converse(m)`; members accessed as `b.valid`) /
+widths up to 256 bits / clock domain annotations (`'a clock`) /
+`$display $write $info $warning $error $fatal $assert $finish $time $clog2 $signed $unsigned $bits $random`.
 
-## 尚未支援
-泛型 interface 埠（`port: interface`，需指名 modport）、遞迴、`inout`（三態需要 z 平面與多驅動者決議）、寬度 > 256 bit。
+## Not supported yet
+generic interface ports (`port: interface`; name the modport), recursion, `inout` (tri-state needs a z plane and multi-driver resolution), widths > 256 bits.
 
-注意：Veryl 0.22 內建模擬器（`veryl test`）在 interface 設計上會算錯（例如 `veryl-eda/examples/lang.veryl` 的 TestHs 它得 0），
-iverilog 與 veryl-sim 都是 145。
+Note: Veryl 0.22's own simulator (`veryl test`) gets interface designs wrong (e.g. it gives 0 for TestHs in `veryl-eda/examples/lang.veryl`);
+iverilog and veryl-sim both give 145.

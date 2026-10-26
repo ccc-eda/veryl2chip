@@ -68,4 +68,4 @@ npm test
 
 `npm run build` rebuilds `web/dist`. `npm test` runs every example through the built `dist/`: simulation, synthesis, FPGA P&R (`.asc` equals the CLI's, `.bin` equals icepack's) and the ASIC flow (results equal the CLI's), gate-level simulation of every example, and a project `.zip` unpacked and checked with `veryl test`, and the interface translations.
 
-See [AGENTS.md](AGENTS.md) for commands and architecture, and the READMEs in each crate (Traditional Chinese) for details.
+See [AGENTS.md](AGENTS.md) for commands and architecture, and the READMEs in each crate ([veryl-sim](veryl-sim/README.md), [veryl-eda](veryl-eda/README.md); English, 繁體中文, 简体中文) for details.

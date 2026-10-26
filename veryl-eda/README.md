@@ -1,184 +1,197 @@
-# veryl-eda
+# veryl-eda (crate: `veryl2chip-eda`)
+**English** | [繁體中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-eda/README.tw.md) | [简体中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-eda/README.cn.md)
 
-Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice40` 加上 nextpnr，以及 OpenROAD 式的標準元件後端）：以
-[`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) 為前端，把 Veryl 設計展開成**扁平的閘級 netlist**，
-可再映射成 iCE40 的 `SB_LUT4` / `SB_CARRY` / `SB_DFF*`，再用**自己的佈局繞線**（`--pnr veryl`）或 nextpnr-ice40 產生 `.asc`，icepack 產生位元流；
-或用 `--asic` 映射到自製的 **vlib 標準元件庫**，做列式佈局、全域繞線與靜態時序分析。
+Logic synthesis, an FPGA flow and an ASIC flow for [Veryl](https://veryl-lang.org/) (think yosys `synth` / `synth_ice40` plus nextpnr,
+and an OpenROAD-style standard-cell back end). With [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) as the front end it
+elaborates a Veryl design into a **flat gate-level netlist**, which can be mapped to iCE40 `SB_LUT4` / `SB_CARRY` / `SB_DFF*` cells and placed and
+routed into an `.asc` by **its own place & route** (`--pnr veryl`) or nextpnr-ice40, then packed into a bitstream; or, with `--asic`, mapped to the
+home-made **vlib standard-cell library**, placed in rows, routed and timed.
 
-    cargo run --release -- [--top MODULE] [-o out.json] [--verilog out.v] [--list]
-                           [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
-                                    [--pnr nextpnr|veryl] [--seed N] [-v]]
-                           [--asic [--seed N] [-v]]
-                           a.veryl b.veryl ...
+Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/ide.html>).
 
-- 預設合成最後一個**非** `#[test]` 的 module；`--top` 可指定。會印出 port 與 cell 統計（類似 yosys `stat`）。
-- `-o` 輸出 yosys JSON（`read_json` 可讀）；`--verilog` 輸出閘級 Verilog（iverilog 可模擬）。
-- `--ice40` 做 iCE40 技術映射；加 `--asc` / `--bin` 會再做佈局繞線（預設 `nextpnr-ice40`，時序不過會失敗；`--pnr veryl` 用自己的）與 `icepack`。
-- `--gatesim opt|ice40|asic`：**合成後模擬**，把 `--top` 的 module 換成它的通用閘 / iCE40 / 標準元件網表（`src/gatesim.rs` → veryl-sim 的閘級模型），
-  直接跑原本的 `#[test]` testbench（`test.sh` 對 12 個設計 × 3 種網表都跑，結果必須和 RTL 一樣）。
-- `--asic` 做 ASIC 後端（見下）；`--verilog` 此時輸出標準元件 netlist（附 vlib 元件的 Verilog 模型），`-v` 印出關鍵路徑。
-- `./test.sh`：單元測試 + 合成全部範例 + yosys `read_json; check -assert` + FPGA 流程 +
-  對 `veryl build` 產生的 SystemVerilog 做**形式等價驗證**（需要有 slang 前端的 yosys，例如 oss-cad-suite，路徑用 `YOSYS_SLANG` 指定）。
+    cargo install veryl2chip-eda        # installs the `veryl-eda` command
+    veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
+              [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
+                       [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
+              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic]
+              a.veryl b.veryl ...
+
+In the source tree, `cargo run --release -- ...` works too. The own place & route needs IceStorm's `chipdb-5k.txt` (included in OSS CAD Suite, or point to it with `VERYL_EDA_CHIPDB`).
+
+- By default the last **non**-`#[test]` module is synthesized; `--top` picks one. Ports and cell statistics are printed (like yosys `stat`).
+- `-o` writes yosys JSON (readable by `read_json`); `--verilog` writes gate-level Verilog (simulates in iverilog).
+- `--ice40` maps to iCE40 cells; with `--asc` / `--bin` it also places, routes (`nextpnr-ice40` by default, failing if timing does not close; `--pnr veryl` for the own one) and packs (`icepack`).
+- `--gatesim opt|ice40|asic`: **post-synthesis simulation**. The `--top` module is replaced by its generic-gate / iCE40 / standard-cell netlist (`src/gatesim.rs` → veryl-sim's gate models)
+  and the original `#[test]` testbenches run on it (`test.sh` runs 15 designs × 3 netlists; the results must equal the RTL's).
+- `--asic` runs the ASIC back end (below); `--verilog` then writes the standard-cell netlist (with the vlib cells' Verilog models), `-v` prints the critical path.
+- `./test.sh`: unit tests + synthesis of every example + yosys `read_json; check -assert` + the FPGA flow +
+  **formal equivalence checking** against the SystemVerilog from `veryl build` (needs a yosys with the slang front end, e.g. oss-cad-suite, given by `YOSYS_SLANG`).
 
 ## RV32I CPU
-`examples/src/rv32i.veryl` 的 `RiscvCore` 是單週期 RV32I（不含 fence/ecall/ebreak/CSR）：
-`lui auipc jal jalr`、六種分支、`lb lh lw lbu lhu sb sh sw`、全部 R/I 型運算（含移位、`xor`、`sltu`）。
-資料記憶體介面以 `o_dmem_wstrb` 表示要寫的位元組，讀取由 CPU 從整個字取出 byte/halfword 並做符號擴展。
+`RiscvCore` in `examples/src/rv32i.veryl` is a single-cycle RV32I (without fence/ecall/ebreak/CSR):
+`lui auipc jal jalr`, the six branches, `lb lh lw lbu lhu sb sh sw`, and every R/I-type operation (shifts, `xor`, `sltu`, ...).
+The data memory interface marks the bytes to write with `o_dmem_wstrb`; on reads the CPU extracts the byte / halfword from the whole word and sign-extends it.
 
-測試程式 `examples/sw/rv32i_test.S` 用真正的組譯器產生 ROM（`examples/sw/build.sh` → `examples/src/rv32i_rom.veryl`），
-把 41 個結果寫進記憶體，`TestRiscvCore` 逐字 `$assert`。期望值同時以 RISC-V 官方參考模擬器 **spike** 交叉比對（`build.sh` 自動做）。
-通過的地方：spike、官方 `veryl test`、veryl-sim、veryl-eda 合成後的閘級 netlist、以及 iCE40 映射後的 netlist（`cargo test`）。
+The test program `examples/sw/rv32i_test.S` is assembled into a ROM by a real assembler (`examples/sw/build.sh` → `examples/src/rv32i_rom.veryl`)
+and writes 41 results to memory, which `TestRiscvCore` checks word by word with `$assert`. The expected values are cross-checked with the official
+RISC-V reference simulator **spike** (done by `build.sh`). It passes on spike, the official `veryl test`, veryl-sim, veryl-eda's synthesized
+gate-level netlist, and the iCE40-mapped netlist (`cargo test`).
 
-完整（未被常數 ROM 修剪）的 RiscvCore 映射後需要 5401 個 LUT，超過 UP5K 的 5280 LC——主因是用正反器做的 32×32 暫存器檔；
-要把整套 ISA 測試搬上 FPGA，需要先做 Block RAM（`SB_RAM40_4K`）推論。
+The complete RiscvCore (not trimmed by a constant ROM) needs 5401 LUTs after mapping, more than the UP5K's 5280 LCs, mostly because of the
+32×32 register file in flip-flops; running the whole ISA test on the FPGA would first need block RAM (`SB_RAM40_4K`) inference.
 
-## RISC-V CPU 上 FPGA
-`examples/soc.veryl` 的 `RiscvSoc` = `examples/src/rv32i.veryl` 的 `RiscvCore` + 程式 ROM + 16 字資料 RAM + LED 暫存器（位址 0x100）。
-程式以 `beq`/`jal` 迴圈算 Fibonacci(10)，把 55 寫到 RAM[0] 與 LED。頂層只有 clock、reset、8 顆 LED。
-程式 ROM 是常數，合成時會把這個程式用不到的硬體（未用的暫存器、移位器、byte 載入等）整個消掉，所以位元流只驗證了這個程式用到的指令。
+## A RISC-V CPU on the FPGA
+`RiscvSoc` in `examples/soc.veryl` = `RiscvCore` from `examples/src/rv32i.veryl` + a program ROM + a 16-word data RAM + an LED register (address 0x100).
+The program computes Fibonacci(10) with a `beq`/`jal` loop and writes 55 to RAM[0] and the LEDs. The top only has a clock, a reset and 8 LEDs.
+The program ROM is constant, so synthesis removes all hardware this program does not use (unused registers, the shifter, byte loads, ...);
+the bitstream therefore only proves the instructions this program uses.
 
-    ./fpga/flow.sh          # 合成 → 映射 → nextpnr → icepack → 兩種閘級模擬
+    ./fpga/flow.sh          # synthesis → mapping → nextpnr → icepack → two gate-level simulations
     iceprog fpga/build/soc.bin
 
-| 項目 | 結果（iCE40UP5K-SG48，iCEBreaker 腳位 `examples/icebreaker.pcf`） |
+| Item | Result (iCE40UP5K-SG48, iCEBreaker pins `examples/icebreaker.pcf`) |
 |---|---|
-| cells | 1168 SB_LUT4、85 SB_CARRY、232 DFF |
-| 佈局 | 1279 / 5280 LC（24%） |
-| 時序 | 約 17 MHz（板上時脈 12 MHz，通過） |
-| 映射後 netlist 模擬（yosys iCE40 cell 模型） | 第 70 個 cycle LED = 55 |
-| **繞線後位元流**模擬（`icebox_vlog` 轉回 Verilog） | 第 70 個 cycle LED = 55 |
+| cells | 1168 SB_LUT4, 85 SB_CARRY, 232 DFF |
+| placement | 1279 / 5280 LCs (24%) |
+| timing | about 17 MHz (the board clock is 12 MHz: passes) |
+| simulation of the mapped netlist (yosys iCE40 cell models) | LED = 55 at cycle 70 |
+| simulation of the **routed bitstream** (converted back to Verilog by `icebox_vlog`) | LED = 55 at cycle 70 |
 
-## 自己的佈局繞線（`--pnr veryl`，`src/pnr/`）
-只針對 iCE40UP5K，架構資料來自 IceStorm 的 `chipdb-5k.txt`（找不到時用 `VERYL_EDA_CHIPDB` 指定）。
-| 檔案 | 內容 |
+## Own place & route (`--pnr veryl`, `src/pnr/`)
+iCE40UP5K only; the architecture comes from IceStorm's `chipdb-5k.txt` (set `VERYL_EDA_CHIPDB` if it is not found).
+| File | Contents |
 |---|---|
-| `chipdb.rs` | 讀晶片資料庫：tile 與設定位元表、繞線圖（10 萬條線、120 萬個 pip，每個 pip = 目的線輸入 mux 的位元樣式）、腳位、全域緩衝、IE/REN、column buffer |
-| `pack.rs` | LUT/進位/正反器 → 邏輯單元（LC）；進位鏈完整保留：訊號當 carry-in 時加 feed-in LC，carry-out 被一般邏輯使用時由下一個 LC 的 LUT 讀出 |
-| `place.rs` | 模擬退火（線長 HPWL，可依 net 加權）；同一 tile 的正反器必須同 clock / reset / 邊緣；進位鏈放在整欄邏輯 tile、從 LC 0 開始 |
-| `route.rs` | PathFinder 協商擁塞 + A*；clock 與 reset 走全域網路（來源 → `fabout` → `glb_netwk_N` → 各 tile 的 clk / s_r mux）；時序導向時關鍵度 c 的 net 每條線的成本 = c × 線延遲 + (1 − c) × 擁塞 |
-| `mod.rs` | 產生 `.asc`：LC 位元（LUT 位元排列、carry、DFF、set/reset）、進位鏈連接、IO、column buffer、DSP 預設值 |
+| `chipdb.rs` | reads the chip database: tiles and configuration bit tables, the routing graph (100k wires, 1.2M pips; each pip is a bit pattern of the destination wire's input mux), pins, global buffers, IE/REN, column buffers |
+| `pack.rs` | LUT / carry / flip-flop → logic cells (LCs); carry chains are kept whole: a feed-in LC when a signal is a carry-in, and the next LC's LUT reads a carry-out that ordinary logic uses |
+| `place.rs` | simulated annealing (HPWL wirelength, nets can be weighted); flip-flops in one tile must share clock / reset / edge; carry chains take a column of logic tiles starting at LC 0 |
+| `route.rs` | PathFinder congestion negotiation + A*; clock and reset use the global networks (source → `fabout` → `glb_netwk_N` → each tile's clk / s_r mux); timing driven, a net of criticality c pays c × wire delay + (1 − c) × congestion per wire |
+| `mod.rs` | writes the `.asc`: LC bits (LUT bit order, carry, DFF, set/reset), carry chain links, IO, column buffers, DSP defaults |
 
-驗證：
-- `fpga/cosim.py`：把**我們繞好的位元流**用 `icebox_vlog` 轉回 Verilog，和映射後的 netlist 用相同隨機輸入逐 cycle 比對輸出；改壞一個 LUT 位元會被抓到。
-- `fpga/pnr_test.sh`：14 個設計全部 1000 cycle 輸出相同，並用 `icetime`（IceStorm 時序分析）量 Fmax。
-- 非邏輯 tile（IO 設定、column buffer、DSP/IPCON 預設）與 nextpnr 對同一 pcf 的輸出逐位元相同。
-- `PNR=veryl fpga/flow.sh`：RISC-V SoC 用自己的佈局繞線，繞線後位元流模擬 LED = 55。
+Verification:
+- `fpga/cosim.py`: **our routed bitstream** is converted back to Verilog with `icebox_vlog` and compared cycle by cycle with the mapped netlist under the same random inputs; flipping one LUT bit is caught.
+- `fpga/pnr_test.sh`: all 20 designs give identical outputs for 1000 cycles; Fmax measured with `icetime` (IceStorm's timing analyzer).
+- Non-logic tiles (IO settings, column buffers, DSP/IPCON defaults) are bit-identical to nextpnr's output for the same pcf.
+- `PNR=veryl fpga/flow.sh`: the RISC-V SoC with the own place & route; the routed bitstream simulates to LED = 55.
 
-| 設計 | LC | Fmax（icetime） |
+| Design | LCs | Fmax (icetime) |
 |---|---|---|
-| RiscvSoc（自己的 P&R） | 1252 / 5280 | 17.0 MHz（只看線長 15.6 MHz；板上 12 MHz，通過） |
-| RiscvSoc（nextpnr） | 1279 / 5280 | 17.3 MHz |
+| RiscvSoc (own P&R) | 1252 / 5280 | 17.0 MHz (wirelength-only 15.6 MHz; the board runs at 12 MHz: passes) |
+| RiscvSoc (nextpnr) | 1279 / 5280 | 17.3 MHz |
 
-自己的佈局繞線也印出粗估的功耗（`src/pnr/power.rs`：net 電容 ≈ 5 fF × 負載 + 8 fF × 繞線段，全域時脈網路每拍，block RAM 每次存取 ≈ 24 pJ，靜態 ≈ 75 µA）。
+The own place & route also prints a rough power estimate (`src/pnr/power.rs`: net capacitance ≈ 5 fF × loads + 8 fF × routing segments, the global clock network every cycle, ≈ 24 pJ per block RAM access, static ≈ 75 µA).
 
-### 時序導向（預設開，`--no-timing-driven` 關閉）
-第一輪只看線長；STA 除了前向的到達時間，再做一次反向傳遞求「每個點之後最長還要多久」，
-得到每條 net 的**關鍵度** = 經過它的最長路徑 / 關鍵路徑（0..1）。第二輪：
-- 佈局成本裡 net 的權重 = 1 + 6 × 關鍵度⁸ / √負載數（只有接近關鍵的 net 變重；高扇出的 net 不能把整片拉在一起）；
-- 繞線時關鍵 net 優先走快的線（見 `route.rs`）。
-繞不通或沒有快 3% 以上（STA 的誤差範圍）就保留第一輪。ASIC 流程同樣做：以第一輪佈局為起點低溫微調，
-小設計（< 4000 元件）另外重新退火一次，只取繞得通的最快結果。
+### Timing driven (on by default, `--no-timing-driven` turns it off)
+The first pass only looks at wirelength. Besides the forward arrival times, STA makes a backward pass for "the longest time still to go after each point",
+giving each net a **criticality** = the longest path through it / the critical path (0..1). The second pass:
+- weights a net in the placement cost by 1 + 6 × criticality⁸ / √loads (only nets close to critical get heavy; high-fanout nets cannot pull everything together);
+- routes critical nets on fast wires first (see `route.rs`).
+If it does not route, or is not at least 3% faster (the STA's margin of error), the first pass is kept. The ASIC flow does the same: a low-temperature
+refinement from the first placement, plus, for small designs (< 4000 cells), a fresh anneal; the fastest routable result wins.
 
-| 設計 | FPGA，icetime（只看線長 → 時序導向） | ASIC，自己的 STA |
+| Design | FPGA, icetime (wirelength only → timing driven) | ASIC, own STA |
 |---|---|---|
 | Ram | 39.0 → 45.0 MHz | 974 → 1006 MHz |
 | BramMix | 42.5 → 48.0 MHz | 394 → 410 MHz |
 | RiscvSoc | 15.6 → 17.0 MHz | 107 → 115 MHz |
-| RiscvCore | （放不下 UP5K） | 71.1 → 75.6 MHz |
+| RiscvCore | (does not fit the UP5K) | 71.1 → 75.6 MHz |
 
-## ASIC 後端（`--asic`，`src/asic/`）
-教學用的標準元件庫 **vlib**（列高 4.0 µm、site 0.5 µm，延遲約 130 nm 慢速角）：
-`INV BUF NAND2 NOR2 AND2 OR2 XOR2 XNOR2 AOI21 OAI21 MUX2 TIEL TIEH DFF DFFN DFFR DFFS DFFNR DFFNS`（R/S 腳低態有效）。
-| 檔案 | 內容 |
+## ASIC back end (`--asic`, `src/asic/`)
+**vlib** is a standard-cell library for teaching (row height 4.0 µm, site 0.5 µm, delays like a ~130 nm slow corner):
+`INV BUF NAND2 NOR2 AND2 OR2 XOR2 XNOR2 AOI21 OAI21 MUX2 TIEL TIEH DFF DFFN DFFR DFFS DFFNR DFFNS` (R/S pins active low).
+| File | Contents |
 |---|---|
-| `lib.rs` | 元件庫：寬度、面積、本徵延遲 + 每扇出負載、setup、Verilog 行為模型；**SRAM 巨集**（記憶體編譯器的角色：依字數×字寬算出面積與形狀） |
-| `map.rs` | 技術映射：在多扇出點把網表切成樹，以動態規劃做最小面積 **tree covering**（反相器併入 NAND/NOR/XNOR/AOI/OAI）；同步 set/reset 變成 D 前邏輯，非同步用 DFFR/DFFS（高態有效加 INV）；扇出 > 12 的資料線插入 **BUF 樹**（clock / 非同步 reset 留給時脈樹）；同步讀取的記憶體（與 FPGA 的 block RAM 推論相同條件）變成 **SRAM 巨集**，每個讀取埠一個 |
-| `place.rs` | 依利用率 65% 決定晶粒（加上巨集面積），SRAM 巨集先由左下角起成排固定擺放，IO 腳放在四周；標準元件依各列空位比例蛇形初始擺放，再以**合法的模擬退火**（移到空位或兩元件交換）最小化 HPWL + **密度懲罰**（16 × 16 µm 的格子超過目標密度 = 利用率 + 15% 的部分，每個 site 算 1 µm 線長）。沒有密度項時 RiscvSoc 會在腳位旁留下 M2/M3 全滿的熱點，細部繞線剩 1 個衝突；加了之後線長 −5%（160 → 152 mm）、全部設計 0 衝突 |
-| `route.rs` | gcell（4 µm）**全域繞線**：水平 M2/M4、垂直 M3/M5，每邊規劃 12 軌（16 軌留 4 軌給腳位與 via）；端點依 Prim 順序以 A* 連到已建好的樹（巨集以其邊上的腳位為端點），PathFinder（現況 + 歷史成本）消除溢出 |
-| `pdn.rs` | **電源網路與填充元件**：每條列邊界一條 M1 電源軌（VSS / VDD 交替，配合列的翻轉），M5 垂直電源帶每 40 µm 一對（VDD、VSS 各 2 軌寬，避開 IO 腳），via 疊（M1→M5）接到同名的軌；細部繞線把帶子與 via 疊當障礙物；空位填滿 FILL8/4/2/1；DEF 輸出 `SPECIALNETS` 與填充元件 |
-| `power.rs` | **功耗與 IR drop**：用隨機輸入模擬最後的網表（`src/power.rs`，reset 極性由試跑決定）得到每條 net 的翻轉率；切換能量 ½·C·V²（C = 負載腳位 + 0.2 fF/µm 實際線長），時脈樹每拍充放電，元件內部能量與漏電依大小，SRAM 每次存取；在 Fmax 下換算 mW。IR drop：每個元件的平均電流經所在列的 VDD / VSS 軌，兩條電源帶之間的軌當成兩端供電的電阻線 |
-| `detail.rs` | **細部繞線**：0.5 µm 軌道格點 × 4 層（M2/M4 水平、M3/M5 垂直），每個格點只屬於一條 net（不會短路）；每條 net 只在全域繞線的 gcell 走廊（外加一圈）裡以 A* 找路，換層算 via 成本，重疊以 PathFinder 協商、卡住的 net 走廊加寬；元件腳位從 M1 經 via 上來，SRAM 巨集上方擋 M2/M3，IO 腳在 M5；輸出每層線段與 via（DEF `NETS`），細部線長回饋給 STA |
-| `cts.rs` | **時脈樹合成**（佈局之後）：clock 與非同步 reset 的負載依位置遞迴對半切（沿較長方向取中位數，H-tree 式平衡二元樹），每群 ≤ 16 個負載一個 CLKBUF，緩衝器放在所驅動者重心的最近空位；另有 hold 修正（在違規的 D 前插延遲 BUF） |
-| `sta.rs` | 靜態時序：元件延遲 = 本徵 + 負載 × 扇出；線延遲 = 驅動整條繞線 + 到該負載的分佈 RC；CTS 之後時脈是 propagated：每個正反器有自己的時脈到達時間，setup 以發送端 / 接收端時脈計算，再用最短路徑做 **hold 檢查**（IO 視為同步於平均延遲的虛擬時脈）；另算每條 net 的關鍵度（給時序導向佈局） |
-| `mod.rs` | `flow()` 串起來；`def()` 輸出 DEF 佈局 |
+| `lib.rs` | the library: width, area, intrinsic delay + load per fanout, setup, Verilog behavioral models; **SRAM macros** (in the role of a memory compiler: area and shape from words × width) |
+| `map.rs` | technology mapping: the netlist is cut into trees at multi-fanout points and each tree is covered by dynamic programming for minimum area (**tree covering**; inverters merge into NAND/NOR/XNOR/AOI/OAI); synchronous set/reset becomes logic before D, asynchronous ones use DFFR/DFFS (INV added for active high); data nets with fanout > 12 get **BUF trees** (clock / asynchronous reset are left to the clock tree); memories with synchronous reads (the same condition as FPGA block RAM inference) become **SRAM macros**, one per read port |
+| `place.rs` | the die follows a 65% utilization (plus macro area); SRAM macros are placed first in rows from the lower left, IO pins around the edge; standard cells start in a snake order filling each row by its free space, then **legal simulated annealing** (move to a free spot or swap two cells) minimizes HPWL + a **density penalty** (in 16 × 16 µm bins, what exceeds the target density = utilization + 15%, each site counted as 1 µm of wire). Without the density term RiscvSoc left a hot spot of full M2/M3 next to the pins and detail routing ended with 1 conflict; with it, wirelength −5% (160 → 152 mm) and 0 conflicts in every design |
+| `route.rs` | **global routing** on 4 µm gcells: horizontal M2/M4, vertical M3/M5, 12 tracks per edge (of 16; 4 left for pins and vias); pins join the tree in Prim order with A* (macros by the pins on their edge), PathFinder (present + history cost) removes overflow |
+| `pdn.rs` | **power grid and filler cells**: an M1 rail on every row boundary (VSS / VDD alternating, matching the flipped rows), M5 vertical strap pairs every 40 µm (VDD and VSS 2 tracks wide each, avoiding IO pins), via stacks (M1→M5) to the rails of the same net; detail routing treats straps and via stacks as obstacles; free sites are filled with FILL8/4/2/1; the DEF has `SPECIALNETS` and the fillers |
+| `power.rs` | **power and IR drop**: random-input simulation of the final netlist (`src/power.rs`, the reset polarity found by a trial run) gives each net's toggle rate; switching energy ½·C·V² (C = load pins + 0.2 fF/µm of actual wire), the clock tree charges every cycle, cell internal energy and leakage by size, SRAM per access; converted to mW at Fmax. IR drop: each cell's average current goes through its row's VDD / VSS rails; a rail between two straps is a resistive line fed from both ends |
+| `detail.rs` | **detail routing**: a 0.5 µm track grid × 4 layers (M2/M4 horizontal, M3/M5 vertical); every grid point belongs to one net at most (no shorts); each net is routed with A* only inside its global-routing gcell corridor (plus one ring), vias cost extra, overlaps are renegotiated with PathFinder and a stuck net's corridor widens; cell pins come up from M1 through vias, SRAM macros block M2/M3 above them, IO pins are on M5; writes each layer's segments and vias (DEF `NETS`); the detailed wire lengths feed the STA |
+| `cts.rs` | **clock tree synthesis** (after placement): the loads of the clock and asynchronous resets are split in halves by position recursively (median along the longer side, an H-tree-like balanced binary tree), one CLKBUF per group of ≤ 16 loads, placed at the free spot nearest the centroid of what it drives; plus hold fixing (delay BUFs inserted before violating D pins) |
+| `sta.rs` | static timing: cell delay = intrinsic + load × fanout; wire delay = driving the whole routed net + the distributed RC to that load; after CTS the clock is propagated: every flip-flop has its own clock arrival, setup is checked between launching and capturing clocks, then a shortest-path **hold check** (IO is treated as a virtual clock at the average insertion delay); also each net's criticality (for timing-driven placement) |
+| `mod.rs` | `flow()` puts it together; `def()` writes the DEF layout |
 
-流程：映射 → 佈局（線長；全域繞線的試繞若溢出或平均需求 > 50% 就放大晶粒、利用率 ×0.8 重來）→ 時序導向佈局 → CTS → 全域繞線 → STA（propagated clock、hold）→ 有 hold 違規就插延遲 BUF、重繞、重算 → 電源網路與填充元件 → 細部繞線 → 以細部線長做最後的 STA。
-RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關）在 65% 時繞不通，自動降到 42%：細部繞線 0 衝突、0 未接通，80 MHz。
-例：RiscvSoc 的 i_clk 有 232 個負載 → 31 個 CLKBUF、5 級，插入延遲 0.74 ns、skew 104 ps；RiscvCore 1056 個負載 → 194 個 CLKBUF、8 級、skew 170 ps。
+Flow: mapping → placement (wirelength; if a trial global routing overflows or the average demand is > 50%, the die grows: utilization × 0.8, again) → timing-driven placement → CTS → global routing → STA (propagated clock, hold) → on hold violations, delay BUFs, rerouting, STA again → power grid and fillers → detail routing → a final STA with the detailed wire lengths.
+RiscvCore (the register file is 1056 DFFs plus a read crossbar of 5000 MUX2) does not route at 65% and drops to 42% automatically: detail routing with 0 conflicts and 0 opens, 80 MHz.
+Example: RiscvSoc's i_clk has 232 loads → 31 CLKBUFs, 5 levels, insertion delay 0.74 ns, skew 104 ps; RiscvCore 1056 loads → 194 CLKBUFs, 8 levels, skew 170 ps.
 
-| 設計 | 標準元件 | 面積 | 晶粒 | 線長 | Fmax |
+| Design | Standard cells | Area | Die | Wirelength | Fmax |
 |---|---|---|---|---|---|
 | RiscvSoc | 2553 | 31360 µm² | 220 × 220 µm | 117 mm | 109 MHz |
-| RiscvCore（整顆 RV32I，暫存器檔 1024 個 DFF） | 9795 | 0.132 mm² | 449 × 452 µm | 1088 mm | 67.5 MHz |
+| RiscvCore (the whole RV32I, a register file of 1024 DFFs) | 9795 | 0.132 mm² | 449 × 452 µm | 1088 mm | 67.5 MHz |
 
-驗證：`cargo test` 在標準元件 netlist 上也跑每個範例的 testbench（含 RV32I 測試程式），並檢查佈局合法、每條 net 繞成連通的樹、沒有溢出，
-細部繞線只看線段與 via 重新檢查：沒有格點同屬兩條 net、每條 net 連通且接到所有腳位、訊號線不碰電源帶與 via 疊，
-元件加填充元件恰好鋪滿每個 site；
-`./test.sh` 用 yosys 對 `veryl build` 的輸出做標準元件 netlist 的形式等價驗證。
+Verification: `cargo test` also runs every example's testbench on the standard-cell netlist (including the RV32I test program) and checks that the placement is legal, every net routes into a connected tree and nothing overflows;
+detail routing is rechecked from its segments and vias alone: no grid point shared by two nets, every net connected and reaching all its pins, signal wires clear of straps and via stacks,
+and cells plus fillers covering every site exactly once;
+`./test.sh` proves the standard-cell netlist equivalent to the output of `veryl build` with yosys.
 
-## 流程
-| 檔案 | 內容 |
+## The flow
+| File | Contents |
 |---|---|
-| `value.rs`   | 常數值 |
-| `expr.rs`    | 運算式 IR（以名稱表示訊號）+ 優先權解析器，struct 欄位直接轉成常數 slice |
-| `elab.rs`    | 走訪語法樹 → 名稱式敘述 IR → **符號執行**成閘：if 變 mux 鏈、常數標籤的 case 變平行 one-hot、for 展開、function inline、always_ff 對應 DFF/reset、階層攤平 |
-| `netlist.rs` | 位元級 Builder（常數摺疊、structural hashing、`x & !x` 等化簡、平衡的化簡樹）、加減乘/比較/桶形移位/動態索引；`optimize` 解析別名、偵測組合迴路、重建、清除無用邏輯，並反覆做：**證明常數節點**（隨機模擬找候選、對 ≤16 個輸入的支撐集窮舉證明）與**移除卡在 0 的暫存器** |
-| `ice40.rs`   | iCE40 映射：全加器進位 → `SB_CARRY` 鏈；其餘以 cut-based 4-LUT 覆蓋（深度優先、再看 area flow）；DFF → `SB_DFF[N][S]{R,S}`，低有效 reset 加反相 LUT |
-| `output.rs`  | yosys JSON、結構化 Verilog（含 iCE40 primitive 實例） |
-| `netsim.rs`  | 2 態閘級模擬器（給測試用，支援通用閘與 iCE40 cell） |
+| `value.rs`   | constant values |
+| `expr.rs`    | expression IR (signals by name) + precedence parser; struct fields become constant slices |
+| `elab.rs`    | syntax tree → name-based statement IR → **symbolic execution** into gates: if becomes a mux chain, case with constant labels a parallel one-hot, for loops unrolled, functions inlined, always_ff to DFF/reset, hierarchy flattened |
+| `netlist.rs` | bit-level builder (constant folding, structural hashing, simplifications like `x & !x`, balanced reduction trees), add/sub/mul, compare, barrel shifts, dynamic indexing; `optimize` resolves aliases, detects combinational loops, rebuilds, sweeps dead logic, and repeats: **proving constant nodes** (candidates from random simulation, exhaustive proof over supports of ≤ 16 inputs) and **removing registers stuck at 0** |
+| `ice40.rs`   | iCE40 mapping: full-adder carries → `SB_CARRY` chains; the rest covered by cut-based 4-LUTs (depth first, then area flow); DFF → `SB_DFF[N][S]{R,S}`, active-low resets get an inverting LUT |
+| `output.rs`  | yosys JSON, structural Verilog (with iCE40 primitive instances) |
+| `netsim.rs`  | a 2-state gate-level simulator (for the tests; generic gates and iCE40 cells) |
 
-每個宣告的訊號一開始就配置「佔位」wire，驅動者以別名 (佔位 bit → 驅動 bit) 記錄，最後在 `optimize` 統一解析；
-因此 module 內各項目的順序不影響結果，子模組的 port 連接也只是別名。
-與 veryl-sim 的 elab 需求根本不同（符號執行 vs. 模擬 IR），所以兩者不共用 elab 程式碼。
+Every declared signal gets placeholder wires up front, and drivers are recorded as aliases (placeholder bit → driving bit) resolved at the end in `optimize`;
+so the order of items in a module does not matter, and connecting a submodule's ports is just aliasing.
+Its needs are fundamentally different from veryl-sim's elaboration (symbolic execution vs. a simulation IR), so the two share no elaboration code.
 
-暫存器初值視為 0（iCE40 上電即為 0）：例如程式 ROM 為常數時，CPU 從未寫入的暫存器（x6..x31）與其讀取多工器會被整個消掉。
+Registers start at 0 (iCE40 flip-flops power up at 0): for example, with a constant program ROM, the CPU registers that are never written (x6..x31) and their read multiplexers disappear.
 
-## 輸出的 cell
-- 通用（`-o`）：`$_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_`（Y = S ? B : A）、`$_DFF_P_ / $_DFF_N_`、
-  非同步 reset `$_DFF_{P,N}{P,N}{0,1}_`、同步 reset `$_SDFF_{P,N}{P,N}{0,1}_`。
-- iCE40（`--ice40`）：`SB_LUT4`、`SB_CARRY`、`SB_DFF`、`SB_DFFN`、`SB_DFF[N]{R,S}`、`SB_DFF[N]S{R,S}`、`SB_RAM40_4K`。
+## Output cells
+- generic (`-o`): `$_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_` (Y = S ? B : A), `$_DFF_P_ / $_DFF_N_`,
+  asynchronous reset `$_DFF_{P,N}{P,N}{0,1}_`, synchronous reset `$_SDFF_{P,N}{P,N}{0,1}_`.
+- iCE40 (`--ice40`): `SB_LUT4`, `SB_CARRY`, `SB_DFF`, `SB_DFFN`, `SB_DFF[N]{R,S}`, `SB_DFF[N]S{R,S}`, `SB_RAM40_4K`.
 
-## Block RAM 推論（iCE40，`src/bram.rs`）
-陣列若只在**一個** always_ff 中以整個元素寫入（每拍最多一次）、只以整個元素讀取，elab 會把它記成記憶體
-（寫入埠 we / waddr / wdata、各讀取埠的位址與資料，存成具名 net `$mem:名稱:...`，其餘照常展開成 DFF）。
-映射 iCE40 時，若每個讀取埠是**同步讀取**（讀出的資料直接進同一時脈的暫存器，可帶致能）就換成 `SB_RAM40_4K`：
-元素 DFF、讀取暫存器與位址解碼 / 讀取多工器都消失。模式 256×16、512×8、1024×4、2048×2，字寬超過一塊就並排多塊，
-每個讀取埠一份拷貝。非同步讀取（例如 RV32I 暫存器檔、`Ram`）保留為邏輯，因為 block RAM 只有暫存式讀取埠。
+## Block RAM inference (iCE40, `src/bram.rs`)
+An array written as whole elements from **one** always_ff (at most once per cycle) and read only as whole elements is recorded by elab as a memory
+(write port we / waddr / wdata, each read port's address and data, as named nets `$mem:name:...`; everything else is still expanded into DFFs).
+When mapping to iCE40, if every read port is a **synchronous read** (the data goes straight into a register of the same clock, possibly with an enable), it becomes `SB_RAM40_4K`:
+the element DFFs, the read registers and the address decoding / read multiplexers all disappear. Modes 256×16, 512×8, 1024×4, 2048×2; wider words use several blocks side by side,
+one copy per read port. Asynchronous reads (e.g. the RV32I register file, `Ram`) stay logic, since block RAMs only have registered read ports.
 
-| 設計 | 不用 BRAM | 用 BRAM |
+| Design | Without BRAM | With BRAM |
 |---|---|---|
-| SyncRam 512×8（`examples/src/sync_ram.veryl`） | 12832 個 cell | 1 個 `SB_RAM40_4K` |
-| BramMix（256×32、兩個讀取埠 + 邏輯） | 29059 個 cell，放不進 UP5K | 4 個 BRAM + 86 LC，自己的 P&R 49 MHz（icetime 46 MHz） |
+| SyncRam 512×8 (`examples/src/sync_ram.veryl`) | 12832 cells | 1 `SB_RAM40_4K` |
+| BramMix (256×32, two read ports + logic) | 29059 cells, does not fit the UP5K | 4 BRAMs + 86 LCs, own P&R 49 MHz (icetime 46 MHz) |
 
-自己的佈局繞線支援 BRAM：30 個 RAM 位置一起退火、RAM 腳位繞線（時脈走全域網路）、`RamConfig` 位元與 `.ram_data`、STA（RCLK→RDATA 與各輸入 setup）。
-驗證：netsim 依 yosys `cells_sim.v` 模擬 `SB_RAM40_4K`（各模式的隨機讀寫測試）；`fpga/pnr_test.sh` 對繞好的位元流做共模擬；
-`test.sh` 用 yosys 的 `SB_RAM40_4K` 模型對 `veryl build` 做 iCE40 netlist 的形式等價（BMC）。
+The own place & route supports BRAMs: the 30 RAM sites are annealed together, RAM pins routed (clocks on global networks), `RamConfig` bits and `.ram_data` written, STA covers RCLK→RDATA and the input setups.
+Verification: netsim models `SB_RAM40_4K` after yosys `cells_sim.v` (random read/write tests in every mode); `fpga/pnr_test.sh` co-simulates the routed bitstreams;
+`test.sh` proves the iCE40 netlist equivalent to `veryl build` with yosys's `SB_RAM40_4K` model (BMC).
 
-## 支援
-module / 參數（`#(param ..)`、`const`、inst 參數覆寫）/ port / `var` / `let` / `assign` / `always_comb` /
-`always_ff`（posedge/negedge、`if_reset` 同步/非同步、高/低有效）/ `if` / `case`（含範圍）/ `switch` / `for`（常數範圍，展開，含 `rev`）/
-`inst` 階層（攤平，名稱如 `u_rf.rf`）/ package（enum、struct、const）/ `import` / struct 欄位 / 一維陣列（變數索引讀寫 → mux/解碼器）/
-使用者 function（inline，可巢狀、`return` 可在分支中）/ generate for、generate if /
-運算子：`+ - *`、位元/邏輯/化簡、比較（`$signed` 時為有號）、`<< >> >>>`（常數或變數）、串接與 `repeat`、三元運算、
-`$signed $unsigned $clog2 $bits`；`/ %`（非常數時為還原式除法器，有號依 SystemVerilog 向零截斷）；`**` 僅限常數。
-interface 與 modport（成員攤平成 `inst.member` 訊號，modport 埠變成 `port.member` 埠）、generate for 的 `rev` / `step`、
-任意寬度（常數最多 256 bit）、時脈域註記。`initial`/`final` 與 `$display` 類呼叫會被忽略。
+## Supported
+module / parameters (`#(param ..)`, `const`, inst parameter overrides) / ports / `var` / `let` / `assign` / `always_comb` /
+`always_ff` (posedge/negedge, `if_reset` synchronous/asynchronous, active high/low) / `if` / `case` (with ranges) / `switch` / `for` (constant ranges, unrolled, with `rev`) /
+`inst` hierarchy (flattened, names like `u_rf.rf`) / packages (enum, struct, const) / `import` / struct fields / 1-D arrays (variable-index reads and writes → mux / decoder) /
+user functions (inlined, nested, `return` inside branches) / generate for, generate if /
+operators: `+ - *`, bitwise / logical / reduction, comparisons (signed with `$signed`), `<< >> >>>` (constant or variable), concatenation and `repeat`, the ternary operator,
+`$signed $unsigned $clog2 $bits`; `/ %` (a restoring divider when not constant; signed division truncates toward zero as in SystemVerilog); `**` only for constants.
+Interfaces and modports (members flattened into `inst.member` signals, modport ports into `port.member` ports), `rev` / `step` in generate for,
+any width (constants up to 256 bits), clock domain annotations. `initial` / `final` and `$display`-like calls are ignored.
 
-## 尚未支援
-泛型 interface 埠、`inout`、遞迴、latch（不完整賦值的 always_comb 會報組合迴路）、
-寬度 > 256 bit 的常數、非同步讀取的記憶體放進 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL；
-（netsim 用 `tick(clk)` 模擬多個時脈域與負緣正反器，`step()` 則是所有正反器同時一拍）
-自己的佈局繞線：只支援 UP5K、沒有 LUT 輸入腳交換。
+## Not supported yet
+generic interface ports, `inout`, recursion, latches (an incompletely assigned always_comb is reported as a combinational loop),
+constants wider than 256 bits, asynchronous-read memories in BRAM, SPRAM (`SB_SPRAM256KA`), PLLs;
+(netsim simulates several clock domains and negative-edge flip-flops with `tick(clk)`; `step()` clocks every flip-flop at once)
+own place & route: UP5K only, no LUT input pin swapping.
 
-## 驗證結果（`./test.sh`）
-| 設計 | 對 `veryl build` 的等價驗證 |
+## Verification results (`./test.sh`)
+| Design | Equivalence with `veryl build` |
 |---|---|
-| Adder / Max3 / AluUnit / BitRev / GrayConv / rv32i Alu / ProgRom | SAT 完整證明 |
-| Seq101 / PktReg | k-induction 證明 |
-| Ram / RegFile / RiscvCore | 有界模型檢查 8 / 2 / 2 cycles |
-| RiscvSoc | 有界模型檢查 80 cycles（整個程式跑完） |
-| RiscvTestRom（rv32i 測試程式 ROM） | SAT 完整證明 |
-| `examples/features.veryl`：Shifter / Funcs / Ranges / Counter / Top | SAT / SAT / SAT / k-induction / BMC 20 |
+| Adder / Max3 / AluUnit / BitRev / GrayConv / rv32i Alu / ProgRom | complete SAT proof |
+| Seq101 / PktReg | k-induction proof |
+| Ram / RegFile / RiscvCore | bounded model checking, 8 / 2 / 2 cycles |
+| RiscvSoc | bounded model checking, 80 cycles (the whole program) |
+| RiscvTestRom (the rv32i test program ROM) | complete SAT proof |
+| `examples/features.veryl`: Shifter / Funcs / Ranges / Counter / Top | SAT / SAT / SAT / k-induction / BMC 20 |
+| Div / Wide (`examples/lang.veryl`) | complete SAT proof |
+| HsTop (interface handshake) | bounded model checking, 24 cycles |
+| SyncRam / Bram2048x2 / BramMix / Fifo (block RAM) | bounded model checking, 4 / 4 / 12 / 6 cycles |
+| UartLoop / VgaTiming | bounded model checking, 24 / 8 cycles |
 
-上表每個設計都驗證兩次：閘級 netlist（`gate`）與 vlib 標準元件 netlist（`asic`）。
-另外 `cargo test` 在閘級 netlist、iCE40 映射後與標準元件映射後的 netlist 上都跑各範例的 testbench 情境（RiscvCore 跑完整的 RV32I 測試程式並比對 41 個結果、ALU 每種運算對 Rust 參考值、RiscvSoc 在 LED 顯示 55）。
+Every design above is proven twice: the gate-level netlist (`gate`) and the vlib standard-cell netlist (`asic`); the designs with block RAM also the iCE40 netlist (`fpga`, with yosys's `SB_RAM40_4K` model).
+In addition, `cargo test` runs each example's testbench scenarios on the gate-level, iCE40-mapped and standard-cell netlists (RiscvCore runs the complete RV32I test program and compares 41 results, the ALU every operation against a Rust reference, RiscvSoc shows 55 on the LEDs).

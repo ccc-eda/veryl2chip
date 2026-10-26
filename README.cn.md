@@ -70,4 +70,4 @@ npm test
 （`.asc` 与 CLI 相同，`.bin` 与 icepack 相同）、ASIC 流程（结果与 CLI 相同）、每个示例的门级仿真、
 解开导出的项目 `.zip` 并用 `veryl test` 检查，以及界面翻译。
 
-命令与架构见 [AGENTS.md](AGENTS.md)；各 crate 的 README（繁体中文）有更多细节。
+命令与架构见 [AGENTS.md](AGENTS.md)；各 crate 的 README（[veryl-sim](veryl-sim/README.cn.md)、[veryl-eda](veryl-eda/README.cn.md)）有更多细节。
