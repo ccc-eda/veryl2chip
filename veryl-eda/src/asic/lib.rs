@@ -46,8 +46,20 @@ pub const LIB: &[StdCell] = &[
     StdCell { name: "DFFNS", ins: &["CK", "D", "SN"], width: 16, delay: 0.200, load: 0.010, setup: 0.090, verilog: "always @(negedge CK or negedge SN) if (!SN) Q <= 1'b1; else Q <= D;" },
 ];
 
+/// logical cells vlib does not have: the mapping uses them where the technology binds them (SKY130)
+pub const EXTRA: &[StdCell] = &[
+    StdCell { name: "NAND3", ins: &["A", "B", "C"], width: 4, delay: 0.045, load: 0.018, setup: 0.0, verilog: "assign Y = ~(A & B & C);" },
+    StdCell { name: "NOR3", ins: &["A", "B", "C"], width: 4, delay: 0.060, load: 0.024, setup: 0.0, verilog: "assign Y = ~(A | B | C);" },
+    StdCell { name: "AND3", ins: &["A", "B", "C"], width: 5, delay: 0.075, load: 0.009, setup: 0.0, verilog: "assign Y = A & B & C;" },
+    StdCell { name: "OR3", ins: &["A", "B", "C"], width: 5, delay: 0.085, load: 0.010, setup: 0.0, verilog: "assign Y = A | B | C;" },
+    StdCell { name: "AOI22", ins: &["A", "B", "C", "D"], width: 5, delay: 0.055, load: 0.020, setup: 0.0, verilog: "assign Y = ~((A & B) | (C & D));" },
+    StdCell { name: "AO21", ins: &["A", "B", "C"], width: 5, delay: 0.070, load: 0.010, setup: 0.0, verilog: "assign Y = (A & B) | C;" },
+    StdCell { name: "OA21", ins: &["A", "B", "C"], width: 5, delay: 0.070, load: 0.010, setup: 0.0, verilog: "assign Y = (A | B) & C;" },
+    StdCell { name: "OAI22", ins: &["A", "B", "C", "D"], width: 5, delay: 0.055, load: 0.020, setup: 0.0, verilog: "assign Y = ~((A | B) & (C | D));" },
+];
+
 pub fn cell(name: &str) -> &'static StdCell {
-    LIB.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no standard cell {}", name))
+    LIB.iter().chain(EXTRA).find(|c| c.name == name).unwrap_or_else(|| panic!("no standard cell {}", name))
 }
 
 pub fn is_ff(name: &str) -> bool { name.starts_with("DFF") }

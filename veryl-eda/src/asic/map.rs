@@ -105,6 +105,8 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
             Match { cell: cell_name, leaves, cost }
         };
         let sub = |x: Bit, typ: &str| -> Option<&Cell> { internal(x).map(|j| &gates[j]).filter(|c| c.typ == typ) };
+        // cells beyond vlib's, where the technology has them
+        let has = |c: &str| tech.binding(c).is_some();
         let mut cands: Vec<Match> = vec![];
         match g.typ.as_str() {
             "$_NOT_" => {
@@ -112,6 +114,13 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
                 cands.push(mk("INV", vec![("A", a)], &best));
                 if let Some(x) = sub(a, "$_AND_") {
                     cands.push(mk("NAND2", vec![("A", pin(x, "A")), ("B", pin(x, "B"))], &best));
+                    // !(p & q & c), !((p|q) & (r|s))
+                    for (o, c) in [(pin(x, "A"), pin(x, "B")), (pin(x, "B"), pin(x, "A"))] {
+                        if let Some(y) = sub(o, "$_AND_").filter(|_| has("NAND3")) { cands.push(mk("NAND3", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
+                    }
+                    if let (Some(p), Some(q)) = (sub(pin(x, "A"), "$_OR_"), sub(pin(x, "B"), "$_OR_")) {
+                        if has("OAI22") { cands.push(mk("OAI22", vec![("A", pin(p, "A")), ("B", pin(p, "B")), ("C", pin(q, "A")), ("D", pin(q, "B"))], &best)); }
+                    }
                     // !((p|q) & c)
                     for (o, c) in [(pin(x, "A"), pin(x, "B")), (pin(x, "B"), pin(x, "A"))] {
                         if let Some(y) = sub(o, "$_OR_") { cands.push(mk("OAI21", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
@@ -119,6 +128,13 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
                 }
                 if let Some(x) = sub(a, "$_OR_") {
                     cands.push(mk("NOR2", vec![("A", pin(x, "A")), ("B", pin(x, "B"))], &best));
+                    // !(p | q | c), !((p&q) | (r&s))
+                    for (o, c) in [(pin(x, "A"), pin(x, "B")), (pin(x, "B"), pin(x, "A"))] {
+                        if let Some(y) = sub(o, "$_OR_").filter(|_| has("NOR3")) { cands.push(mk("NOR3", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
+                    }
+                    if let (Some(p), Some(q)) = (sub(pin(x, "A"), "$_AND_"), sub(pin(x, "B"), "$_AND_")) {
+                        if has("AOI22") { cands.push(mk("AOI22", vec![("A", pin(p, "A")), ("B", pin(p, "B")), ("C", pin(q, "A")), ("D", pin(q, "B"))], &best)); }
+                    }
                     for (o, c) in [(pin(x, "A"), pin(x, "B")), (pin(x, "B"), pin(x, "A"))] {
                         if let Some(y) = sub(o, "$_AND_") { cands.push(mk("AOI21", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
                     }
@@ -128,11 +144,19 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
             "$_AND_" => {
                 let (a, bb) = (pin(g, "A"), pin(g, "B"));
                 cands.push(mk("AND2", vec![("A", a), ("B", bb)], &best));
+                for (o, c) in [(a, bb), (bb, a)] {
+                    if let Some(y) = sub(o, "$_OR_").filter(|_| has("OA21")) { cands.push(mk("OA21", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
+                    if let Some(y) = sub(o, "$_AND_").filter(|_| has("AND3")) { cands.push(mk("AND3", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
+                }
                 if let (Some(x), Some(y)) = (sub(a, "$_NOT_"), sub(bb, "$_NOT_")) { cands.push(mk("NOR2", vec![("A", pin(x, "A")), ("B", pin(y, "A"))], &best)); }
             }
             "$_OR_" => {
                 let (a, bb) = (pin(g, "A"), pin(g, "B"));
                 cands.push(mk("OR2", vec![("A", a), ("B", bb)], &best));
+                for (o, c) in [(a, bb), (bb, a)] {
+                    if let Some(y) = sub(o, "$_AND_").filter(|_| has("AO21")) { cands.push(mk("AO21", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
+                    if let Some(y) = sub(o, "$_OR_").filter(|_| has("OR3")) { cands.push(mk("OR3", vec![("A", pin(y, "A")), ("B", pin(y, "B")), ("C", c)], &best)); }
+                }
                 if let (Some(x), Some(y)) = (sub(a, "$_NOT_"), sub(bb, "$_NOT_")) { cands.push(mk("NAND2", vec![("A", pin(x, "A")), ("B", pin(y, "A"))], &best)); }
             }
             "$_XOR_" => {

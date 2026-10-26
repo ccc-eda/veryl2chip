@@ -394,12 +394,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                         }
                     }
                 }
-                if goal == u32::MAX { opens[ni] += 1; if hard && std::env::var("DBG_OPEN").is_ok() {
-                    let (_, x, y) = (t[j].0, t[j].1, t[j].2);
-                    let k = (y * nx + x) as usize;
-                    let nb: Vec<String> = [(x.wrapping_sub(1), y), (x + 1, y)].iter().filter(|q| q.0 < nx).map(|&(a, b)| { let v = id(0, a, b) as usize; format!("({},{}) blk {} own {} nv {} vo {}", a, b, blocked[v], pin_owner[v] as i64, no_via[(b * nx + a) as usize], via_owner[(b * nx + a) as usize] as i64) }).collect();
-                    eprintln!("open: net {} terminal {:?} parity {} no_via {} via_owner {} up-blocked {} | {:?}", ni, t[j], (x + y) % 2, no_via[k], via_owner[k] as i64, blocked[id(1, x, y) as usize], nb);
-                } continue; }
+                if goal == u32::MAX { opens[ni] += 1; continue; }
                 // walk back from where the tree was reached to the terminal
                 let mut v = goal;
                 while v != u32::MAX && v != src {

@@ -55,9 +55,10 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     let mut util = if lib_tech { 0.55 } else { 0.65 };
     let mut attempt = 0;
     let (mapped, placement, mut routing, fmax_wl, fmax_ideal, cts, hold_bufs, pdn, detail) = loop {
-        let r = physical(&mapped0, seed, util, extra_hold)?;
+        // (each new try also a new placement seed)
+        let r = physical(&mapped0, seed + attempt as u64, util, extra_hold)?;
         attempt += 1;
-        if !lib_tech || (r.8.conflicts == 0 && r.8.opens == 0) || attempt >= 3 || r.9 < 0.3 { break (r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8); }
+        if !lib_tech || (r.8.conflicts == 0 && r.8.opens == 0) || attempt >= 4 || r.9 < 0.2 { break (r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8); }
         util = r.9 * 0.85;
     };
     let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();

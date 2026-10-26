@@ -172,7 +172,7 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
   clear / preset）。`veryl-eda --pdk-check [目錄]` 读完整的 SKY130 目录（`sky130_fd_sc_hd__tt_025C_1v80.lib`、
   `sky130_fd_sc_hd.tlef`、`sky130_fd_sc_hd_merged.lef`，和 OpenROAD-flow-scripts 的 `platforms/sky130hd` 一样；
   `tools/sky130.sh` 下载，`VERYL_EDA_SKY130` 指向它）：428 个单元、441 个 macro，0.1 秒。
-- `--asic --pdk sky130` 用 SKY130 跑整个流程。需要的单元随 veryl-eda 附上（`pdk/sky130hd/`：35 个单元的 Liberty、tech LEF、
+- `--asic --pdk sky130` 用 SKY130 跑整个流程。需要的单元随 veryl-eda 附上（`pdk/sky130hd/`：43 个单元的 Liberty、tech LEF、
   单元 LEF 与 GDS，由 `tools/sky130_subset.py` 切出；Apache-2.0）；`--pdk sky130:目錄` 改读完整文件。
   - 对应：存储器维持触发器（这里没有 SRAM macro）；没有 reset 的下降沿触发器在时钟加一个反相器。
   - 布局在 `unithd` 列上（site 0.46 × 2.72 µm，N / FS 交替），IO 引脚各在自己的格点上，每列每 20 µm 一个 well tap
@@ -197,6 +197,10 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
   （`pip install klayout`）读回：只有一个顶层 cell、单元 / 形状 / 标签数量、单元不重叠，以及 KLayout 自己对 li1、met1–met4
   与 cut 层在摊平后版图上的宽度与间距检查；`test.sh` 对每个 SKY130 设计都跑（`GDS_PY`：有这个模块的 Python）。
   RiscvSoc：11,879 个单元、115,318 个形状、8 MB，干净。
+- 更多单元（v1.8）：技术有的话，对应也会用 3 输入的 NAND / NOR / AND / OR、AOI22 / OAI22 与 AO21 / OA21
+  （`a21o_1`、`o21a_1`：加法器的进位只要一个单元，不是一个 AND 加一个 OR），这些是 vlib 没有的逻辑单元
+  （`asic::lib::EXTRA`）。Alu：68 → 114 MHz、面积少 16 %；RiscvSoc：53 → 63 MHz、面积少 7 %。详细布线不干净时，
+  流程换更大的裸片与新的布局种子再试（最多四次）。
 - `--gatesim sky130` 在 SKY130 网表上跑 testbench；`test.sh` 用 yosys 从 PDK 自己的 Liberty 档创建的单元模型（`read_liberty`），
   证明每个设计的 SKY130 网表与 `veryl build` 的输出等价。`cargo test` 把 DEF 读回来对照 LEF 检查（单元在列与 site 上、
   不重叠、每个 site 都有东西、tap 距离）。

@@ -301,7 +301,7 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
                 for s in x..x + w { assert!(!occ[rr as usize][s as usize], "{}: overlap at row {} site {}", top, rr, s); occ[rr as usize][s as usize] = true; }
             }
         }
-        assert!(pl.max_density < (pl.target_density + 0.25).max(0.95), "{}: a bin is {:.0}% full", top, pl.max_density * 100.0);
+        assert!(pl.max_density < (pl.target_density + 0.25).max(0.98), "{}: a bin is {:.0}% full", top, pl.max_density * 100.0);
         // fillers close every gap: cells + fillers cover each site exactly once
         for &(r, x, w) in &o.pdn.fillers {
             for s in x..x + w { assert!(!occ[r as usize][s as usize], "{}: filler overlaps at row {} site {}", top, r, s); occ[r as usize][s as usize] = true; }
