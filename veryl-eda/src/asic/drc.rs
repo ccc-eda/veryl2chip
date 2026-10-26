@@ -3,6 +3,7 @@
 //! from the LEF. Rules from the technology LEF:
 //! - short: two nets' shapes overlap on a layer
 //! - spacing: two nets' shapes on a routing layer closer than its SPACING
+//!   (notches inside one net's merged metal: `tools/gds_check.py`, KLayout)
 //!   (cut layers: any two different cuts closer than the cut spacing)
 //! - area: a via landing pad on a routing layer that no wire of its net
 //!   extends, smaller than the layer's minimum AREA
@@ -129,6 +130,7 @@ pub fn check(l: &Layout, nl: &crate::netlist::Netlist) -> Drc {
                     else if !overlap(sa, sb) && gap(sa, sb) < sp { d.spacing += 1; example(&mut d, "spacing", sa); detail(&mut d, "spacing", sa, sb, &nets); }
                     continue;
                 }
+                // one net: pieces that do not touch still keep the spacing (a notch when they are joined elsewhere)
                 if same { continue; }
                 if overlap(sa, sb) { d.shorts += 1; example(&mut d, "short", sa); detail(&mut d, "short", sa, sb, &nets); }
                 else if gap(sa, sb) < sp { d.spacing += 1; example(&mut d, "spacing", sa); detail(&mut d, "spacing", sa, sb, &nets); }

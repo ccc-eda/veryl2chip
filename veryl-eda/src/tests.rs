@@ -282,6 +282,14 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
             let l = crate::asic::layout::build(&o).unwrap();
             let d = crate::asic::drc::check(&l, &o.mapped);
             assert_eq!((d.shorts, d.spacing, d.area, d.opens), (0, 0, 0, 0), "{}: DRC {:?}", top, d.details);
+            // GDS: the cells used and a top structure placing each instance (SREF) with the routing (BOUNDARY)
+            let g = crate::asic::gds::write(&l, &o.mapped.name, crate::pdk::SKY130_GDS).unwrap();
+            let st = crate::asic::gds::structures(&g);
+            let topst = &st[&o.mapped.name];
+            let count = |rt: u8| { let (mut i, mut n) = (0, 0); while i + 4 <= topst.len() { let len = u16::from_be_bytes([topst[i], topst[i + 1]]) as usize; if topst[i + 2] == rt { n += 1; } i += len.max(4); } n };
+            assert_eq!(count(0x0A), l.insts.len(), "{}: SREFs", top);
+            assert_eq!(count(0x08), l.shapes.len() + l.labels.len(), "{}: boundaries", top);
+            assert!(l.insts.iter().all(|i| st.contains_key(&i.cell)));
         }
         let pl = &o.placement;
         let mut occ = vec![vec![false; pl.sites as usize]; pl.rows as usize];

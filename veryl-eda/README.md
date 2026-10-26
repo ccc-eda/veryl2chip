@@ -199,6 +199,13 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   Vias are only where a path changes layer. Should a dense design not route clean, the flow tries again on a bigger die.
   `--asic --pdk sky130` prints the DRC summary (`-v`: examples); `cargo test` requires 0 for Ram and RiscvSoc
   (RiscvSoc: 0 shorts / spacing / area / opens at 32 % utilization).
+- GDSII (v1.7): `--gds OUT.gds` (`src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
+  places them (mirrored on the FS rows) and draws the routing, vias, power grid and labelled IO pins on SKY130's layer numbers
+  (met1 68/20, via 68/44, ...). Same-net via pads closer than the spacing are joined by small fills, so the metal has no notches.
+  `tools/gds_check.py` reads it back with KLayout's Python module (`pip install klayout`): one top cell, the instance / shape /
+  label counts, no overlapping instances, and KLayout's own width and spacing checks of li1, met1-met4 and the cut layers on the
+  flattened layout; `test.sh` runs it on every SKY130 design (`GDS_PY`: a Python with the module). RiscvSoc: 11,879 cell
+  instances, 115,318 shapes, 8 MB, clean.
 - `--gatesim sky130` runs the testbenches on the SKY130 netlist; `test.sh` proves every design's SKY130 netlist equivalent to
   `veryl build`'s output with the cell models yosys builds from the PDK's own Liberty file (`read_liberty`). The `cargo test`
   checks read the DEF back against the LEF (cells on the rows and sites, no overlaps, every site covered, tap distances).

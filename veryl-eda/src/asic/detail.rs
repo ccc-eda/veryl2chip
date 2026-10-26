@@ -198,8 +198,12 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                     for y in (((by0 - tech.track_y0) / tk).ceil().max(0.0) as u32)..=(((by1 - tech.track_y0) / tk).floor().max(0.0) as u32) {
                         if x >= nx || y >= ny { continue; }
                         let k = (y * nx + x) as usize;
+                        // the pin's own net may put a via pad on its met1 (touching it), not a little apart (a notch)
+                        let (px, py) = (tech.track_x0 + x as f64 * sw, tech.track_y0 + y as f64 * tk);
+                        let (sx0, sx1, sy0, sy1) = (s as f64 * sw + q.x0, s as f64 * sw + q.x1, r as f64 * rh + y0, r as f64 * rh + y1);
+                        let gap = ((sx0 - px).max(px - sx1) - 0.16).max((sy0 - py).max(py - sy1) - 0.13);
                         match owner {
-                            Some(o) if via_owner[k] == u32::MAX || via_owner[k] == o => via_owner[k] = o,
+                            Some(o) if gap <= 0.0 && (via_owner[k] == u32::MAX || via_owner[k] == o) => via_owner[k] = o,
                             _ => no_via[k] = true,
                         }
                     }
@@ -212,7 +216,27 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                     let (xx, yy) = (q.1 as i64 + dx, q.2 as i64 + dy);
                     if xx < 0 || yy < 0 || xx >= nx as i64 || yy >= ny as i64 { continue; }
                     let k = (yy as u32 * nx + xx as u32) as usize;
+                    // right above / below: no via of any net (not even the pin's own: their pads would leave a notch)
+                    if dx == 0 { no_via[k] = true; continue; }
                     via_owner[k] = if via_owner[k] == u32::MAX || via_owner[k] == ni as u32 { ni as u32 } else { u32::MAX - 1 };
+                }
+            }
+        }
+        // an IO pin's shape reaches 0.8 µm into the die: the top-layer nodes whose wire would come
+        // closer to it than the spacing are the pin's net's
+        let (sw, tk) = (site_w(), row_h() / TRACKS as f64);
+        let nm = |v: f64| (v * 1000.0).round() as i64;
+        for (ni, t) in terms.iter().enumerate() {
+            for q in t.1.iter().filter(|q| q.0 == LAYERS - 1) {
+                let (px, py) = (nm(q.1 as f64 * sw + tech.track_x0), nm(q.2 as f64 * tk + tech.track_y0));
+                let (x0, y0, x1, y1) = super::layout::pin_rect(px, py, nm(pl.w), nm(pl.h));
+                for x in q.1.saturating_sub(4)..(q.1 + 5).min(nx) {
+                    for y in q.2.saturating_sub(4)..(q.2 + 5).min(ny) {
+                        let (cx, cy) = (nm(x as f64 * sw + tech.track_x0), nm(y as f64 * tk + tech.track_y0));
+                        let gap = (x0 - (cx + 150)).max((cx - 150) - x1).max(y0 - (cy + 150)).max((cy - 150) - y1);
+                        let n = id(LAYERS - 1, x, y) as usize;
+                        if gap < 300 && pin_owner[n] == u32::MAX { pin_owner[n] = ni as u32; }
+                    }
                 }
             }
         }
@@ -226,7 +250,11 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                 if xx >= nx { continue; }
                 let o = pin_owner[id(0, x, y) as usize];
                 let n = id(0, xx, y) as usize;
-                if pin_owner[n] == u32::MAX { pin_owner[n] = o; } else if pin_owner[n] != o { blocked[n] = true; }
+                // (another pin's own node stays that pin's)
+                if pin_owner[n] == u32::MAX { pin_owner[n] = o; } else if pin_owner[n] != o { continue; }
+                // no via there either, nor diagonally on that side: its pad would come too close to the contact's
+                no_via[(y * nx + xx) as usize] = true;
+                for yy in [y.wrapping_sub(1), y + 1] { if yy < ny { no_via[(yy * nx + xx) as usize] = true; } }
             }
         }
     }
@@ -238,17 +266,9 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         else { [if y > 0 { id(l, x, y - 1) } else { u32::MAX }, if y + 1 < ny { id(l, x, y + 1) } else { u32::MAX }] }
     };
     let mut near = vec![0u16; if lib_rules { total } else { 0 }];
-    // how much of a node's `near` comes from its own net (its halo neighbours, its vias' pads)
-    let own_near = |n: u32, own: &HashSet<u32>, own_v: &HashSet<u32>| -> usize {
-        let (l, x, y) = decode(n);
-        let mut k = halo(n).iter().filter(|h| own.contains(h)).count();
-        if l == 1 {
-            for yy in [y.wrapping_sub(1), y + 1] {
-                if yy < ny { for lo in 0..2 { if own_v.contains(&id(lo, x, yy)) { k += 1; } } }
-            }
-        }
-        k
-    };
+    // after each round: which net sits on each node, and which nets clash with another's halo
+    let mut owner = vec![u32::MAX; if lib_rules { total } else { 0 }];
+    let mut clash = vec![false; terms.len()];
     // met2 nodes beside a via that lands on met2 (its pad reaches them): (node below of the via) -> the two met2 neighbours
     let pad_halo = |v: u32| -> [u32; 2] {
         let (l, x, y) = decode(v);
@@ -291,10 +311,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         let hard = it >= NEGOTIATE;
         for &ni in &order {
             if terms[ni].1.len() < 2 { continue; }
-            let own: HashSet<u32> = if lib_rules { paths[ni].iter().copied().collect() } else { HashSet::new() };
-            let own_v: HashSet<u32> = if lib_rules { pvias[ni].iter().copied().collect() } else { HashSet::new() };
-            let conflicted = paths[ni].iter().any(|&n| occ[n as usize] > 1
-                || (lib_rules && near[n as usize] as usize > own_near(n, &own, &own_v)));
+            let conflicted = paths[ni].iter().any(|&n| occ[n as usize] > 1) || clash[ni];
             if it > 0 && !conflicted && opens[ni] == 0 { continue; }
             // still stuck after a few rounds: give it more room
             if !hard && ((it >= 4 && it % 4 == 0) || (it >= 16 && it % 2 == 0)) { widen(&mut terms[ni].2); }
@@ -354,7 +371,7 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                             // (a pin's own node may always go up: no other net's via can be beside it)
                             if (vx + vy) % 2 == 1 && pin_owner[id(0, vx, vy) as usize] != ni as u32 { continue; }
                             let o = via_owner[(vy * nx + vx) as usize];
-                            if o != u32::MAX && o != ni as u32 { continue; }
+                            if o != u32::MAX && o != ni as u32 && pin_owner[id(0, vx, vy) as usize] != ni as u32 { continue; }
                             if no_via[(vy * nx + vx) as usize] { continue; }
                         }
                         let mut nv = if lib_rules { near[v as usize] } else { 0 };
@@ -377,7 +394,12 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
                         }
                     }
                 }
-                if goal == u32::MAX { opens[ni] += 1; if hard && std::env::var("DBG_OPEN").is_ok() { eprintln!("open: net {} terminal {:?} of {:?}", ni, t[j], t); } continue; }
+                if goal == u32::MAX { opens[ni] += 1; if hard && std::env::var("DBG_OPEN").is_ok() {
+                    let (_, x, y) = (t[j].0, t[j].1, t[j].2);
+                    let k = (y * nx + x) as usize;
+                    let nb: Vec<String> = [(x.wrapping_sub(1), y), (x + 1, y)].iter().filter(|q| q.0 < nx).map(|&(a, b)| { let v = id(0, a, b) as usize; format!("({},{}) blk {} own {} nv {} vo {}", a, b, blocked[v], pin_owner[v] as i64, no_via[(b * nx + a) as usize], via_owner[(b * nx + a) as usize] as i64) }).collect();
+                    eprintln!("open: net {} terminal {:?} parity {} no_via {} via_owner {} up-blocked {} | {:?}", ni, t[j], (x + y) % 2, no_via[k], via_owner[k] as i64, blocked[id(1, x, y) as usize], nb);
+                } continue; }
                 // walk back from where the tree was reached to the terminal
                 let mut v = goal;
                 while v != u32::MAX && v != src {
@@ -397,11 +419,16 @@ pub fn route(nl: &Netlist, pl: &RowPlacement, rt: &Routing, pdn: &super::pdn::Pd
         }
         let mut conflicts = occ.iter().filter(|o| **o > 1).count();
         if lib_rules {
-            // nodes another net's halo reaches
-            for (p, pv) in paths.iter().zip(&pvias) {
-                let own: HashSet<u32> = p.iter().copied().collect();
-                let own_v: HashSet<u32> = pv.iter().copied().collect();
-                for &n in p { if near[n as usize] as usize > own_near(n, &own, &own_v) { conflicts += 1; } }
+            // another net on a node a path's halo or via pads reach
+            for o in owner.iter_mut() { *o = u32::MAX; }
+            for (ni, p) in paths.iter().enumerate() { for &n in p { owner[n as usize] = if owner[n as usize] == u32::MAX { ni as u32 } else { u32::MAX - 1 }; } }
+            for c in clash.iter_mut() { *c = false; }
+            for (ni, (p, pv)) in paths.iter().zip(&pvias).enumerate() {
+                let other = |h: u32| h != u32::MAX && owner[h as usize] != u32::MAX && owner[h as usize] != ni as u32;
+                let mut k = 0;
+                for &n in p { for h in halo(n) { if other(h) { k += 1; } } }
+                for &v in pv { for h in pad_halo(v) { if other(h) { k += 1; } } }
+                if k > 0 { clash[ni] = true; conflicts += k; }
             }
             for (n, o) in near.iter().enumerate() { if *o > 0 && occ[n] > 0 { hist[n] += 0.1; } }
         }

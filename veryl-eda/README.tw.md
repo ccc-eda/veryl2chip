@@ -191,6 +191,12 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
   電源網格周圍淨空。via 只放在路徑換層的地方。密集的設計繞不乾淨時，流程會換更大的晶粒再試。
   `--asic --pdk sky130` 印出 DRC 摘要（`-v`：例子）；`cargo test` 要求 Ram 與 RiscvSoc 都是 0
   （RiscvSoc：利用率 32 % 時短路 / 間距 / 面積 / 斷路都是 0）。
+- GDSII（v1.7）：`--gds OUT.gds`（`src/asic/gds.rs`）寫出 PDK 自己的元件版圖（從它的 GDS 複製）以及一個頂層 cell：
+  放置它們（FS 列鏡像），並以 SKY130 的層號（met1 68/20、via 68/44…）畫出繞線、via、電源網格與有標籤的 IO 腳。
+  同一網路距離小於間距的 via 墊片之間會補上小塊金屬，金屬不會留下缺口。`tools/gds_check.py` 用 KLayout 的 Python 模組
+  （`pip install klayout`）讀回：只有一個頂層 cell、元件 / 形狀 / 標籤數量、元件不重疊，以及 KLayout 自己對 li1、met1–met4
+  與 cut 層在攤平後版圖上的寬度與間距檢查；`test.sh` 對每個 SKY130 設計都跑（`GDS_PY`：有這個模組的 Python）。
+  RiscvSoc：11,879 個元件、115,318 個形狀、8 MB，乾淨。
 - `--gatesim sky130` 在 SKY130 網表上跑 testbench；`test.sh` 用 yosys 從 PDK 自己的 Liberty 檔建立的元件模型（`read_liberty`），
   證明每個設計的 SKY130 網表與 `veryl build` 的輸出等價。`cargo test` 把 DEF 讀回來對照 LEF 檢查（元件在列與 site 上、
   不重疊、每個 site 都有東西、tap 距離）。

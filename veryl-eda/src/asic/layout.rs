@@ -66,6 +66,19 @@ pub fn instances(o: &Output) -> Vec<Inst> {
     v
 }
 
+/// an IO pin's shape on the top layer: 0.3 µm wide, reaching 0.8 µm in from its edge of the die
+/// (0.24 µm², met4's minimum area)
+pub fn pin_rect(x: i64, y: i64, w: i64, h: i64) -> (i64, i64, i64, i64) {
+    let d = [x, w - x, y, h - y];
+    let near = (0..4).min_by_key(|&k| d[k]).unwrap();
+    match near {
+        0 => (0, y - 150, 800, y + 150),
+        1 => (w - 800, y - 150, w, y + 150),
+        2 => (x - 150, 0, x + 150, 800),
+        _ => (x - 150, h - 800, x + 150, h),
+    }
+}
+
 pub fn build(o: &Output) -> Result<Layout, String> {
     let tech = crate::pdk::tech();
     let lef = tech.lef.as_ref().ok_or("the layout needs a LEF technology")?;
@@ -134,13 +147,40 @@ pub fn build(o: &Output) -> Result<Layout, String> {
             }
         }
     }
+    // fill: pieces of one net on a metal layer that face each other closer than its
+    // spacing (neighbouring via pads) get the gap between them filled, so the metal is one
+    // smooth piece instead of two with a notch
+    let mut fills = vec![];
+    for name in &tech.layers {
+        let li = li(name)?;
+        let sp = lef.layer(name).map(|l| nm(l.spacing)).unwrap_or(0);
+        let mut by_net: HashMap<usize, Vec<Shape>> = HashMap::new();
+        for sh in shapes.iter().filter(|q| q.layer == li && q.net >= 2) { by_net.entry(sh.net).or_default().push(*sh); }
+        for (_, v) in by_net {
+            for a in 0..v.len() {
+                for b in a + 1..v.len() {
+                    let (p, q) = (&v[a], &v[b]);
+                    let gx = (q.x0 - p.x1).max(p.x0 - q.x1);
+                    let gy = (q.y0 - p.y1).max(p.y0 - q.y1);
+                    // side by side (their y ranges overlap) or one above the other (x ranges overlap)
+                    if gy < 0 && gx > 0 && gx < sp {
+                        fills.push(Shape { layer: li, x0: p.x1.min(q.x1), x1: p.x0.max(q.x0), y0: p.y0.min(q.y0), y1: p.y1.max(q.y1), net: p.net });
+                    } else if gx < 0 && gy > 0 && gy < sp {
+                        fills.push(Shape { layer: li, y0: p.y1.min(q.y1), y1: p.y0.max(q.y0), x0: p.x0.min(q.x0), x1: p.x1.max(q.x1), net: p.net });
+                    }
+                }
+                if v.len() > 3000 { break; }
+            }
+        }
+    }
+    shapes.extend(fills);
     // IO pins: a square on the top grid layer at the pin's node, with a label
     let mut labels = vec![];
-    let half = 150;
     for p in &pl.pins {
         let ni = *net_of.entry(p.bit).or_insert_with(|| { nets.push(p.name.clone()); nets.len() - 1 });
         let (x, y) = (nm(p.x + tech.track_x0), nm(p.y + tech.track_y0));
-        shapes.push(Shape { layer: top, x0: x - half, y0: y - half, x1: x + half, y1: y + half, net: ni });
+        let (x0, y0, x1, y1) = pin_rect(x, y, nm(pl.w), nm(pl.h));
+        shapes.push(Shape { layer: top, x0, y0, x1, y1, net: ni });
         labels.push((top, x, y, p.name.clone()));
     }
     Ok(Layout { layers: LAYERS.iter().map(|s| s.to_string()).collect(), shapes, insts: instances(o), nets, net_of, labels, die: (nm(pl.w), nm(pl.h)) })

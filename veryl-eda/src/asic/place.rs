@@ -55,8 +55,10 @@ pub fn nets(nl: &Netlist, pins: &[Pin]) -> Vec<PNet> {
             if !e.cells.contains(&i) { e.cells.push(i); }
         }
     }
+    // (a net between IO pins alone, an input wired straight to an output, is a net too)
     for (k, p) in pins.iter().enumerate() {
-        if let Some(e) = m.get_mut(&p.bit) { e.pins.push(k); }
+        if p.bit.is_const() { continue; }
+        m.entry(p.bit).or_insert_with(|| { order.push(p.bit); PNet { cells: vec![], pins: vec![], bit: p.bit } }).pins.push(k);
     }
     order.into_iter().map(|b| m.remove(&b).unwrap()).filter(|n| n.cells.len() + n.pins.len() > 1).collect()
 }
@@ -106,6 +108,14 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         rows += 1;
         sites += sites / 20 + 1;
     }
+    // a library technology: room on the die's edges for every IO pin (two grid nodes each)
+    if !crate::pdk::tech().is_vlib() {
+        let ins = nl.ports.iter().filter(|p| p.dir == Dir::In).map(|p| p.bits.len()).sum::<usize>() as u32;
+        let outs = nl.ports.iter().filter(|p| p.dir == Dir::Out).map(|p| p.bits.len()).sum::<usize>() as u32;
+        while (sites / 2 + rows * super::detail::TRACKS / 2) < 2 * ins.max(outs) + 10 { sites += 2; rows += 1; }
+        sites = sites.max(16);
+        rows = rows.max(2);
+    }
     let (w, h) = (sites as f64 * site_w, rows as f64 * row_h);
     let used_sites: u32 = (0..n).map(|c| widths[c] * heights[c]).sum();
 
@@ -136,7 +146,9 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         let step = if lib { 2 } else { 1 };
         for k in 0..(gx + gy) as i64 * 2 {
             let d = step * if k % 2 == 0 { k / 2 } else { -(k + 1) / 2 };
-            let (tx, ty) = if vertical_edge { (x, (y + d).clamp(0, gy as i64)) } else { ((x + d).clamp(0, gx as i64), y) };
+            // (a library technology's pins are 0.8 µm deep: keep them off the corners)
+            let (lo_x, hi_x, lo_y, hi_y) = if lib { (4, gx as i64 - 4, 4, gy as i64 - 4) } else { (0, gx as i64, 0, gy as i64) };
+            let (tx, ty) = if vertical_edge { (x, (y + d).clamp(lo_y, hi_y.max(lo_y))) } else { ((x + d).clamp(lo_x, hi_x.max(lo_x)), y) };
             if !taken.contains(&(tx, ty)) { x = tx; y = ty; break; }
         }
         taken.insert((x, y));

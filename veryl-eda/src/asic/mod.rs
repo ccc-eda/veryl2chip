@@ -5,6 +5,7 @@
 pub mod cts;
 pub mod detail;
 pub mod drc;
+pub mod gds;
 pub mod layout;
 pub mod lib;
 pub mod map;
@@ -191,12 +192,16 @@ pub fn def(o: &Output) -> String {
     writeln!(s, "  - VDD + NET VDD + SPECIAL + DIRECTION INOUT + USE POWER ;\n  - VSS + NET VSS + SPECIAL + DIRECTION INOUT + USE GROUND ;").unwrap();
     // IO pins on the top grid layer, on their grid nodes
     let top = &tech.layers[3];
-    let half = if vlib { 200 } else { 150 };
     let tk = rh / detail::TRACKS as f64;
     for p in &pl.pins {
         let (x, y) = if vlib { (p.x, p.y) } else { (p.x + tech.track_x0, p.y + tech.track_y0) };
+        // the pin's shape relative to its position (a library technology: as in the GDS)
+        let (x0, y0, x1, y1) = if vlib { (-200, -200, 200, 200) } else {
+            let r = layout::pin_rect(u(x), u(y), u(pl.w), u(pl.h));
+            (r.0 - u(x), r.1 - u(y), r.2 - u(x), r.3 - u(y))
+        };
         writeln!(s, "  - {} + NET {} + DIRECTION {} + USE SIGNAL\n    + LAYER {} ( {} {} ) ( {} {} ) + PLACED ( {} {} ) N ;", p.name, p.name,
-            if p.dir == crate::netlist::Dir::In { "INPUT" } else { "OUTPUT" }, top, -half, -half, half, half, u(x), u(y)).unwrap();
+            if p.dir == crate::netlist::Dir::In { "INPUT" } else { "OUTPUT" }, top, x0, y0, x1, y1, u(x), u(y)).unwrap();
     }
     writeln!(s, "END PINS").unwrap();
     // power: rails on the row boundaries, straps on the top layer, via stacks

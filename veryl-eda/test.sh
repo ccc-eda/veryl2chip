@@ -32,6 +32,9 @@ sync_ram:SyncRam:bmc4 bram_tests:Bram2048x2:bmc4 bram_tests:BramMix:bmc12
 lang:Div:comb lang:HsTop:bmc24 lang:Wide:comb
 fifo:Fifo:bmc6 uart:UartLoop:bmc24 vga:VgaTiming:bmc8 vga:VgaDemo:bmc8 sevenseg:SevenSeg:bmc8 gates:Gates:comb
 button_counter:ButtonCounter:bmc8 traffic:TrafficLight:bmc8 rvsoc_small:RvSocSmall:bmc6"
+# a Python with KLayout's module (pip install klayout) checks the SKY130 GDS files
+GDS_PY=${GDS_PY:-}
+[ -z "$GDS_PY" ] && python3 -c "import klayout.db" 2>/dev/null && GDS_PY=python3
 # SKY130 has no SRAM macros yet: memories become flip-flops; these get only the
 # mapping (the formal check), not the whole flow, and the biggest no gate-level simulation
 SKY130_MAP_ONLY=" Bram2048x2 BramMix SyncRam Fifo RvSocSmall RiscvCore RegFile RiscvSoc "
@@ -53,7 +56,15 @@ for d in $DESIGNS; do
     # SKY130: the netlist without veryl-eda's cell models (the formal check reads the Liberty file instead)
     # SKY130: the whole flow on the smaller designs, the mapping alone on the big memories (flip-flops here)
     if [[ "$SKY130_MAP_ONLY" == *" $m "* ]]; then sky_opt=--map-only; else sky_opt=; fi
-    "$BIN" --asic --pdk sky130 $sky_opt --top "$m" --verilog "$OUT/${m}_sky130.v" $files | grep -E "^timing" | sed 's/^/  sky130 /' || true
+    if [ -z "$sky_opt" ] && [ -n "$GDS_PY" ]; then sky_opt="--gds $OUT/${m}.gds"; fi
+    "$BIN" --asic --pdk sky130 $sky_opt --top "$m" --verilog "$OUT/${m}_sky130.v" $files > "$OUT/${m}_sky130.log"
+    grep -E "^timing" "$OUT/${m}_sky130.log" | sed 's/^/  sky130 /' || true
+    grep -qE "DRC .* 0 shorts, 0 spacing, 0 min-area, 0 opens" "$OUT/${m}_sky130.log" || { grep -q "^asic: DRC" "$OUT/${m}_sky130.log" && { echo "  sky130 DRC FAILED: $(grep '^asic: DRC' "$OUT/${m}_sky130.log")"; fail=1; }; }
+    # the GDS read back with KLayout: cells, shapes, labels, row overlaps, KLayout's own width / spacing checks
+    if [ -f "$OUT/${m}.gds" ]; then
+        set -- $(sed -nE 's/^wrote .*: ([0-9]+) cell instances, ([0-9]+) shapes, ([0-9]+) labels.*/\1 \2 \3/p' "$OUT/${m}_sky130.log")
+        "$GDS_PY" "$ROOT/../tools/gds_check.py" "$OUT/${m}.gds" "$m" "$1" "$2" "$3" | sed 's/^/  /' || { echo "  GDS check FAILED"; fail=1; }
+    fi
     sed -i.bak '/behavioural models from the Liberty functions/,$d' "$OUT/${m}_sky130.v" && rm -f "$OUT/${m}_sky130.v.bak"
     [[ " $FPGA_EQ " == *" $m "* ]] && "$BIN" --ice40 --top "$m" -o "$OUT/${m}_ice40.json" $files | grep -E "SB_RAM40_4K" 
 done

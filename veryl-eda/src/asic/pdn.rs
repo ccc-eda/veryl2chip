@@ -84,6 +84,8 @@ pub fn insert_taps(nl: &Netlist, pl: &mut RowPlacement) -> Vec<(u32, u32)> {
         let mut x = if r % 2 == 1 { pitch / 2 } else { pitch / 4 };
         while x < n { ideal.push(x); x += pitch; }
         if ideal.last().map(|l| n - 1 - l > pitch / 2) == Some(true) { ideal.push(n - 1 - tw); }
+        // a short row: one in the middle
+        if ideal.is_empty() { ideal.push(n / 2); }
         for x in ideal {
             let used = |s: i64, row: &Vec<(i64, i64, usize)>, taps: &Vec<i64>| row.iter().any(|c| s >= c.0 && s < c.0 + c.1) || taps.iter().any(|t| s >= *t && s < t + tw);
             let fits = |s: i64, row: &Vec<(i64, i64, usize)>, taps: &Vec<i64>| s >= 0 && s + tw <= n && (s..s + tw).all(|q| !used(q, row, taps));

@@ -8,7 +8,7 @@ fn usage() -> ! {
     eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc; PROG.s: assemble)");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
-    eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [-v]] [--gatesim opt|ice40|asic|sky130]");
+    eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [--gds OUT.gds] [-v]] [--gatesim opt|ice40|asic|sky130]");
     eprintln!("                 FILE.veryl...");
     eprintln!("       veryl-eda --pdk-check [DIR]   (read a SKY130 Liberty + LEF directory, check the cell bindings)");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
@@ -19,7 +19,8 @@ fn usage() -> ! {
     eprintln!("  program memory (*.b0.mem .. *.b3.mem, e.g. RvBoard in examples/src/rvsoc.veryl).");
     eprintln!("  --asic maps to standard cells (vlib, or SkyWater SKY130 sky130_fd_sc_hd with --pdk sky130),");
     eprintln!("  places rows, routes and times them; --verilog / --def write the library's names;");
-    eprintln!("  --map-only stops after the technology mapping (a netlist for --verilog).");
+    eprintln!("  --map-only stops after the technology mapping (a netlist for --verilog);");
+    eprintln!("  --gds OUT.gds writes the layout (SKY130: the PDK's cells + routing) as GDSII.");
     eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
     eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
     std::process::exit(2);
@@ -102,6 +103,7 @@ fn main() {
     let mut pdk_name = "vlib".to_string();
     let mut def_out: Option<String> = None;
     let mut map_only = false;
+    let mut gds_out: Option<String> = None;
     let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
     let mut program: Option<String> = None;
@@ -118,6 +120,7 @@ fn main() {
             "--pdk" => pdk_name = a.next().unwrap_or_else(|| usage()),
             "--def" => def_out = a.next(),
             "--map-only" => map_only = true,
+            "--gds" => gds_out = a.next(),
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "--no-timing-driven" => timing_driven = false,
             "--pcf" => pcf = a.next(),
@@ -290,6 +293,13 @@ fn main() {
             if !st.success() { eprintln!("icepack failed"); std::process::exit(1); }
             println!("wrote {}", b);
         }
+    }
+    if let (Some(p), Some(o)) = (&gds_out, &asic_out) {
+        if tech.is_vlib() { eprintln!("--gds needs a PDK with cell layouts (--pdk sky130)"); std::process::exit(2); }
+        let l = asic::layout::build(o).unwrap_or_else(|e| { eprintln!("layout: {}", e); std::process::exit(1) });
+        let g = asic::gds::write(&l, &o.mapped.name, veryl_eda::pdk::SKY130_GDS).unwrap_or_else(|e| { eprintln!("GDS: {}", e); std::process::exit(1) });
+        std::fs::write(p, &g).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
+        println!("wrote {} ({} bytes: {} cell instances, {} shapes, {} labels)", p, g.len(), l.insts.len(), l.shapes.len(), l.labels.len());
     }
     if let (Some(p), Some(o)) = (&def_out, &asic_out) {
         std::fs::write(p, asic::def(o)).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
