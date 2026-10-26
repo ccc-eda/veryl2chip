@@ -1,6 +1,8 @@
 # veryl2chip
 **English** | [繁體中文](README.tw.md) | [简体中文](README.cn.md)
 
+**Try it online** (no install): [demo page](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html)
+
 An EDA for Veryl HDL: simulation, logic synthesis, an FPGA flow (iCE40UP5K, down to a
 bitstream) and an ASIC flow (standard cells, placement, routing, timing), all written in Rust.
 

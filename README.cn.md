@@ -1,6 +1,8 @@
 # veryl2chip
 [English](README.md) | [繁體中文](README.tw.md) | **简体中文**
 
+**在线直接使用**（免安装）：[展示页](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [IDE](https://ccc-eda.github.io/veryl2chip/web/dist/ide.html)
+
 Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一直到比特流）与 ASIC 流程
 （标准单元、布局、布线、时序分析），全部用 Rust 编写。
 
