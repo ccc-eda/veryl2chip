@@ -68,7 +68,8 @@ else
 fi
 
 if $REAL; then
-    tag="v$EDA_VER"
+    # tags follow the repository's vX.Y style: 1.1.0 -> v1.1, 1.1.2 -> v1.1.2
+    tag="v${EDA_VER%.0}"
     if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
         echo "== tag $tag already exists"
     else
