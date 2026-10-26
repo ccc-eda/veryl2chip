@@ -49,6 +49,26 @@ module VgaTiming #(
     assign o_rgb = if o_video ? x[9:7] ^ {2'b0, x[6]} : 3'd0;
 }
 
+// 接到 VGA 螢幕的頂層：只有同步訊號和顏色（FPGA 的腳位有限）
+module VgaDemo (
+    i_clk  : input  clock   ,
+    i_rst  : input  reset   ,
+    o_hsync: output logic   ,
+    o_vsync: output logic   ,
+    o_rgb  : output logic<3>,
+) {
+    inst vga: VgaTiming (
+        i_clk  : i_clk  ,
+        i_rst  : i_rst  ,
+        o_hsync: o_hsync,
+        o_vsync: o_vsync,
+        o_video: _      ,
+        o_x    : _      ,
+        o_y    : _      ,
+        o_rgb  : o_rgb  ,
+    );
+}
+
 // 縮小版畫面（16×8，總共 24×12）以便快速模擬；合成時用預設的 640×480
 #[test(vga_test)]
 module TestVga {

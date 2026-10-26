@@ -18,6 +18,8 @@ export interface Example {
   title_en?: string;
   note_en?: string;
   group_en?: string;
+  /** what is plugged into the virtual board */
+  board?: import('./ide/board').BoardSetup;
 }
 
 declare const VERYL_EXAMPLES: Example[];

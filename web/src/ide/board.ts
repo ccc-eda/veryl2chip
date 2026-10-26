@@ -16,7 +16,23 @@ interface LoadInfo {
   fmax?: number;
   bin?: string;
 }
-interface RunResult { cycle: number; duty: [number, number][]; evals: number }
+interface RunResult {
+  cycle: number; window: number; duty: [number, number][]; evals: number;
+  segs: number[][][]; edges: [number, number][];
+  uart: { rx: number[]; errors: number; pending: number } | null;
+  vga: { n: number; w?: number; h?: number; rle?: string } | null;
+}
+
+/** what is plugged into the board: the USB terminal and a module on each PMOD */
+export interface BoardSetup { uart: boolean; baud: number; pmod1a: string; pmod1b: string }
+export const DEFAULT_SETUP: BoardSetup = { uart: false, baud: 115200, pmod1a: '', pmod1b: '' };
+
+/** PMOD pins 1-4, 7-10 */
+const SLOT: Record<string, number[]> = { pmod1a: [4, 2, 47, 45, 3, 48, 46, 44], pmod1b: [43, 38, 34, 31, 42, 36, 32, 28] };
+const MODULES: [string, string, string][] = [
+  ['', '—', '—'], ['led8', '8 顆 LED', '8 LEDs'], ['sw8', '8 個開關', '8 switches'], ['seg7', '七段顯示器（2 位）', '7-segment (2 digits)'],
+  ['vga', 'VGA 螢幕（佔 1A+1B）', 'VGA monitor (1A+1B)'], ['buzzer', '蜂鳴器（腳 1）', 'buzzer (pin 1)'],
+];
 
 /** board drawing coordinates of each pin's part */
 const PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
@@ -53,7 +69,18 @@ export class VirtualBoard {
         <select data-a="pace" title="${tr('速度', 'Speed')}"><option value="rt">${tr('不超過即時', 'up to real time')}</option><option value="max">${tr('最快', 'fastest')}</option></select>
         <span class="vb-stat"></span>
       </div>
-      <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+      <div class="vb-bar vb-bar2">
+        <label class="vb-chk"><input type="checkbox" data-a="uart"> ${tr('🖥 USB 終端機', '🖥 USB terminal')}</label>
+        <select data-a="baud" title="${tr('鮑率（每位元時脈數 = 12 MHz ÷ 鮑率）', 'Baud rate (clocks per bit = 12 MHz / baud)')}">
+          ${[115200, 57600, 19200, 9600].map(b => `<option value="${b}">${b}</option>`).join('')}<option value="-8">${tr('每位元 8 拍（測試用）', '8 clocks per bit (tests)')}</option></select>
+        <span class="vb-sep">│</span>
+        <label class="vb-chk">PMOD1A <select data-a="pmod1a">${MODULES.map(m => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join('')}</select></label>
+        <label class="vb-chk">PMOD1B <select data-a="pmod1b">${MODULES.filter(m => m[0] !== 'vga').map(m => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join('')}</select></label>
+      </div>
+      <div class="vb-main">
+        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+        <div class="vb-cards"></div>
+      </div>
       <div class="vb-foot"></div>`;
     this.svg.innerHTML = this.drawing();
     this.q('[data-a=run]').onclick = () => this.setRunning(!this.running);
@@ -62,6 +89,7 @@ export class VirtualBoard {
     this.q('[data-a=upload]').onclick = () => this.q<HTMLInputElement>('[data-a=file]').click();
     this.q<HTMLInputElement>('[data-a=file]').onchange = e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) this.loadBin(f); (e.target as HTMLInputElement).value = ''; };
     this.q('[data-a=download]').onclick = () => this.download();
+    for (const k of ['uart', 'baud', 'pmod1a', 'pmod1b']) this.q(`[data-a=${k}]`).addEventListener('change', () => this.setupFromUi());
     host.addEventListener('dragover', e => { e.preventDefault(); host.classList.add('drop'); });
     host.addEventListener('dragleave', () => host.classList.remove('drop'));
     host.addEventListener('drop', e => { e.preventDefault(); host.classList.remove('drop'); const f = e.dataTransfer?.files?.[0]; if (f) this.loadBin(f); });
@@ -80,6 +108,125 @@ export class VirtualBoard {
     host.tabIndex = 0;
     host.addEventListener('keydown', e => { const p = KEYS[e.key]; if (p !== undefined && !e.repeat) { this.press(p, true); e.preventDefault(); } });
     host.addEventListener('keyup', e => { const p = KEYS[e.key]; if (p !== undefined && !this.latched.has(p)) this.press(p, false); });
+  }
+
+  private setup: BoardSetup = { ...DEFAULT_SETUP };
+  private vgaSeen = 0;
+  private term = '';
+  private sendQ = '';
+  private audio: { ctx: AudioContext; osc: OscillatorNode; gain: GainNode } | null = null;
+  private switches = new Map<number, boolean>();
+  /** called when the user changes what is plugged in (the IDE saves it with the project) */
+  onSetup: (s: BoardSetup) => void = () => {};
+
+  /** plug in modules and the terminal (from the project, or an example's defaults) */
+  setSetup(s: BoardSetup): void {
+    this.setup = { ...DEFAULT_SETUP, ...s };
+    if (this.setup.pmod1a === 'vga') this.setup.pmod1b = '';
+    this.q<HTMLInputElement>('[data-a=uart]').checked = this.setup.uart;
+    this.q<HTMLSelectElement>('[data-a=baud]').value = String(this.setup.baud);
+    this.q<HTMLSelectElement>('[data-a=pmod1a]').value = this.setup.pmod1a;
+    this.q<HTMLSelectElement>('[data-a=pmod1b]').value = this.setup.pmod1b;
+    this.q<HTMLSelectElement>('[data-a=pmod1b]').disabled = this.setup.pmod1a === 'vga';
+    this.cards();
+    if (this.info) this.attach();
+  }
+
+  private setupFromUi(): void {
+    const s: BoardSetup = {
+      uart: this.q<HTMLInputElement>('[data-a=uart]').checked,
+      baud: +this.q<HTMLSelectElement>('[data-a=baud]').value,
+      pmod1a: this.q<HTMLSelectElement>('[data-a=pmod1a]').value,
+      pmod1b: this.q<HTMLSelectElement>('[data-a=pmod1b]').value,
+    };
+    this.setSetup(s);
+    this.onSetup(this.setup);
+  }
+
+  /** the peripheral configuration for the core */
+  private periph(): object {
+    const s = this.setup;
+    const seg = (pins: number[]) => ({ segs: [...pins.slice(0, 7), null], sels: [[pins[7], 0], [pins[7], 1]], on: 1 });
+    const segs = (['pmod1a', 'pmod1b'] as const).filter(k => s[k] === 'seg7').map(k => seg(SLOT[k]));
+    const a = SLOT.pmod1a, b = SLOT.pmod1b;
+    return {
+      uart: s.uart ? { tx: 9, rx: 6, cpb: s.baud < 0 ? -s.baud : 12e6 / s.baud } : null,
+      seg: segs,
+      // PmodVGA: 1A pins 1-4 R0-R3, 7-10 B0-B3; 1B pins 1-4 G0-G3, 7 HS, 8 VS (colors msb first)
+      vga: s.pmod1a === 'vga' ? { hs: b[4], vs: b[5], r: [a[3], a[2], a[1], a[0]], g: [b[3], b[2], b[1], b[0]], b: [a[7], a[6], a[5], a[4]] } : null,
+    };
+  }
+
+  private async attach(): Promise<void> {
+    await (await this.core()).call({ cmd: 'board_periph', ...this.periph() });
+    this.vgaSeen = 0;
+    // switches drive their pins as they stand
+    for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
+  }
+
+  /** the cards of the plugged-in modules */
+  private cards(): void {
+    const box = this.q<HTMLElement>('.vb-cards');
+    let h = '';
+    const s = this.setup;
+    if (s.uart) h += `<div class="vb-card vb-term"><div class="vb-card-h">${tr('USB 終端機', 'USB terminal')}　<span class="vb-dim">TX ${tr('腳', 'pin')} 9 → ${tr('電腦', 'PC')}，RX ${tr('腳', 'pin')} 6 ← ${tr('電腦', 'PC')}</span><span class="vb-err"></span><button class="icon" data-a="tclear" title="${tr('清除', 'Clear')}">⌫</button></div>`
+      + `<pre class="vb-tout"></pre><input class="vb-tin" placeholder="${tr('輸入文字，Enter 送出', 'Type, Enter to send')}"></div>`;
+    for (const k of ['pmod1a', 'pmod1b'] as const) {
+      const m = s[k], pins = SLOT[k], name = k === 'pmod1a' ? 'PMOD1A' : 'PMOD1B';
+      if (!m) continue;
+      if (m === 'led8') h += `<div class="vb-card"><div class="vb-card-h">${name}：${tr('8 顆 LED', '8 LEDs')}</div><div class="vb-led8">${pins.map((p, i) => `<span class="vb-l8" data-l8="${p}" title="${tr('腳', 'pin')} ${p}">${i}</span>`).join('')}</div></div>`;
+      if (m === 'sw8') h += `<div class="vb-card"><div class="vb-card-h">${name}：${tr('8 個開關（點一下切換）', '8 switches (click to flip)')}</div><div class="vb-sw8">${pins.map((p, i) => `<button class="vb-sw" data-sw="${p}" title="${tr('腳', 'pin')} ${p}">${i}</button>`).join('')}</div></div>`;
+      if (m === 'seg7') h += `<div class="vb-card"><div class="vb-card-h">${name}：${tr('七段顯示器', '7-segment display')}　<span class="vb-dim">${tr('腳 1–4、7–9 = a–g，腳 10 = 選位', 'pins 1–4, 7–9 = a–g, pin 10 = digit')}</span></div><svg class="vb-seg" viewBox="0 0 150 110" data-seg="${k}">${[1, 0].map((d, i) => this.digit(8 + i * 70, 8, d)).join('')}</svg></div>`;
+      if (m === 'vga') h += `<div class="vb-card"><div class="vb-card-h">${tr('VGA 螢幕', 'VGA monitor')}　<span class="vb-dim vb-vga-i"></span></div><canvas class="vb-vga" width="320" height="240"></canvas></div>`;
+      if (m === 'buzzer') h += `<div class="vb-card"><div class="vb-card-h">${name}：${tr('蜂鳴器（腳 1）', 'buzzer (pin 1)')}　<label class="vb-chk"><input type="checkbox" data-a="sound"> ${tr('🔊 聲音', '🔊 sound')}</label></div><div class="vb-buzz" data-buzz="${pins[0]}">—</div></div>`;
+    }
+    box.innerHTML = h;
+    box.classList.toggle('hidden', !h);
+    const tin = box.querySelector<HTMLInputElement>('.vb-tin');
+    if (tin) tin.onkeydown = e => { if (e.key === 'Enter') { this.sendQ += tin.value; this.echoLocal(tin.value); tin.value = ''; if (!this.running) this.tick(0); } };
+    const tc = box.querySelector<HTMLButtonElement>('[data-a=tclear]');
+    if (tc) tc.onclick = () => { this.term = ''; this.showTerm(); };
+    this.showTerm();
+    for (const b of box.querySelectorAll<HTMLButtonElement>('[data-sw]')) {
+      const pin = +b.dataset.sw!;
+      b.classList.toggle('on', !!this.switches.get(pin));
+      b.onclick = () => { const on = !this.switches.get(pin); this.switches.set(pin, on); b.classList.toggle('on', on); this.pending.push([pin, on ? 1 : 0]); if (!this.running) this.tick(0); };
+    }
+    const snd = box.querySelector<HTMLInputElement>('[data-a=sound]');
+    if (snd) { snd.checked = !!this.audio; snd.onchange = () => this.sound(snd.checked); }
+  }
+
+  /** a seven-segment digit: segments a..g + dp as paths tagged data-s */
+  private digit(x: number, y: number, d: number): string {
+    const H = (sx: number, sy: number) => `M${x + sx + 6} ${y + sy} h28 l5 5 l-5 5 h-28 l-5 -5 z`;
+    const V = (sx: number, sy: number) => `M${x + sx} ${y + sy + 6} l5 -5 l5 5 v30 l-5 5 l-5 -5 z`;
+    const segs = [H(0, 0), V(38, 4), V(38, 46), H(0, 84), V(-6, 46), V(-6, 4), H(0, 42)];
+    return segs.map((p, k) => `<path d="${p}" class="vb-s" data-d="${d}" data-s="${k}"/>`).join('') + `<circle cx="${x + 50}" cy="${y + 92}" r="4" class="vb-s" data-d="${d}" data-s="7"/>`;
+  }
+
+  private echoLocal(_t: string): void { /* the terminal shows what the FPGA sends, not what is typed (no local echo) */ }
+
+  private showTerm(): void {
+    const o = this.host.querySelector<HTMLElement>('.vb-tout');
+    if (!o) return;
+    o.textContent = this.term;
+    o.scrollTop = o.scrollHeight;
+  }
+
+  private sound(on: boolean): void {
+    if (on && !this.audio) {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      gain.gain.value = 0;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      this.audio = { ctx, osc, gain };
+    } else if (!on && this.audio) {
+      this.audio.ctx.close();
+      this.audio = null;
+    }
   }
 
   /** the flash button (the IDE hooks it up) */
@@ -161,7 +308,9 @@ export class VirtualBoard {
     this.q('[data-a=run]').disabled = false;
     this.q('[data-a=power]').disabled = false;
     this.q('[data-a=download]').classList.toggle('hidden', !info.bin);
-    this.setRunning(true);
+    this.term = '';
+    this.cards();
+    this.attach().then(() => this.setRunning(true));
   }
 
   private async power(): Promise<void> {
@@ -169,6 +318,8 @@ export class VirtualBoard {
     const was = this.running;
     this.setRunning(false);
     await (await this.core()).call({ cmd: 'board_reset' });
+    this.vgaSeen = 0;
+    for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
     this.lastCycle = 0;
     this.speed = { t: performance.now(), c: 0, rate: 0 };
     for (const p of this.latched) this.press(p, true);
@@ -202,9 +353,12 @@ export class VirtualBoard {
     const t0 = performance.now();
     const inputs = this.pending;
     this.pending = [];
+    const uart_send = this.sendQ;
+    this.sendQ = '';
+    const wantFrame = this.setup.pmod1a === 'vga' && performance.now() - this.lastFrame > 150;
     let r: RunResult;
     try {
-      r = await (await this.core()).call<RunResult>({ cmd: 'board_run', cycles: n, inputs });
+      r = await (await this.core()).call<RunResult>({ cmd: 'board_run', cycles: n, inputs, uart_send, ...(wantFrame ? { vga_seen: this.vgaSeen } : {}) });
     } catch (e) {
       this.stat('✗ ' + String((e as Error).message ?? e));
       this.setRunning(false);
@@ -231,8 +385,11 @@ export class VirtualBoard {
     this.loop = window.setTimeout(() => this.tick(next), wait);
   }
 
+  private lastFrame = 0;
+
   /** LED brightness and pin levels from the duty cycles */
   private show(r: RunResult): void {
+    this.showPeriph(r);
     for (const [pin, duty] of r.duty) {
       const p = this.info!.pins.find(x => x.pin === pin);
       if (!p) continue;
@@ -240,6 +397,69 @@ export class VirtualBoard {
       for (const el of this.svg.querySelectorAll<SVGElement>(`[data-led="${pin}"]`)) el.style.opacity = (lit < 0.004 ? 0 : 0.18 + 0.82 * Math.sqrt(lit)).toFixed(3);
       for (const el of this.svg.querySelectorAll<SVGElement>(`[data-hdr="${pin}"]`)) el.style.fill = `rgba(255, 210, 80, ${(0.15 + 0.85 * duty).toFixed(3)})`;
     }
+  }
+
+  private showPeriph(r: RunResult): void {
+    const duty = new Map(r.duty);
+    for (const el of this.host.querySelectorAll<HTMLElement>('[data-l8]')) {
+      const d = duty.get(+el.dataset.l8!);
+      el.style.setProperty('--lit', d === undefined ? '0' : (d < 0.004 ? 0 : 0.2 + 0.8 * Math.sqrt(d)).toFixed(3));
+      el.classList.toggle('nc', d === undefined);
+    }
+    // seven-segment: a segment's brightness relative to one digit's share of the time
+    let si = 0;
+    for (const svg of this.host.querySelectorAll<SVGSVGElement>('[data-seg]')) {
+      const disp = r.segs[si++];
+      if (!disp) continue;
+      for (const el of svg.querySelectorAll<SVGElement>('.vb-s')) {
+        const v = disp[+el.dataset.d!]?.[+el.dataset.s!] ?? 0;
+        el.style.opacity = (v * disp.length < 0.01 ? 0.08 : 0.25 + 0.75 * Math.min(1, Math.sqrt(v * disp.length))).toFixed(3);
+      }
+    }
+    if (r.uart) {
+      if (r.uart.rx.length) {
+        for (const b of r.uart.rx) { if (b === 13) continue; this.term += b === 10 || b >= 32 ? String.fromCharCode(b) : `\\x${b.toString(16).padStart(2, '0')}`; }
+        if (this.term.length > 20000) this.term = this.term.slice(-15000);
+        this.showTerm();
+      }
+      const e = this.host.querySelector<HTMLElement>('.vb-err');
+      if (e) e.textContent = r.uart.errors ? `　⚠ ${r.uart.errors} ${tr('個格式錯誤（鮑率對嗎？）', 'framing errors (right baud rate?)')}` : '';
+    }
+    if (r.vga?.rle && r.vga.w && r.vga.h) {
+      this.vgaSeen = r.vga.n;
+      this.lastFrame = performance.now();
+      this.drawFrame(r.vga.w, r.vga.h, r.vga.rle);
+    }
+    const vi = this.host.querySelector<HTMLElement>('.vb-vga-i');
+    if (vi && r.vga) vi.textContent = r.vga.n ? `${tr('畫面', 'frames')} ${r.vga.n}` : tr('等待 VSYNC…', 'waiting for VSYNC…');
+    // buzzer: toggles per virtual second
+    const bz = this.host.querySelector<HTMLElement>('[data-buzz]');
+    if (bz && r.window > 0) {
+      const edges = new Map(r.edges).get(+bz.dataset.buzz!) ?? 0;
+      const hz = edges / 2 / (r.window / this.info!.clock_hz);
+      bz.textContent = hz >= 1 ? `${hz < 1000 ? hz.toFixed(1) : (hz / 1000).toFixed(2) + ' k'}Hz` : tr('（安靜）', '(silent)');
+      if (this.audio) {
+        const on = hz >= 20 && hz <= 20000;
+        this.audio.gain.gain.setTargetAtTime(on ? 0.05 : 0, this.audio.ctx.currentTime, 0.01);
+        if (on) this.audio.osc.frequency.setTargetAtTime(hz, this.audio.ctx.currentTime, 0.01);
+      }
+    }
+  }
+
+  private drawFrame(w: number, h: number, rle: string): void {
+    const c = this.host.querySelector<HTMLCanvasElement>('.vb-vga');
+    if (!c) return;
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const raw = atob(rle);
+    const img = c.getContext('2d')!.createImageData(w, h);
+    let p = 0;
+    for (let i = 0; i + 3 < raw.length; i += 4) {
+      const col = raw.charCodeAt(i) | raw.charCodeAt(i + 1) << 8;
+      const n = raw.charCodeAt(i + 2) | raw.charCodeAt(i + 3) << 8;
+      const [R, G, B] = [((col >> 8) & 15) * 17, ((col >> 4) & 15) * 17, (col & 15) * 17];
+      for (let k = 0; k < n && p < w * h; k++, p++) { img.data[p * 4] = R; img.data[p * 4 + 1] = G; img.data[p * 4 + 2] = B; img.data[p * 4 + 3] = 255; }
+    }
+    c.getContext('2d')!.putImageData(img, 0, 0);
   }
 
   private stat(text?: string): void {
@@ -277,7 +497,7 @@ export class VirtualBoard {
     this.q<HTMLElement>('.vb-foot').innerHTML = `<b>${esc(i.top)}</b>　${what}`
       + `　${i.default_pcf ? tr('（專案沒有腳位檔：使用教學的 iCEBreaker 預設腳位）', '(no pin file in the project: the tutorial\'s iCEBreaker pins)') : ''}`
       + `<br>${tr('接線', 'Wiring')}：${esc(used.join('　')) || '—'}`
-      + (i.warnings.length ? `<br><span class="vb-warn">⚠ ${esc(i.warnings.join('；'))}</span>` : '')
+      + (i.warnings.length ? `<br><span class="vb-warn">⚠ ${esc(i.warnings.slice(0, 3).join('；'))}${i.warnings.length > 3 ? tr(`…（共 ${i.warnings.length} 條，見「問題」面板）`, `… (${i.warnings.length} in all, see Problems)`) : ''}</span>` : '')
       + `<br><span class="vb-hint">${tr('按住按鈕（或按鍵 0 = BTN_N、1–3 = BTN1–3）；Shift+點擊可以鎖住按鈕。位元流模式模擬的是佈局繞線後真正會燒進晶片的位元流（解碼回電路、逐週期模擬），速度依設計大小而定；可以把任何 .bin 拖放到板子上。板子的圖是示意圖。', 'Hold a button (or keys 0 = BTN_N, 1–3 = BTN1–3); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.')}</span>`;
   }
 

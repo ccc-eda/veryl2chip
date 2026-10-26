@@ -1,0 +1,10 @@
+# VgaTiming on an iCEBreaker with a PmodVGA-style module on PMOD1A + PMOD1B:
+# PMOD1A pins 1-4 = R0-R3, 7-10 = B0-B3; PMOD1B pins 1-4 = G0-G3, 7 = HS, 8 = VS.
+# The design's 3-bit color drives the top bit of each channel.
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn o_rgb[2] 45
+set_io -nowarn o_rgb[0] 44
+set_io -nowarn o_rgb[1] 31
+set_io -nowarn o_hsync  42
+set_io -nowarn o_vsync  36

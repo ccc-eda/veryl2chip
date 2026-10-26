@@ -177,6 +177,9 @@
     "\u5373\u6642": "\u5B9E\u65F6",
     "\u5C55\u793A\u7248": "\u6F14\u793A\u7248",
     "\u5408\u6210": "\u7EFC\u5408",
+    "\u87A2\u5E55": "\u663E\u793A\u5668",
+    "\u9B91\u7387": "\u6CE2\u7279\u7387",
+    "\u9B91": "\u6CE2\u7279",
     "\u532F": "\u6C47",
     "\u54C1\u8CEA": "\u8D28\u91CF",
     "\u7269\u4EF6": "\u5BF9\u8C61",
@@ -185,6 +188,13 @@
     "\u5217\u5F0F": "\u884C\u5F0F"
   };
   var HANS_CHARS = {
+    "\u55CE": "\u5417",
+    "\u8072": "\u58F0",
+    "\u87A2": "\u8424",
+    "\u898B": "\u89C1",
+    "\u9B91": "\u9C8D",
+    "\u9CF4": "\u9E23",
+    "\u9EBC": "\u4E48",
     "\u5B78": "\u5B66",
     "\u64CA": "\u51FB",
     "\u7E7C": "\u7EE7",
@@ -2711,6 +2721,16 @@ target = { type = "directory", path = "target" }
   }
 
   // src/ide/board.ts
+  var DEFAULT_SETUP = { uart: false, baud: 115200, pmod1a: "", pmod1b: "" };
+  var SLOT = { pmod1a: [4, 2, 47, 45, 3, 48, 46, 44], pmod1b: [43, 38, 34, 31, 42, 36, 32, 28] };
+  var MODULES = [
+    ["", "\u2014", "\u2014"],
+    ["led8", "8 \u9846 LED", "8 LEDs"],
+    ["sw8", "8 \u500B\u958B\u95DC", "8 switches"],
+    ["seg7", "\u4E03\u6BB5\u986F\u793A\u5668\uFF082 \u4F4D\uFF09", "7-segment (2 digits)"],
+    ["vga", "VGA \u87A2\u5E55\uFF08\u4F54 1A+1B\uFF09", "VGA monitor (1A+1B)"],
+    ["buzzer", "\u8702\u9CF4\u5668\uFF08\u8173 1\uFF09", "buzzer (pin 1)"]
+  ];
   var PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
   var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
   var PMOD2 = [27, 25, 21, 19, 26, 23, 20, 18];
@@ -2731,9 +2751,19 @@ target = { type = "directory", path = "target" }
       __publicField(this, "lastCycle", 0);
       __publicField(this, "speed", { t: 0, c: 0, rate: 0 });
       __publicField(this, "gen", 0);
+      __publicField(this, "setup", { ...DEFAULT_SETUP });
+      __publicField(this, "vgaSeen", 0);
+      __publicField(this, "term", "");
+      __publicField(this, "sendQ", "");
+      __publicField(this, "audio", null);
+      __publicField(this, "switches", /* @__PURE__ */ new Map());
+      /** called when the user changes what is plugged in (the IDE saves it with the project) */
+      __publicField(this, "onSetup", () => {
+      });
       /** called after an uploaded bitstream is on the board (the IDE shows its warnings) */
       __publicField(this, "onLoaded", () => {
       });
+      __publicField(this, "lastFrame", 0);
       host.innerHTML = `<div class="vb-bar">
         <button class="tb-btn" data-a="flash" title="${tr("\u5408\u6210\u76EE\u524D\u7684\u8A2D\u8A08\u4E26\u71D2\u9304\u5230\u865B\u64EC\u677F", "Synthesize the current design and flash it to the virtual board")}">${tr("\u26A1 \u71D2\u9304", "\u26A1 Flash")}</button>
         <button class="tb-btn" data-a="run" disabled>\u23F8</button>
@@ -2746,7 +2776,18 @@ target = { type = "directory", path = "target" }
         <select data-a="pace" title="${tr("\u901F\u5EA6", "Speed")}"><option value="rt">${tr("\u4E0D\u8D85\u904E\u5373\u6642", "up to real time")}</option><option value="max">${tr("\u6700\u5FEB", "fastest")}</option></select>
         <span class="vb-stat"></span>
       </div>
-      <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+      <div class="vb-bar vb-bar2">
+        <label class="vb-chk"><input type="checkbox" data-a="uart"> ${tr("\u{1F5A5} USB \u7D42\u7AEF\u6A5F", "\u{1F5A5} USB terminal")}</label>
+        <select data-a="baud" title="${tr("\u9B91\u7387\uFF08\u6BCF\u4F4D\u5143\u6642\u8108\u6578 = 12 MHz \xF7 \u9B91\u7387\uFF09", "Baud rate (clocks per bit = 12 MHz / baud)")}">
+          ${[115200, 57600, 19200, 9600].map((b) => `<option value="${b}">${b}</option>`).join("")}<option value="-8">${tr("\u6BCF\u4F4D\u5143 8 \u62CD\uFF08\u6E2C\u8A66\u7528\uFF09", "8 clocks per bit (tests)")}</option></select>
+        <span class="vb-sep">\u2502</span>
+        <label class="vb-chk">PMOD1A <select data-a="pmod1a">${MODULES.map((m) => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join("")}</select></label>
+        <label class="vb-chk">PMOD1B <select data-a="pmod1b">${MODULES.filter((m) => m[0] !== "vga").map((m) => `<option value="${m[0]}">${tr(m[1], m[2])}</option>`).join("")}</select></label>
+      </div>
+      <div class="vb-main">
+        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg></div>
+        <div class="vb-cards"></div>
+      </div>
       <div class="vb-foot"></div>`;
       this.svg.innerHTML = this.drawing();
       this.q("[data-a=run]").onclick = () => this.setRunning(!this.running);
@@ -2761,6 +2802,7 @@ target = { type = "directory", path = "target" }
         e.target.value = "";
       };
       this.q("[data-a=download]").onclick = () => this.download();
+      for (const k of ["uart", "baud", "pmod1a", "pmod1b"]) this.q(`[data-a=${k}]`).addEventListener("change", () => this.setupFromUi());
       host.addEventListener("dragover", (e) => {
         e.preventDefault();
         host.classList.add("drop");
@@ -2802,6 +2844,125 @@ target = { type = "directory", path = "target" }
         const p = KEYS[e.key];
         if (p !== void 0 && !this.latched.has(p)) this.press(p, false);
       });
+    }
+    /** plug in modules and the terminal (from the project, or an example's defaults) */
+    setSetup(s) {
+      this.setup = { ...DEFAULT_SETUP, ...s };
+      if (this.setup.pmod1a === "vga") this.setup.pmod1b = "";
+      this.q("[data-a=uart]").checked = this.setup.uart;
+      this.q("[data-a=baud]").value = String(this.setup.baud);
+      this.q("[data-a=pmod1a]").value = this.setup.pmod1a;
+      this.q("[data-a=pmod1b]").value = this.setup.pmod1b;
+      this.q("[data-a=pmod1b]").disabled = this.setup.pmod1a === "vga";
+      this.cards();
+      if (this.info) this.attach();
+    }
+    setupFromUi() {
+      const s = {
+        uart: this.q("[data-a=uart]").checked,
+        baud: +this.q("[data-a=baud]").value,
+        pmod1a: this.q("[data-a=pmod1a]").value,
+        pmod1b: this.q("[data-a=pmod1b]").value
+      };
+      this.setSetup(s);
+      this.onSetup(this.setup);
+    }
+    /** the peripheral configuration for the core */
+    periph() {
+      const s = this.setup;
+      const seg = (pins) => ({ segs: [...pins.slice(0, 7), null], sels: [[pins[7], 0], [pins[7], 1]], on: 1 });
+      const segs = ["pmod1a", "pmod1b"].filter((k) => s[k] === "seg7").map((k) => seg(SLOT[k]));
+      const a = SLOT.pmod1a, b = SLOT.pmod1b;
+      return {
+        uart: s.uart ? { tx: 9, rx: 6, cpb: s.baud < 0 ? -s.baud : 12e6 / s.baud } : null,
+        seg: segs,
+        // PmodVGA: 1A pins 1-4 R0-R3, 7-10 B0-B3; 1B pins 1-4 G0-G3, 7 HS, 8 VS (colors msb first)
+        vga: s.pmod1a === "vga" ? { hs: b[4], vs: b[5], r: [a[3], a[2], a[1], a[0]], g: [b[3], b[2], b[1], b[0]], b: [a[7], a[6], a[5], a[4]] } : null
+      };
+    }
+    async attach() {
+      await (await this.core()).call({ cmd: "board_periph", ...this.periph() });
+      this.vgaSeen = 0;
+      for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
+    }
+    /** the cards of the plugged-in modules */
+    cards() {
+      const box = this.q(".vb-cards");
+      let h = "";
+      const s = this.setup;
+      if (s.uart) h += `<div class="vb-card vb-term"><div class="vb-card-h">${tr("USB \u7D42\u7AEF\u6A5F", "USB terminal")}\u3000<span class="vb-dim">TX ${tr("\u8173", "pin")} 9 \u2192 ${tr("\u96FB\u8166", "PC")}\uFF0CRX ${tr("\u8173", "pin")} 6 \u2190 ${tr("\u96FB\u8166", "PC")}</span><span class="vb-err"></span><button class="icon" data-a="tclear" title="${tr("\u6E05\u9664", "Clear")}">\u232B</button></div><pre class="vb-tout"></pre><input class="vb-tin" placeholder="${tr("\u8F38\u5165\u6587\u5B57\uFF0CEnter \u9001\u51FA", "Type, Enter to send")}"></div>`;
+      for (const k of ["pmod1a", "pmod1b"]) {
+        const m = s[k], pins = SLOT[k], name = k === "pmod1a" ? "PMOD1A" : "PMOD1B";
+        if (!m) continue;
+        if (m === "led8") h += `<div class="vb-card"><div class="vb-card-h">${name}\uFF1A${tr("8 \u9846 LED", "8 LEDs")}</div><div class="vb-led8">${pins.map((p, i) => `<span class="vb-l8" data-l8="${p}" title="${tr("\u8173", "pin")} ${p}">${i}</span>`).join("")}</div></div>`;
+        if (m === "sw8") h += `<div class="vb-card"><div class="vb-card-h">${name}\uFF1A${tr("8 \u500B\u958B\u95DC\uFF08\u9EDE\u4E00\u4E0B\u5207\u63DB\uFF09", "8 switches (click to flip)")}</div><div class="vb-sw8">${pins.map((p, i) => `<button class="vb-sw" data-sw="${p}" title="${tr("\u8173", "pin")} ${p}">${i}</button>`).join("")}</div></div>`;
+        if (m === "seg7") h += `<div class="vb-card"><div class="vb-card-h">${name}\uFF1A${tr("\u4E03\u6BB5\u986F\u793A\u5668", "7-segment display")}\u3000<span class="vb-dim">${tr("\u8173 1\u20134\u30017\u20139 = a\u2013g\uFF0C\u8173 10 = \u9078\u4F4D", "pins 1\u20134, 7\u20139 = a\u2013g, pin 10 = digit")}</span></div><svg class="vb-seg" viewBox="0 0 150 110" data-seg="${k}">${[1, 0].map((d, i) => this.digit(8 + i * 70, 8, d)).join("")}</svg></div>`;
+        if (m === "vga") h += `<div class="vb-card"><div class="vb-card-h">${tr("VGA \u87A2\u5E55", "VGA monitor")}\u3000<span class="vb-dim vb-vga-i"></span></div><canvas class="vb-vga" width="320" height="240"></canvas></div>`;
+        if (m === "buzzer") h += `<div class="vb-card"><div class="vb-card-h">${name}\uFF1A${tr("\u8702\u9CF4\u5668\uFF08\u8173 1\uFF09", "buzzer (pin 1)")}\u3000<label class="vb-chk"><input type="checkbox" data-a="sound"> ${tr("\u{1F50A} \u8072\u97F3", "\u{1F50A} sound")}</label></div><div class="vb-buzz" data-buzz="${pins[0]}">\u2014</div></div>`;
+      }
+      box.innerHTML = h;
+      box.classList.toggle("hidden", !h);
+      const tin = box.querySelector(".vb-tin");
+      if (tin) tin.onkeydown = (e) => {
+        if (e.key === "Enter") {
+          this.sendQ += tin.value;
+          this.echoLocal(tin.value);
+          tin.value = "";
+          if (!this.running) this.tick(0);
+        }
+      };
+      const tc = box.querySelector("[data-a=tclear]");
+      if (tc) tc.onclick = () => {
+        this.term = "";
+        this.showTerm();
+      };
+      this.showTerm();
+      for (const b of box.querySelectorAll("[data-sw]")) {
+        const pin = +b.dataset.sw;
+        b.classList.toggle("on", !!this.switches.get(pin));
+        b.onclick = () => {
+          const on = !this.switches.get(pin);
+          this.switches.set(pin, on);
+          b.classList.toggle("on", on);
+          this.pending.push([pin, on ? 1 : 0]);
+          if (!this.running) this.tick(0);
+        };
+      }
+      const snd = box.querySelector("[data-a=sound]");
+      if (snd) {
+        snd.checked = !!this.audio;
+        snd.onchange = () => this.sound(snd.checked);
+      }
+    }
+    /** a seven-segment digit: segments a..g + dp as paths tagged data-s */
+    digit(x, y, d) {
+      const H = (sx, sy) => `M${x + sx + 6} ${y + sy} h28 l5 5 l-5 5 h-28 l-5 -5 z`;
+      const V = (sx, sy) => `M${x + sx} ${y + sy + 6} l5 -5 l5 5 v30 l-5 5 l-5 -5 z`;
+      const segs = [H(0, 0), V(38, 4), V(38, 46), H(0, 84), V(-6, 46), V(-6, 4), H(0, 42)];
+      return segs.map((p, k) => `<path d="${p}" class="vb-s" data-d="${d}" data-s="${k}"/>`).join("") + `<circle cx="${x + 50}" cy="${y + 92}" r="4" class="vb-s" data-d="${d}" data-s="7"/>`;
+    }
+    echoLocal(_t) {
+    }
+    showTerm() {
+      const o = this.host.querySelector(".vb-tout");
+      if (!o) return;
+      o.textContent = this.term;
+      o.scrollTop = o.scrollHeight;
+    }
+    sound(on) {
+      if (on && !this.audio) {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "square";
+        gain.gain.value = 0;
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        this.audio = { ctx, osc, gain };
+      } else if (!on && this.audio) {
+        this.audio.ctx.close();
+        this.audio = null;
+      }
     }
     /** the flash button (the IDE hooks it up) */
     get flashButton() {
@@ -2886,13 +3047,17 @@ target = { type = "directory", path = "target" }
       this.q("[data-a=run]").disabled = false;
       this.q("[data-a=power]").disabled = false;
       this.q("[data-a=download]").classList.toggle("hidden", !info.bin);
-      this.setRunning(true);
+      this.term = "";
+      this.cards();
+      this.attach().then(() => this.setRunning(true));
     }
     async power() {
       if (!this.info) return;
       const was = this.running;
       this.setRunning(false);
       await (await this.core()).call({ cmd: "board_reset" });
+      this.vgaSeen = 0;
+      for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
       this.lastCycle = 0;
       this.speed = { t: performance.now(), c: 0, rate: 0 };
       for (const p of this.latched) this.press(p, true);
@@ -2932,9 +3097,12 @@ target = { type = "directory", path = "target" }
       const t0 = performance.now();
       const inputs = this.pending;
       this.pending = [];
+      const uart_send = this.sendQ;
+      this.sendQ = "";
+      const wantFrame = this.setup.pmod1a === "vga" && performance.now() - this.lastFrame > 150;
       let r;
       try {
-        r = await (await this.core()).call({ cmd: "board_run", cycles: n, inputs });
+        r = await (await this.core()).call({ cmd: "board_run", cycles: n, inputs, uart_send, ...wantFrame ? { vga_seen: this.vgaSeen } : {} });
       } catch (e) {
         this.stat("\u2717 " + String(e.message ?? e));
         this.setRunning(false);
@@ -2967,6 +3135,7 @@ target = { type = "directory", path = "target" }
     }
     /** LED brightness and pin levels from the duty cycles */
     show(r) {
+      this.showPeriph(r);
       for (const [pin, duty] of r.duty) {
         const p = this.info.pins.find((x) => x.pin === pin);
         if (!p) continue;
@@ -2974,6 +3143,76 @@ target = { type = "directory", path = "target" }
         for (const el2 of this.svg.querySelectorAll(`[data-led="${pin}"]`)) el2.style.opacity = (lit < 4e-3 ? 0 : 0.18 + 0.82 * Math.sqrt(lit)).toFixed(3);
         for (const el2 of this.svg.querySelectorAll(`[data-hdr="${pin}"]`)) el2.style.fill = `rgba(255, 210, 80, ${(0.15 + 0.85 * duty).toFixed(3)})`;
       }
+    }
+    showPeriph(r) {
+      const duty = new Map(r.duty);
+      for (const el2 of this.host.querySelectorAll("[data-l8]")) {
+        const d = duty.get(+el2.dataset.l8);
+        el2.style.setProperty("--lit", d === void 0 ? "0" : (d < 4e-3 ? 0 : 0.2 + 0.8 * Math.sqrt(d)).toFixed(3));
+        el2.classList.toggle("nc", d === void 0);
+      }
+      let si = 0;
+      for (const svg of this.host.querySelectorAll("[data-seg]")) {
+        const disp = r.segs[si++];
+        if (!disp) continue;
+        for (const el2 of svg.querySelectorAll(".vb-s")) {
+          const v = disp[+el2.dataset.d]?.[+el2.dataset.s] ?? 0;
+          el2.style.opacity = (v * disp.length < 0.01 ? 0.08 : 0.25 + 0.75 * Math.min(1, Math.sqrt(v * disp.length))).toFixed(3);
+        }
+      }
+      if (r.uart) {
+        if (r.uart.rx.length) {
+          for (const b of r.uart.rx) {
+            if (b === 13) continue;
+            this.term += b === 10 || b >= 32 ? String.fromCharCode(b) : `\\x${b.toString(16).padStart(2, "0")}`;
+          }
+          if (this.term.length > 2e4) this.term = this.term.slice(-15e3);
+          this.showTerm();
+        }
+        const e = this.host.querySelector(".vb-err");
+        if (e) e.textContent = r.uart.errors ? `\u3000\u26A0 ${r.uart.errors} ${tr("\u500B\u683C\u5F0F\u932F\u8AA4\uFF08\u9B91\u7387\u5C0D\u55CE\uFF1F\uFF09", "framing errors (right baud rate?)")}` : "";
+      }
+      if (r.vga?.rle && r.vga.w && r.vga.h) {
+        this.vgaSeen = r.vga.n;
+        this.lastFrame = performance.now();
+        this.drawFrame(r.vga.w, r.vga.h, r.vga.rle);
+      }
+      const vi = this.host.querySelector(".vb-vga-i");
+      if (vi && r.vga) vi.textContent = r.vga.n ? `${tr("\u756B\u9762", "frames")} ${r.vga.n}` : tr("\u7B49\u5F85 VSYNC\u2026", "waiting for VSYNC\u2026");
+      const bz = this.host.querySelector("[data-buzz]");
+      if (bz && r.window > 0) {
+        const edges = new Map(r.edges).get(+bz.dataset.buzz) ?? 0;
+        const hz = edges / 2 / (r.window / this.info.clock_hz);
+        bz.textContent = hz >= 1 ? `${hz < 1e3 ? hz.toFixed(1) : (hz / 1e3).toFixed(2) + " k"}Hz` : tr("\uFF08\u5B89\u975C\uFF09", "(silent)");
+        if (this.audio) {
+          const on = hz >= 20 && hz <= 2e4;
+          this.audio.gain.gain.setTargetAtTime(on ? 0.05 : 0, this.audio.ctx.currentTime, 0.01);
+          if (on) this.audio.osc.frequency.setTargetAtTime(hz, this.audio.ctx.currentTime, 0.01);
+        }
+      }
+    }
+    drawFrame(w, h, rle) {
+      const c = this.host.querySelector(".vb-vga");
+      if (!c) return;
+      if (c.width !== w || c.height !== h) {
+        c.width = w;
+        c.height = h;
+      }
+      const raw = atob(rle);
+      const img = c.getContext("2d").createImageData(w, h);
+      let p = 0;
+      for (let i = 0; i + 3 < raw.length; i += 4) {
+        const col = raw.charCodeAt(i) | raw.charCodeAt(i + 1) << 8;
+        const n = raw.charCodeAt(i + 2) | raw.charCodeAt(i + 3) << 8;
+        const [R, G, B] = [(col >> 8 & 15) * 17, (col >> 4 & 15) * 17, (col & 15) * 17];
+        for (let k = 0; k < n && p < w * h; k++, p++) {
+          img.data[p * 4] = R;
+          img.data[p * 4 + 1] = G;
+          img.data[p * 4 + 2] = B;
+          img.data[p * 4 + 3] = 255;
+        }
+      }
+      c.getContext("2d").putImageData(img, 0, 0);
     }
     stat(text) {
       const s = this.q(".vb-stat");
@@ -3010,7 +3249,7 @@ target = { type = "directory", path = "target" }
       const i = this.info;
       const used = i.pins.filter((p) => p.input || p.output).map((p) => `${p.name}\u2194${p.input ?? p.output}`);
       const what = i.mode === "netlist" ? `${tr("\u7DB2\u8868", "netlist")}\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\uFF08${tr("\u672A\u4F48\u5C40\u7E5E\u7DDA", "not placed and routed")}\uFF09` : `${i.mode === "bin" ? tr("\u4E0A\u50B3\u7684\u4F4D\u5143\u6D41", "uploaded bitstream") : tr("\u4F4D\u5143\u6D41", "bitstream")}\uFF1A${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}` + (i.fmax ? `\uFF0CF<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? " \u26A0" : ` \u2265 12 MHz \u2713`}` : "");
-      this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.join("\uFF1B"))}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
+      this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.slice(0, 3).join("\uFF1B"))}${i.warnings.length > 3 ? tr(`\u2026\uFF08\u5171 ${i.warnings.length} \u689D\uFF0C\u898B\u300C\u554F\u984C\u300D\u9762\u677F\uFF09`, `\u2026 (${i.warnings.length} in all, see Problems)`) : ""}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
     }
     /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
     drawing() {
@@ -3337,7 +3576,7 @@ target = { type = "directory", path = "target" }
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
   function fromExample(ex) {
-    return { id: uid(), name: ex.title, files: ex.files.map((f) => ({ ...f })), synth: ex.synth, pcf: ex.pcf, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name };
+    return { id: uid(), name: ex.title, files: ex.files.map((f) => ({ ...f })), synth: ex.synth, pcf: ex.pcf, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
   }
   function blankProject(name) {
     const m = name.replace(/[^A-Za-z0-9_]/g, "").replace(/^[^A-Za-z]+/, "") || "Top";
@@ -3943,6 +4182,10 @@ target = { type = "directory", path = "target" }
     if (board) return board;
     board = new VirtualBoard($2("boardPane"), getBoardCore);
     board.flashButton.onclick = () => flashBoard();
+    board.onSetup = (s) => {
+      proj.board = s;
+      persist();
+    };
     board.onLoaded = (info) => {
       problems = problems.filter((p) => p.from !== "run");
       for (const w of info.warnings) problems.push({ msg: tr("\u865B\u64EC\u677F\uFF1A", "Virtual board: ") + w, severity: "warning", from: "run" });
@@ -3957,6 +4200,7 @@ target = { type = "directory", path = "target" }
       return;
     }
     ensureBoard();
+    board.setSetup(proj.board ?? examples().find((e) => e.id === proj.from)?.board ?? DEFAULT_SETUP);
     openFile(BOARD_TAB);
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
     setBusy(true, tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F\u2026", "\u26A1 Flashing the virtual board\u2026"));

@@ -1,0 +1,13 @@
+# SevenSeg on an iCEBreaker with a two-digit 7-segment module on PMOD1A
+# (the virtual board's 7-segment PMOD: pins 1-4, 7-9 = a-g, pin 10 = digit select)
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn i_btn    20
+set_io -nowarn o_seg[0] 4
+set_io -nowarn o_seg[1] 2
+set_io -nowarn o_seg[2] 47
+set_io -nowarn o_seg[3] 45
+set_io -nowarn o_seg[4] 3
+set_io -nowarn o_seg[5] 48
+set_io -nowarn o_seg[6] 46
+set_io -nowarn o_sel    44

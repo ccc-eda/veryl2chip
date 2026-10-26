@@ -1,0 +1,114 @@
+// 兩位數七段顯示器：0.25 秒加一，00 到 99；按住 BTN1 歸零。
+// 兩個數字輪流點亮（多工掃描），切換得夠快，眼睛就看到兩個數字同時亮。
+// 接到虛擬板的「七段 PMOD」（PMOD1A）：腳 1–4、7–9 = a–g，腳 10 = 選哪一位（0 = 個位、1 = 十位）。
+module SevenSeg #(
+    param TICK : u32 = 3_000_000, // 12 MHz × 0.25 s
+    param TICK_W: u32 = 22       ,
+    param MUX_W: u32 = 13       , // 2^13 / 12 MHz ≈ 0.7 ms 換一位
+) (
+    i_clk: input  clock   ,
+    i_rst: input  reset   ,
+    i_btn: input  logic   , // BTN1：歸零
+    o_seg: output logic<7>, // a..g（1 = 亮）
+    o_sel: output logic   , // 0 = 個位、1 = 十位
+) {
+    var div : logic<TICK_W>;
+    var ones: logic<4>     ;
+    var tens: logic<4>     ;
+    var mux : logic<MUX_W> ;
+
+    always_ff {
+        if_reset {
+            div  = 0;
+            ones = 0;
+            tens = 0;
+            mux  = 0;
+        } else {
+            mux = mux + 1;
+            if i_btn {
+                div  = 0;
+                ones = 0;
+                tens = 0;
+            } else if div == TICK - 1 {
+                div = 0;
+                if ones == 9 {
+                    ones = 0;
+                    tens = if tens == 9 ? 0 : tens + 1;
+                } else {
+                    ones = ones + 1;
+                }
+            } else {
+                div = div + 1;
+            }
+        }
+    }
+
+    // 目前要顯示的那一位
+    let digit: logic<4> = if mux[MUX_W - 1] ? tens : ones;
+
+    // 七段解碼：bit 0 = a、bit 6 = g
+    always_comb {
+        case digit {
+            0      : o_seg = 7'b0111111;
+            1      : o_seg = 7'b0000110;
+            2      : o_seg = 7'b1011011;
+            3      : o_seg = 7'b1001111;
+            4      : o_seg = 7'b1100110;
+            5      : o_seg = 7'b1101101;
+            6      : o_seg = 7'b1111101;
+            7      : o_seg = 7'b0000111;
+            8      : o_seg = 7'b1111111;
+            9      : o_seg = 7'b1101111;
+            default: o_seg = 7'b0000000;
+        }
+    }
+    assign o_sel = mux[MUX_W - 1];
+}
+
+// 測試：TICK = 4、MUX_W = 2（每 2 拍換一位）
+#[test(test_sevenseg)]
+module TestSevenSeg {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var btn: logic   ;
+    var seg: logic<7>;
+    var sel: logic   ;
+
+    inst dut: SevenSeg #(
+        TICK  : 4,
+        TICK_W: 3,
+        MUX_W : 2,
+    ) (
+        i_clk: clk,
+        i_rst: rst,
+        i_btn: btn,
+        o_seg: seg,
+        o_sel: sel,
+    );
+
+    initial {
+        btn = 0;
+        rst.assert();
+        $assert(sel == 0 && seg == 7'b0111111, "ones digit 0");
+        clk.next(4 * 12); // 12 次 tick：12
+        // 找到個位（sel = 0）時檢查 2，十位（sel = 1）時檢查 1
+        if sel == 1 {
+            clk.next();
+        }
+        if sel == 1 {
+            clk.next();
+        }
+        $assert(seg == 7'b1011011, "ones digit 2");
+        clk.next(2);
+        $assert(sel == 1 && seg == 7'b0000110, "tens digit 1");
+        btn = 1;
+        clk.next(4);
+        btn = 0;
+        if sel == 1 {
+            clk.next(2);
+        }
+        $assert(seg == 7'b0111111, "cleared to 00");
+        $finish();
+    }
+}

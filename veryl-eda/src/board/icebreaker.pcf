@@ -11,3 +11,5 @@ set_io -nowarn o_led[2] 25  # LED3
 set_io -nowarn o_led[3] 23  # LED4
 set_io -nowarn o_led[4] 21  # LED5
 set_io -nowarn i_btn    20  # BTN1 (break-off section, pressed = 1)
+set_io -nowarn i_rx     6   # RX: the FTDI serial port into the FPGA
+set_io -nowarn o_tx     9   # TX: from the FPGA to the computer

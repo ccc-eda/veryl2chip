@@ -1,0 +1,201 @@
+// 第 3 課：UART——用序列埠和電腦說話
+// iCEBreaker 的 USB 晶片同時是一個序列埠（FPGA 的 TX = 腳 9、RX = 腳 6）。
+// 開機或按下 BTN1 時送出 "Hi!\r\n"；收到一個字元就把它的大小寫互換後送回去。
+// 格式 8N1：一個起始位元 0、8 個資料位元（低位在前）、一個停止位元 1。
+module UartEcho #(
+    param CLKS_PER_BIT: u32 = 104, // 12 MHz / 115200 ≈ 104
+    param CNT_W       : u32 = 7  , // 要能放下 CLKS_PER_BIT
+) (
+    i_clk: input  clock,
+    i_rst: input  reset,
+    i_rx : input  logic, // 電腦送來的（腳 6）
+    i_btn: input  logic, // BTN1：再送一次 Hi!
+    o_tx : output logic, // 送給電腦的（腳 9）
+) {
+    // ---- 接收 ----
+    var rx_s   : logic<2>    ; // 同步器
+    var rx_busy: logic       ;
+    var rx_cnt : logic<CNT_W>;
+    var rx_bit : logic<4>    ;
+    var rx_sh  : logic<8>    ;
+    var rx_done: logic       ; // 收到一個字元的那一拍為 1
+    var rx_data: logic<8>    ;
+
+    always_ff {
+        if_reset {
+            rx_s    = 2'b11;
+            rx_busy = 0;
+            rx_cnt  = 0;
+            rx_bit  = 0;
+            rx_sh   = 0;
+            rx_done = 0;
+            rx_data = 0;
+        } else {
+            rx_s    = {rx_s[0], i_rx};
+            rx_done = 0;
+            if !rx_busy {
+                // 起始位元：線路從 1 變 0，等半個位元時間到它的中間
+                if !rx_s[1] {
+                    rx_busy = 1;
+                    rx_cnt  = CLKS_PER_BIT / 2;
+                    rx_bit  = 0;
+                }
+            } else if rx_cnt == CLKS_PER_BIT - 1 {
+                rx_cnt = 0;
+                if rx_bit == 9 {
+                    // 停止位元的中間：必須是 1，這個字元才算數
+                    rx_busy = 0;
+                    if rx_s[1] {
+                        rx_done = 1;
+                        rx_data = rx_sh;
+                    }
+                } else {
+                    if rx_bit >= 1 {
+                        rx_sh = {rx_s[1], rx_sh[7:1]};
+                    }
+                    rx_bit = rx_bit + 1;
+                }
+            } else {
+                rx_cnt = rx_cnt + 1;
+            }
+        }
+    }
+
+    // ---- 要送的字元：問候語，或剛收到的字元（大小寫互換）----
+    var btn_s  : logic<3>; // 同步器 + 上一拍，用來抓按下的瞬間
+    var msg_i  : logic<3>; // 問候語送到第幾個字（5 = 沒在送）
+    var echo   : logic   ;
+    var echo_ch: logic<8>;
+
+    let is_letter: logic = (rx_data >= 8'h41 && rx_data <= 8'h5a) || (rx_data >= 8'h61 && rx_data <= 8'h7a);
+
+    // ---- 傳送 ----
+    var tx_busy: logic       ;
+    var tx_cnt : logic<CNT_W>;
+    var tx_bit : logic<4>    ;
+    var tx_sh  : logic<10>   ;
+
+    var next_ch: logic<8>;
+    always_comb {
+        case msg_i {
+            0      : next_ch = 8'h48; // H
+            1      : next_ch = 8'h69; // i
+            2      : next_ch = 8'h21; // !
+            3      : next_ch = 8'h0d; // \r
+            default: next_ch = 8'h0a; // \n
+        }
+    }
+
+    always_ff {
+        if_reset {
+            btn_s   = 0;
+            msg_i   = 0;
+            echo    = 0;
+            echo_ch = 0;
+            tx_busy = 0;
+            tx_cnt  = 0;
+            tx_bit  = 0;
+            tx_sh   = 10'h3ff;
+        } else {
+            btn_s = {btn_s[1:0], i_btn};
+            if btn_s[1] && !btn_s[2] && msg_i == 5 {
+                msg_i = 0;
+            }
+            if rx_done {
+                echo    = 1;
+                echo_ch = if is_letter ? rx_data ^ 8'h20 : rx_data;
+            }
+            if !tx_busy {
+                if msg_i != 5 {
+                    tx_sh   = {1'b1, next_ch, 1'b0};
+                    tx_busy = 1;
+                    msg_i   = msg_i + 1;
+                } else if echo {
+                    tx_sh   = {1'b1, echo_ch, 1'b0};
+                    tx_busy = 1;
+                    echo    = 0;
+                }
+                tx_cnt = 0;
+                tx_bit = 0;
+            } else if tx_cnt == CLKS_PER_BIT - 1 {
+                tx_cnt = 0;
+                tx_sh  = {1'b1, tx_sh[9:1]};
+                if tx_bit == 9 {
+                    tx_busy = 0;
+                } else {
+                    tx_bit = tx_bit + 1;
+                }
+            } else {
+                tx_cnt = tx_cnt + 1;
+            }
+        }
+    }
+
+    assign o_tx = if tx_busy ? tx_sh[0] : 1'b1;
+}
+
+// 測試：每位元 8 個時脈；testbench 自己當「電腦」：解碼 o_tx、從 i_rx 送字元
+#[test(test_uart_echo)]
+module TestUartEcho {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var rx : logic   ;
+    var btn: logic   ;
+    var tx : logic   ;
+    var got: logic<8>;
+
+    inst dut: UartEcho #(
+        CLKS_PER_BIT: 8,
+        CNT_W       : 4,
+    ) (
+        i_clk: clk,
+        i_rst: rst,
+        i_rx : rx ,
+        i_btn: btn,
+        o_tx : tx ,
+    );
+
+    initial {
+        rx  = 1;
+        btn = 0;
+        rst.assert();
+        // 收 "Hi!\r\n" 的第一個字：等起始位元，再每 8 拍取一個位元的中間
+        for _k in 0..200 {
+            if tx == 1 {
+                clk.next();
+            }
+        }
+        clk.next(4 + 8);
+        got = 0;
+        for _i in 0..8 {
+            got = {tx, got[7:1]};
+            clk.next(8);
+        }
+        $assert(got == 8'h48, "first character H");
+        // 等問候語送完（5 個字 × 10 位元 × 8 拍）
+        clk.next(5 * 10 * 8);
+        // 送一個 'a'（0x61）：起始位元、8 個資料位元、停止位元
+        rx = 0;
+        clk.next(8);
+        for i in 0..8 {
+            rx = (8'h61 >> i) & 1;
+            clk.next(8);
+        }
+        rx = 1; // 停止位元；回應在它的中間之後開始，所以馬上開始等
+        // 收回應：應該是 'A'
+        for _k in 0..200 {
+            if tx == 1 {
+                clk.next();
+            }
+        }
+        clk.next(4 + 8);
+        got = 0;
+        for _i in 0..8 {
+            got = {tx, got[7:1]};
+            clk.next(8);
+        }
+        $assert(got == 8'h41, "echo with the case swapped: A");
+        $finish();
+    }
+}

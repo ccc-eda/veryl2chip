@@ -202,8 +202,40 @@ for (const ex of ctx.VERYL_EXAMPLES) {
   const held2 = pos().join();
   core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
   if (pos().join() !== held2 || pos().filter((x) => x === 1).length !== 1) problems.push('KnightRider bitstream: BTN1 does not hold the light');
+  // M14 peripherals: the USB terminal (lesson 3), the seven-segment module, the VGA monitor
+  b = ex('tut_uart');
+  core.call({ cmd: 'board_load', files: b.files, top: 'UartEcho', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 12e6 / 115200 } });
+  let txt = '';
+  const term = (r) => { txt += String.fromCharCode(...r.uart.rx); return r; };
+  term(core.call({ cmd: 'board_run', cycles: 10000, inputs: [] }));
+  term(core.call({ cmd: 'board_run', cycles: 20000, inputs: [], uart_send: 'Veryl!' }));
+  if (txt !== 'Hi!\r\nvERYL!') problems.push('UART terminal: ' + JSON.stringify(txt));
+  b = ex('sevenseg');
+  core.call({ cmd: 'board_load', files: b.files, top: 'SevenSeg', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', seg: [{ segs: [4, 2, 47, 45, 3, 48, 46, null], sels: [[44, 0], [44, 1]], on: 1 }] });
+  core.call({ cmd: 'board_run', cycles: 3_000_000 * 12 + 1000, inputs: [] }); // 12 ticks of 0.25 s
+  const sg = core.call({ cmd: 'board_run', cycles: 100_000, inputs: [] }).segs[0];
+  const digits = sg.map((d) => d.slice(0, 7).map((x) => (x > 0.2 ? 1 : 0)).reverse().join(''));
+  if (digits.join() !== '1011011,0000110') problems.push('7-segment shows ' + digits.join());
+  b = ex('vga');
+  core.call({ cmd: 'board_load', files: b.files, top: 'VgaDemo', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', vga: { hs: 42, vs: 36, r: [45, 47, 2, 4], g: [31, 34, 38, 43], b: [44, 46, 48, 3] } });
+  const vr = core.call({ cmd: 'board_run', cycles: 800 * 525 * 2 + 100, inputs: [], vga_seen: 0 }).vga;
+  if (!vr.rle || vr.w !== 800 || vr.h !== 525) problems.push(`VGA frame ${vr.w}x${vr.h}`);
+  else {
+    const raw = Buffer.from(vr.rle, 'base64');
+    const px = [];
+    for (let i = 0; i + 3 < raw.length; i += 4) for (let k = 0; k < raw.readUInt16LE(i + 2); k++) px.push(raw.readUInt16LE(i));
+    for (const x of [10, 100, 300, 600]) {
+      const rgb = ((x >> 7) ^ ((x >> 6) & 1)) & 7;
+      const want = (rgb & 4 ? 0xf00 : 0) | (rgb & 2 ? 0x0f0 : 0) | (rgb & 1 ? 0x00f : 0);
+      const got = px[((240 + 35) % 525) * 800 + ((x + 144) % 800)];
+      if (got !== want) problems.push(`VGA pixel x ${x}: ${got} != ${want}`);
+    }
+  }
   if (problems.length) bad++;
-  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    bitstream: Blinky (Fmax ${fl.fmax?.toFixed(1)} MHz) and its uploaded .bin, KnightRider + BTN1; netlist: Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    terminal (Hi!, echo), 7-segment 12, VGA color bars; bitstream: Blinky (Fmax ${fl.fmax?.toFixed(1)} MHz) and its uploaded .bin, KnightRider + BTN1; netlist: Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
 }
 
 // project export: the .zip (stored, CRC-32) must unpack, and with the

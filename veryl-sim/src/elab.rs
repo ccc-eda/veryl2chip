@@ -939,6 +939,8 @@ impl<'a> Elab<'a> {
             let (base, member) = match pname.split_once('.') { Some((b, m)) => (b.to_string(), Some(m.to_string())), None => (pname.clone(), None) };
             let Some((_, expr)) = conns.iter().find(|(n, _)| *n == base) else { continue };
             let mut t = expr.clone().unwrap_or_else(|| vec![base.clone()]);
+            // `port: _` leaves an output unconnected
+            if *dir == Dir::Out && t == ["_"] { continue; }
             if let Some(m) = member { t.push(".".into()); t.push(m); }
             let e = self.parse_in(sc, &t)?;
             match dir {

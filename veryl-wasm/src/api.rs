@@ -13,7 +13,7 @@ pub fn set_chip(c: Chip) { CHIP.with(|x| *x.borrow_mut() = Some(c)); }
 
 thread_local! {
     /// the virtual iCEBreaker: the loaded design (kept for power cycles), its pin file and the running board
-    static BOARD: RefCell<Option<(veryl_eda::board::Design, Option<String>, veryl_eda::board::Board)>> = const { RefCell::new(None) };
+    static BOARD: RefCell<Option<(veryl_eda::board::Design, Option<String>, veryl_eda::board::Board, Value)>> = const { RefCell::new(None) };
 }
 
 type R<T> = Result<T, String>;
@@ -271,7 +271,7 @@ fn board_load(v: &Value) -> R<Value> {
     let cells = json!({ "lut": count("SB_LUT4"), "carry": count("SB_CARRY"), "ff": count("SB_DFF"), "ram": count("SB_RAM40_4K") });
     let mut info = board_info(&top, cells, &b, pcf.is_none(), None);
     info["mode"] = json!("netlist");
-    BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b)));
+    BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b, Value::Null)));
     Ok(info)
 }
 
@@ -313,7 +313,7 @@ fn board_flash(v: &Value) -> R<Value> {
     info["mode"] = json!("bitstream");
     info["fmax"] = json!(fmax);
     info["bin"] = json!(base64(&bin));
-    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b)));
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
     Ok(info)
 }
 
@@ -333,8 +333,41 @@ fn board_load_bin(v: &Value) -> R<Value> {
     let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("bitstream");
     let mut info = board_info(name, cells, &b, false, None);
     info["mode"] = json!("bin");
-    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b)));
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
     Ok(info)
+}
+
+/// attach peripherals to the board (kept for power cycles):
+/// { uart: {tx, rx, cpb}, seg: [{segs: [pin|null ×8], sels: [[pin, level]], on}], vga: {hs, vs, r, g, b} }
+fn board_periph(v: &Value) -> R<Value> {
+    BOARD.with(|x| {
+        let mut x = x.borrow_mut();
+        let (_, _, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+        *periph = v.clone();
+        b.uart = None;
+        b.segs.clear();
+        b.vga = None;
+        attach(b, periph);
+        Ok(json!({ "ok": true }))
+    })
+}
+
+fn attach(b: &mut veryl_eda::board::Board, p: &Value) {
+    let pin = |v: &Value| v.as_u64().map(|p| p as u32);
+    let pins = |v: Option<&Value>| -> Vec<u32> { v.and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|p| p as u32)).collect()).unwrap_or_default() };
+    if let Some(u) = p.get("uart").filter(|u| !u.is_null()) {
+        b.attach_uart(u.get("tx").and_then(pin).unwrap_or(9), u.get("rx").and_then(pin).unwrap_or(6), u.get("cpb").and_then(|c| c.as_f64()).unwrap_or(12e6 / 115200.0));
+    }
+    for s in p.get("seg").and_then(|s| s.as_array()).into_iter().flatten() {
+        let mut segs = [None; 8];
+        for (k, x) in s.get("segs").and_then(|a| a.as_array()).into_iter().flatten().take(8).enumerate() { segs[k] = pin(x); }
+        let sels: Vec<(u32, bool)> = s.get("sels").and_then(|a| a.as_array()).into_iter().flatten()
+            .filter_map(|x| Some((pin(x.get(0)?)?, x.get(1).and_then(|l| l.as_u64()).unwrap_or(1) != 0))).collect();
+        b.attach_seg(segs, &sels, s.get("on").and_then(|l| l.as_u64()).unwrap_or(1) != 0);
+    }
+    if let Some(g) = p.get("vga").filter(|g| !g.is_null()) {
+        b.attach_vga(g.get("hs").and_then(pin).unwrap_or(0), g.get("vs").and_then(pin).unwrap_or(0), &pins(g.get("r")), &pins(g.get("g")), &pins(g.get("b")));
+    }
 }
 
 fn unbase64(s: &str) -> R<Vec<u8>> {
@@ -376,7 +409,8 @@ fn board_info(top: &str, cells: Value, b: &veryl_eda::board::Board, default_pcf:
 fn board_run(v: &Value) -> R<Value> {
     BOARD.with(|x| {
         let mut x = x.borrow_mut();
-        let (_, _, b) = x.as_mut().ok_or("no design on the virtual board")?;
+        let (_, _, b, _) = x.as_mut().ok_or("no design on the virtual board")?;
+        if let (Some(u), Some(text)) = (b.uart.as_mut(), v.get("uart_send").and_then(|t| t.as_str())) { u.queue.extend(text.bytes()); }
         if let Some(ins) = v.get("inputs").and_then(|i| i.as_array()) {
             for i in ins {
                 let (pin, level) = (i.get(0).and_then(|p| p.as_u64()).unwrap_or(0) as u32, i.get(1).and_then(|l| l.as_u64()).unwrap_or(0) != 0);
@@ -386,10 +420,21 @@ fn board_run(v: &Value) -> R<Value> {
         let cycles = v.get("cycles").and_then(|c| c.as_u64()).unwrap_or(0);
         let evals0 = b.eng.evals;
         b.run(cycles);
+        let window = b.window;
+        let segs = b.take_segs(window);
+        let edges: Vec<Value> = b.take_edges().into_iter().filter(|e| e.1 > 0).map(|(p, n)| json!([p, n])).collect();
         let duty: Vec<Value> = if cycles > 0 { b.take_duty().into_iter().map(|(p, d)| json!([p, d])).collect() } else {
             b.pin_out.iter().map(|p| json!([p.0, if b.eng.get(p.1) { 1.0 } else { 0.0 }])).collect()
         };
-        Ok(json!({ "ok": true, "cycle": b.cycle, "duty": duty, "evals": b.eng.evals - evals0 }))
+        let uart = b.uart.as_mut().map(|u| json!({ "rx": std::mem::take(&mut u.received), "errors": u.framing_errors, "pending": u.queue.len() }));
+        // a VGA frame newer than the one the page has (`vga_seen`), run-length encoded
+        let seen = v.get("vga_seen").and_then(|s| s.as_u64());
+        let vga = match (b.vga.as_ref(), seen) {
+            (Some(g), Some(seen)) if g.frames > seen => g.frame.as_ref().map(|(w, h, px)| json!({ "w": w, "h": h, "n": g.frames, "rle": base64(&veryl_eda::board::periph::rle(px)) })),
+            (Some(g), _) => Some(json!({ "n": g.frames })),
+            _ => None,
+        };
+        Ok(json!({ "ok": true, "cycle": b.cycle, "window": window, "duty": duty, "evals": b.eng.evals - evals0, "segs": segs, "edges": edges, "uart": uart, "vga": vga }))
     })
 }
 
@@ -397,8 +442,9 @@ fn board_run(v: &Value) -> R<Value> {
 fn board_reset() -> R<Value> {
     BOARD.with(|x| {
         let mut x = x.borrow_mut();
-        let (d, pcf, b) = x.as_mut().ok_or("no design on the virtual board")?;
+        let (d, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
         *b = veryl_eda::board::icebreaker::board(d.clone(), pcf.as_deref())?;
+        attach(b, periph);
         Ok(json!({ "ok": true, "cycle": 0 }))
     })
 }
@@ -486,6 +532,7 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "board_load_bin" => board_load_bin(v),
         "board_run" => board_run(v),
         "board_reset" => board_reset(),
+        "board_periph" => board_periph(v),
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),
         c => Err(format!("unknown command '{}'", c)),
     }

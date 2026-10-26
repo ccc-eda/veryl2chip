@@ -1073,6 +1073,8 @@ impl<'l, 'a> Synth<'l, 'a> {
                 continue;
             };
             let mut t = expr.clone().unwrap_or_else(|| vec![base.clone()]);
+            // `port: _` leaves an output unconnected
+            if *dir == Dir::Out && t == ["_"] { continue; }
             if let Some(m) = member { t.push(".".into()); t.push(m); }
             let e = lib.parse(sc, &t)?;
             match dir {

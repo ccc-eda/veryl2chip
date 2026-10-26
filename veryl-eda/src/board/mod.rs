@@ -12,6 +12,7 @@
 
 pub mod bitstream;
 pub mod icebreaker;
+pub mod periph;
 
 use crate::netlist::{is_out, Bit, Dir, Netlist};
 use std::collections::HashMap;
@@ -381,6 +382,12 @@ pub struct Board {
     pub cycle: u64,
     pub window: u64,
     pub warnings: Vec<String>,
+    /// per output pin (as `pin_out`): level at the last sample and edges in the window
+    prev: Vec<u8>,
+    edges: Vec<u64>,
+    pub uart: Option<periph::Uart>,
+    pub segs: Vec<periph::Seg>,
+    pub vga: Option<periph::Vga>,
 }
 
 impl Board {
@@ -406,7 +413,8 @@ impl Board {
         let clk = pin_in.get(&clock_pin).copied();
         if clk.is_none() { warnings.push(format!("nothing is connected to the clock pin {}", clock_pin)); }
         let eng = Engine::new(d)?;
-        Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings })
+        let n = pin_out.len();
+        Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings, prev: vec![0; n], edges: vec![0; n], uart: None, segs: vec![], vga: None })
     }
 
     /// drive an input pin (buttons, switches); pins the design does not use are ignored
@@ -422,15 +430,81 @@ impl Board {
         self.pin_out.iter().find(|p| p.0 == pin).map(|p| self.eng.get(p.1)).or_else(|| self.pin_in.get(&pin).map(|n| self.eng.get(*n)))
     }
 
-    /// `n` board clock cycles (rising edge, outputs sampled, falling edge)
+    /// the output net on a pin
+    pub fn out_net(&self, pin: u32) -> Option<u32> { self.pin_out.iter().find(|p| p.0 == pin).map(|p| p.1) }
+
+    /// the USB serial port: the FPGA's TX on `tx_pin`, its RX on `rx_pin`, `cpb` clock cycles per bit
+    pub fn attach_uart(&mut self, tx_pin: u32, rx_pin: u32, cpb: f64) {
+        let rx = self.pin_in.get(&rx_pin).copied();
+        self.uart = Some(periph::Uart::new(self.out_net(tx_pin), rx, cpb));
+    }
+
+    /// a seven-segment display: segment pins a..g, dp; digit selects (pin, selecting level); lit level
+    pub fn attach_seg(&mut self, segs: [Option<u32>; 8], sels: &[(u32, bool)], on: bool) {
+        let segs = segs.map(|p| p.and_then(|p| self.out_net(p)));
+        let sels: Vec<(Option<u32>, bool)> = if sels.is_empty() { vec![(None, true)] } else { sels.iter().map(|(p, l)| (self.out_net(*p), *l)).collect() };
+        let n = sels.len();
+        self.segs.push(periph::Seg { segs, sels, on, lit: vec![[0; 8]; n] });
+    }
+
+    /// a VGA monitor on the given pins (colors most significant first; unconnected pins are left out)
+    pub fn attach_vga(&mut self, hs: u32, vs: u32, r: &[u32], g: &[u32], b: &[u32]) {
+        let nets = |ps: &[u32]| ps.iter().filter_map(|p| self.out_net(*p)).collect::<Vec<u32>>();
+        self.vga = Some(periph::Vga::new(self.out_net(hs), self.out_net(vs), nets(r), nets(g), nets(b)));
+    }
+
+    /// `n` board clock cycles: the serial line into the FPGA, rising edge,
+    /// outputs and peripherals sampled, falling edge
     pub fn run(&mut self, n: u64) {
-        for _ in 0..n {
+        let periph = self.uart.is_some() || !self.segs.is_empty() || self.vga.is_some();
+        for i in 0..n {
+            if let Some(u) = self.uart.as_mut() {
+                if let (Some(rx), Some(l)) = (u.rx, u.rx_level(self.cycle + i)) {
+                    if self.eng.v[rx as usize] != l as u8 { self.eng.set(rx, l); self.eng.propagate(); }
+                }
+            }
             if let Some(c) = self.clk { self.eng.set(c, true); self.eng.propagate(); }
-            for p in self.pin_out.iter_mut() { p.2 += self.eng.v[p.1 as usize] as u64; }
+            for (k, p) in self.pin_out.iter_mut().enumerate() {
+                let v = self.eng.v[p.1 as usize];
+                p.2 += v as u64;
+                self.edges[k] += (v != self.prev[k]) as u64;
+                self.prev[k] = v;
+            }
+            if periph {
+                let v = &self.eng.v;
+                if let Some(u) = self.uart.as_mut() { if let Some(tx) = u.tx { u.sample(v[tx as usize] != 0); } }
+                for s in self.segs.iter_mut() {
+                    for (d, (sel, lvl)) in s.sels.iter().enumerate() {
+                        if sel.map(|n| (v[n as usize] != 0) == *lvl).unwrap_or(true) {
+                            for (k, seg) in s.segs.iter().enumerate() {
+                                if let Some(n) = seg { if (v[*n as usize] != 0) == s.on { s.lit[d][k] += 1; } }
+                            }
+                        }
+                    }
+                }
+                if let Some(g) = self.vga.as_mut() { g.sample(v); }
+            }
             if let Some(c) = self.clk { self.eng.set(c, false); self.eng.propagate(); }
         }
         self.cycle += n;
         self.window += n;
+    }
+
+    /// (pin, output level changes) since the last call: a buzzer's frequency
+    pub fn take_edges(&mut self) -> Vec<(u32, u64)> {
+        let r = self.pin_out.iter().zip(&self.edges).map(|(p, e)| (p.0, *e)).collect();
+        for e in self.edges.iter_mut() { *e = 0; }
+        r
+    }
+
+    /// per display, per digit, per segment: the fraction of the window it was lit
+    pub fn take_segs(&mut self, window: u64) -> Vec<Vec<[f64; 8]>> {
+        let w = window.max(1) as f64;
+        self.segs.iter_mut().map(|s| {
+            let r = s.lit.iter().map(|d| d.map(|c| c as f64 / w)).collect();
+            for d in s.lit.iter_mut() { *d = [0; 8]; }
+            r
+        }).collect()
     }
 
     /// (pin, fraction of the window the output was 1) since the last call

@@ -11,7 +11,7 @@ import { ASIC_STAGES, FPGA_STAGES, stageLabel, SynthOverlay } from '../synth/ove
 import { newModule, projectZip } from '../templates';
 import { WaveView } from '../wave';
 import { saveAs } from '../zip';
-import { VirtualBoard } from './board';
+import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
 import { CodeEditor, Marker } from './editor';
 
 declare const VERYL_WASM_B64: string;
@@ -34,6 +34,8 @@ interface Project {
   from?: string;
   open?: string[];
   active?: string;
+  /** what is plugged into the virtual board */
+  board?: BoardSetup;
 }
 
 const KEY = 'veryl2chip-ide:';
@@ -58,7 +60,7 @@ function projName(p: Project): string {
 function uid(): string { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
 function fromExample(ex: Example): Project {
-  return { id: uid(), name: ex.title, files: ex.files.map(f => ({ ...f })), synth: ex.synth, pcf: ex.pcf, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name };
+  return { id: uid(), name: ex.title, files: ex.files.map(f => ({ ...f })), synth: ex.synth, pcf: ex.pcf, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
 }
 
 function blankProject(name: string): Project {
@@ -685,6 +687,7 @@ function ensureBoard(): VirtualBoard {
   if (board) return board;
   board = new VirtualBoard($('boardPane'), getBoardCore);
   board.flashButton.onclick = () => flashBoard();
+  board.onSetup = s => { proj.board = s; persist(); };
   board.onLoaded = info => {
     problems = problems.filter(p => p.from !== 'run');
     for (const w of info.warnings) problems.push({ msg: tr('虛擬板：', 'Virtual board: ') + w, severity: 'warning', from: 'run' });
@@ -697,6 +700,8 @@ async function flashBoard(): Promise<void> {
   const top = synthTop();
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能燒錄）', 'No synthesizable module (#[test] modules cannot be flashed)')); return; }
   ensureBoard();
+  // what is plugged in: the project's choice, else its example's
+  board!.setSetup(proj.board ?? examples().find(e => e.id === proj.from)?.board ?? DEFAULT_SETUP);
   openFile(BOARD_TAB);
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
   setBusy(true, tr('⚡ 燒錄到虛擬板…', '⚡ Flashing the virtual board…'));

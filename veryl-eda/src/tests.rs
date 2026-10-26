@@ -836,3 +836,78 @@ fn bitstream_decode_nextpnr() {
         println!("nextpnr {}: {} LCs, pins in {:?}", top, rep.lcs, rep.pins_in);
     }
 }
+
+// ---- the virtual board's peripherals (src/board/periph.rs) ----
+
+fn board_of(files: &[&str], top: &str, ov: &[(&str, u128)], pcf: Option<&str>) -> crate::board::Board {
+    let nl = ice40_of(files, top, ov);
+    let pcf = pcf.map(|p| std::fs::read_to_string(format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), p)).unwrap());
+    crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), pcf.as_deref()).unwrap()
+}
+
+/// tutorial lesson 3 on the USB serial port: greeting, then the echo with the case swapped
+#[test]
+fn board_uart_echo() {
+    for (ov, cpb) in [(&[("CLKS_PER_BIT", 8u128), ("CNT_W", 4)][..], 8.0), (&[][..], 12e6 / 115200.0)] {
+        let mut b = board_of(&["tutorial/src/uart.veryl"], "UartEcho", ov, None);
+        assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+        b.attach_uart(9, 6, cpb);
+        b.set_pin(10, false);
+        b.run(3);
+        b.set_pin(10, true);
+        b.run((cpb * 10.0 * 6.0) as u64);
+        let u = b.uart.as_mut().unwrap();
+        assert_eq!(String::from_utf8_lossy(&std::mem::take(&mut u.received)), "Hi!\r\n");
+        u.queue.extend(b"aB?".iter().copied());
+        b.run((cpb * 10.0 * 8.0) as u64);
+        let u = b.uart.as_mut().unwrap();
+        assert_eq!(String::from_utf8_lossy(&u.received), "Ab?", "cpb {}", cpb);
+        assert_eq!(u.framing_errors, 0);
+    }
+}
+
+/// the multiplexed seven-segment display: each digit shows its own pattern, lit half the time
+#[test]
+fn board_sevenseg() {
+    let mut b = board_of(&["examples/src/sevenseg.veryl"], "SevenSeg", &[("TICK", 4), ("TICK_W", 3), ("MUX_W", 2)], Some("examples/sevenseg.pcf"));
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    let segs = [Some(4), Some(2), Some(47), Some(45), Some(3), Some(48), Some(46), None];
+    b.attach_seg(segs, &[(44, false), (44, true)], true);
+    b.set_pin(10, false);
+    b.run(2);
+    b.set_pin(10, true);
+    b.run(4 * 12 - 2); // the count reaches 12
+    let w = b.window;
+    b.take_segs(w);
+    b.take_duty();
+    b.run(3); // less than one tick: still 12
+    let w = b.window;
+    let d = b.take_segs(w);
+    let lit = |digit: usize| -> Vec<usize> { (0..7).filter(|k| d[0][digit][*k] > 0.0).collect() };
+    assert_eq!(lit(0), vec![0, 1, 3, 4, 6], "ones digit 2 (a b d e g): {:?}", d[0]);
+    assert_eq!(lit(1), vec![1, 2], "tens digit 1 (b c): {:?}", d[0]);
+}
+
+/// the VGA monitor: a 640×480 frame of the color bars, scanned at one pixel per clock
+#[test]
+fn board_vga() {
+    let mut b = board_of(&["examples/src/vga.veryl"], "VgaTiming", &[], Some("examples/vga.pcf"));
+    b.attach_vga(42, 36, &[45], &[31], &[44]);
+    b.set_pin(10, false);
+    b.run(2);
+    b.set_pin(10, true);
+    b.run(800 * 525 * 2 + 1000);
+    let g = b.vga.as_ref().unwrap();
+    let (w, h, px) = g.frame.as_ref().expect("a complete frame");
+    assert_eq!((*w, *h), (800, 525));
+    // line = from HSYNC (x = 656), frame = from VSYNC (y = 490)
+    for (x, y) in [(5u32, 3u32), (100, 10), (200, 100), (330, 470), (639, 479), (650, 200), (100, 485)] {
+        let (col, row) = (((x + 800 - 656) % 800) as usize, ((y + 525 - 490) % 525) as usize);
+        let video = x < 640 && y < 480;
+        let rgb = if video { (x >> 7) ^ ((x >> 6) & 1) } else { 0 } & 7;
+        let want = (if rgb & 4 != 0 { 0xf00 } else { 0 }) | (if rgb & 2 != 0 { 0x0f0 } else { 0 }) | (if rgb & 1 != 0 { 0x00f } else { 0 });
+        assert_eq!(px[row * w + col], want, "pixel x {} y {}", x, y);
+    }
+    let rle = crate::board::periph::rle(px);
+    assert!(rle.len() < px.len() / 10, "color bars compress: {} bytes", rle.len());
+}

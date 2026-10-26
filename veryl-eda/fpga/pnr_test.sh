@@ -19,7 +19,8 @@ seq101:Seq101:i_clk:i_rst:0 pkt_reg:PktReg:i_clk:i_rst:0 ram:Ram:i_clk:i_rst:0
 features:Shifter features:Ranges features:Counter:i_clk:i_rst:1 features:Top:i_clk:i_rst:1
 pnr_tests:AccTest:i_clk:i_rst:0 rv32i+soc:RiscvSoc:i_clk:i_rst:0
 sync_ram:SyncRam:i_clk sync_ram+bram_tests:Bram2048x2:i_clk sync_ram+bram_tests:BramMix:i_clk:i_rst:0
-fifo:Fifo:i_clk:i_rst:0 uart:UartLoop:i_clk:i_rst:0 vga:VgaTiming:i_clk:i_rst:0"}
+fifo:Fifo:i_clk:i_rst:0 uart:UartLoop:i_clk:i_rst:0 vga:VgaTiming:i_clk:i_rst:0
+vga:VgaDemo:i_clk:i_rst:0 sevenseg:SevenSeg:i_clk:i_rst:0"}
 fail=0
 for d in $DESIGNS; do
     IFS=: read -r f m clk rst act <<< "$d"

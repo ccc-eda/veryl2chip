@@ -128,7 +128,8 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
 引擎跑在通用的 `Design` 上（4 輸入真值表——進位是 3 輸入多數決——正反器、block RAM、具名 IO），採**活動驅動**：
 某條 net 改變時只把它驅動的真值表排入佇列，依層級順序求值（不會有毛刺）；任何時脈 net 上的邊緣都會被偵測，所以除頻時脈與負緣都能用。
 `cargo test` 在 15 個設計上用每拍隨機輸入和 netsim 比對。
-**位元流解碼**（`board/bitstream.rs`，M13）：把 `.bin`（`pnr::bitstream::bin_to_asc`，自製 icepack 的反向）或 `.asc` 解回 `Design`：啟用的 pip（mux 的位元等於某個 pip 的樣式）以 union-find 併成 net；邏輯單元（LUT 位元還原排列、進位、正反器與 tile 的時脈 / 致能 / set-reset 和 `NegClk`）、IO（`PINTYPE`）、全域網路（`fabout`，或經 `padin_glb_netwk` 額外位元直接由腳位驅動）與 block RAM（`CBIT` 模式、`.ram_data`）成為驅動者。測試：`bin → asc → bin` 不變；11 個設計（自己的 P&R）與 3 個設計（nextpnr，有安裝時）解碼後的位元流都與網表逐週期一致。速度（單核心）：Blinky 每秒 680 萬週期（12 MHz 的 57%），RiscvSoc 每秒 150 萬週期；WebAssembly 約為其 75%。
+**位元流解碼**（`board/bitstream.rs`，M13）：把 `.bin`（`pnr::bitstream::bin_to_asc`，自製 icepack 的反向）或 `.asc` 解回 `Design`：啟用的 pip（mux 的位元等於某個 pip 的樣式）以 union-find 併成 net；邏輯單元（LUT 位元還原排列、進位、正反器與 tile 的時脈 / 致能 / set-reset 和 `NegClk`）、IO（`PINTYPE`）、全域網路（`fabout`，或經 `padin_glb_netwk` 額外位元直接由腳位驅動）與 block RAM（`CBIT` 模式、`.ram_data`）成為驅動者。周邊（`board/periph.rs`，M14）在模擬迴圈裡每個時脈取樣：FTDI 序列埠雙向（每位元時脈數可以是小數）、多工掃描的七段顯示器（每一位、每一段亮的時間）、VGA 螢幕（每個 HSYNC 一行、每個 VSYNC 一張畫面，以連續長度編碼傳出）與每支腳的變化次數（蜂鳴器的音高）。
+測試：`bin → asc → bin` 不變；11 個設計（自己的 P&R）與 3 個設計（nextpnr，有安裝時）解碼後的位元流都與網表逐週期一致。速度（單核心）：Blinky 每秒 680 萬週期（12 MHz 的 57%），RiscvSoc 每秒 150 萬週期；WebAssembly 約為其 75%。
 
 ## 流程
 | 檔案 | 內容 |

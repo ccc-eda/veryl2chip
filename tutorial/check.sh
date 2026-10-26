@@ -14,7 +14,7 @@ if command -v veryl > /dev/null; then
     grep -E "Succeeded|Failed" <<< "$out"
     if grep -q Failed <<< "$out"; then exit 1; fi
 fi
-for d in blinky:Blinky knight:KnightRider; do
+for d in blinky:Blinky knight:KnightRider uart:UartEcho; do
     f=${d%%:*}; m=${d##*:}
     $SIM "src/$f.veryl" | tail -1
     for k in opt ice40 asic; do

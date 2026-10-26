@@ -30,6 +30,7 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 
 | M12 | 虛擬 iCEBreaker：Rust 的活動驅動逐週期模擬引擎（`veryl-eda/src/board/`，4 輸入真值表 + 正反器 + block RAM）、iCEBreaker 腳位、IDE 的「⚡ 虛擬板」分頁（SVG 開發板、LED 亮度依工作週期、可按的按鈕、獨立的 worker、速度與虛擬時間） | 引擎在 15 個設計上與 netsim 一致；教學兩課與 RISC-V SoC 在虛擬板上行為正確 |
 | M13 | 位元流模擬：`.bin` → `.asc`（icepack 反向）→ 解碼回電路（pip、LC、IO、全域網路、block RAM），虛擬板預設跑真正的位元流、可上傳任何 `.bin`、下載 `.bin`、Fmax 警告 | 11 個設計（自己的 P&R）與 nextpnr 產生的位元流解碼後與網表逐週期一致；`bin → asc → bin` 不變 |
-| M14–M16（規劃） | 周邊（USB 終端機、七段、VGA…）、麵包板與零件庫、虛擬實驗課 | |
+| M14 | 周邊：USB 序列終端機（雙向、可選鮑率）、PMOD 模組（8 LED、8 開關、兩位數七段、VGA 螢幕、蜂鳴器）、每個專案記住接了什麼；教學第 3 課 UART、七段計數範例、VgaDemo；Veryl 的 `port: _`（不接的輸出） | 終端機、七段、VGA 在 cargo test 與 npm test 都有逐項檢查；瀏覽器實測 |
+| M15–M16（規劃） | 麵包板與零件庫、虛擬實驗課 | |
 
 每個 M 完成就 commit。
