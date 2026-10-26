@@ -42,7 +42,7 @@ web/  TypeScript（esbuild 打包成單一 IIFE，非 ES module → file:// 可�
 | M22 | C 的多執行緒：編譯器產生 M 指令、`asm(...)`、naked 函式、函式位址；epilogue 不再讀 sp 以下（中斷會蓋掉）；執行期函式庫的中斷 / CSR / 原子操作；範例 `threads.c`（計時器搶佔、ecall yield / sleep、amoswap 互斥鎖）；講義 C8 | `cargo test threads_on_rvsoc`：閘級 RvBoard 與 ISS 逐週期相同的輸出與 LED；npm test 跑所有 C 範例 |
 
 
-### 往 v2.0：接上 SkyWater SKY130 開源 PDK
+### 往 v2.0：接上 SkyWater SKY130 開源 PDK（完成）
 
 目標：同一個 ASIC 流程（對應、佈局、時脈樹、繞線、時序、功耗）除了教學用的 vlib，也能用 SKY130 的
 `sky130_fd_sc_hd` 標準元件庫，產出 OpenROAD / Magic / KLayout 看得懂的 Verilog、DEF 與 GDS。

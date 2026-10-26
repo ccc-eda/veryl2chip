@@ -161,7 +161,9 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 `./test.sh` 用 yosys 对 `veryl build` 的输出做标准单元 netlist 的形式等价验证。
 
 ## SKY130（`--pdk sky130`，`src/pdk/`）
-往 v2.0 的路上，ASIC 后端接上 SkyWater 的开源 SKY130 PDK（`sky130_fd_sc_hd`，典型角落 `tt_025C_1v80`）。流程仍然在
+从 v2.0 起，ASIC 后端可以用 SkyWater 的开源 SKY130 PDK（`sky130_fd_sc_hd`，典型角落 `tt_025C_1v80`），从网表一路做到
+通过 DRC 的 GDSII 版图：`veryl-eda --asic --pdk sky130 --verilog a.v --def a.def --gds a.gds 設計.veryl`。
+由 v1.5 到 v2.0 一步步完成（`web/PLAN.md`，M23–M28）。流程仍然在
 逻辑单元（INV、NAND2、AOI21、DFFR…）上运作；`Tech`（`src/pdk/mod.rs`）把每个逻辑单元绑到单元库里的一个单元：名称与引脚、
 占几个 site、在布线格点上的引脚访问点、时序，以及行高 / site / 轨距。vlib 是内置的 `Tech`；SKY130 的由它的文件创建：
 
@@ -268,7 +270,9 @@ interface 与 modport（成员摊平成 `inst.member` 信号，modport 端口变
 泛型 interface 端口、`inout`、递归、latch（不完整赋值的 always_comb 会报组合环路）、
 宽度 > 256 bit 的常数、异步读取的存储器放进 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL；
 （netsim 用 `tick(clk)` 仿真多个时钟域与下降沿触发器，`step()` 则是所有触发器同时一拍）
-自研布局布线：只支持 UP5K、没有 LUT 输入引脚交换。
+自研布局布线：只支持 UP5K、没有 LUT 输入引脚交换；
+SKY130：没有 SRAM macro（存储器是触发器）、只有一个角落（典型）、没有宽金属间距表、天线规则与 LVS，GDS 检查
+（`tools/gds_check.py`）用的是 KLayout 的宽度 / 间距规则，不是完整的 SKY130 规则文件。
 
 ## 验证结果（`./test.sh`）
 | 设计 | 对 `veryl build` 的等价验证 |

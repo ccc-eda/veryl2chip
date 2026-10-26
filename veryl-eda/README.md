@@ -165,7 +165,9 @@ and cells plus fillers covering every site exactly once;
 `./test.sh` proves the standard-cell netlist equivalent to the output of `veryl build` with yosys.
 
 ## SKY130 (`--pdk sky130`, `src/pdk/`)
-On the way to v2.0 the ASIC back end learns SkyWater's open SKY130 PDK (`sky130_fd_sc_hd`, the typical corner `tt_025C_1v80`).
+Since v2.0 the ASIC back end works on SkyWater's open SKY130 PDK (`sky130_fd_sc_hd`, the typical corner `tt_025C_1v80`) from
+the netlist to a DRC-clean GDSII layout: `veryl-eda --asic --pdk sky130 --verilog a.v --def a.def --gds a.gds DESIGN.veryl`.
+Built up from v1.5 to v2.0 (`web/PLAN.md`, M23–M28).
 The flow keeps working on logical cells (INV, NAND2, AOI21, DFFR, ...); a `Tech` (`src/pdk/mod.rs`) binds each to a library
 cell: its name and pins, its width in placement sites, its pin access points on the routing grid, its timing, and the row /
 site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its files:
@@ -278,7 +280,9 @@ any width (constants up to 256 bits), clock domain annotations. `initial` / `fin
 generic interface ports, `inout`, recursion, latches (an incompletely assigned always_comb is reported as a combinational loop),
 constants wider than 256 bits, asynchronous-read memories in BRAM, SPRAM (`SB_SPRAM256KA`), PLLs;
 (netsim simulates several clock domains and negative-edge flip-flops with `tick(clk)`; `step()` clocks every flip-flop at once)
-own place & route: UP5K only, no LUT input pin swapping.
+own place & route: UP5K only, no LUT input pin swapping;
+SKY130: no SRAM macros (memories are flip-flops), one corner (typical), no wide-metal spacing tables, antenna rules or LVS,
+the GDS check (`tools/gds_check.py`) uses KLayout's width / spacing rules, not the full SKY130 rule deck.
 
 ## Verification results (`./test.sh`)
 | Design | Equivalence with `veryl build` |

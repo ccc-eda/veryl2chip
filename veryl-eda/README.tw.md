@@ -161,7 +161,9 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
 `./test.sh` 用 yosys 對 `veryl build` 的輸出做標準元件 netlist 的形式等價驗證。
 
 ## SKY130（`--pdk sky130`，`src/pdk/`）
-往 v2.0 的路上，ASIC 後端接上 SkyWater 的開源 SKY130 PDK（`sky130_fd_sc_hd`，典型角落 `tt_025C_1v80`）。流程仍然在
+從 v2.0 起，ASIC 後端可以用 SkyWater 的開源 SKY130 PDK（`sky130_fd_sc_hd`，典型角落 `tt_025C_1v80`），從網表一路做到
+通過 DRC 的 GDSII 版圖：`veryl-eda --asic --pdk sky130 --verilog a.v --def a.def --gds a.gds 設計.veryl`。
+由 v1.5 到 v2.0 一步步完成（`web/PLAN.md`，M23–M28）。流程仍然在
 邏輯元件（INV、NAND2、AOI21、DFFR…）上運作；`Tech`（`src/pdk/mod.rs`）把每個邏輯元件綁到元件庫裡的一個元件：名稱與腳位、
 佔幾個 site、在繞線格點上的腳位存取點、時序，以及列高 / site / 軌距。vlib 是內建的 `Tech`；SKY130 的由它的檔案建立：
 
@@ -268,7 +270,9 @@ interface 與 modport（成員攤平成 `inst.member` 訊號，modport 埠變成
 泛型 interface 埠、`inout`、遞迴、latch（不完整賦值的 always_comb 會報組合迴路）、
 寬度 > 256 bit 的常數、非同步讀取的記憶體放進 BRAM、SPRAM（`SB_SPRAM256KA`）、PLL；
 （netsim 用 `tick(clk)` 模擬多個時脈域與負緣正反器，`step()` 則是所有正反器同時一拍）
-自己的佈局繞線：只支援 UP5K、沒有 LUT 輸入腳交換。
+自己的佈局繞線：只支援 UP5K、沒有 LUT 輸入腳交換；
+SKY130：沒有 SRAM macro（記憶體是正反器）、只有一個角落（典型）、沒有寬金屬間距表、天線規則與 LVS，GDS 檢查
+（`tools/gds_check.py`）用的是 KLayout 的寬度 / 間距規則，不是完整的 SKY130 規則檔。
 
 ## 驗證結果（`./test.sh`）
 | 設計 | 對 `veryl build` 的等價驗證 |

@@ -7,6 +7,8 @@
 
 Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一直到比特流）与 ASIC 流程
 （标准单元、布局、布线、时序分析），全部用 Rust 编写。
+从 v2.0 起，ASIC 流程也能用 SkyWater 的开源 **SKY130** PDK（`sky130_fd_sc_hd`），一路做到通过 DRC 的 GDSII 版图
+（[说明](veryl-eda/README.cn.md)）。
 
 | | |
 |---|---|

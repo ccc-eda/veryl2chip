@@ -1,8 +1,8 @@
 [package]
 name = "veryl2chip-eda"
-version = "1.9.0"
+version = "2.0.0"
 edition = "2021"
-description = "Veryl HDL to chip: synthesis, iCE40 FPGA place & route and bitstream, ASIC standard-cell flow; part of veryl2chip"
+description = "Veryl HDL to chip: synthesis, iCE40 FPGA place & route and bitstream, ASIC standard-cell flow (vlib or SkyWater SKY130, to a DRC-clean GDS); part of veryl2chip"
 license = "MIT"
 repository = "https://github.com/ccc-eda/veryl2chip"
 homepage = "https://ccc-eda.github.io/veryl2chip/web/dist/index.html"
@@ -20,4 +20,4 @@ path = "src/main.rs"
 
 [dependencies]
 veryl-parser = "0.22"
-veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "1.9.0" }
+veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "2.0.0" }
