@@ -1,6 +1,6 @@
 [package]
 name = "veryl2chip-eda"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 description = "Veryl HDL to chip: synthesis, iCE40 FPGA place & route and bitstream, ASIC standard-cell flow; part of veryl2chip"
 license = "MIT"
@@ -20,4 +20,4 @@ path = "src/main.rs"
 
 [dependencies]
 veryl-parser = "0.22"
-veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "1.1.0" }
+veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "1.1.1" }
