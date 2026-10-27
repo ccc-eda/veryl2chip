@@ -43,7 +43,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.20 | 2026-10-27 | `8bd9404` | 2.20.0：開發板 6：C 程式 | |
 | v2.21 | 2026-10-27 | `dfdddd2` | 2.21.0：開發板 7：螢幕 | |
 | v2.22 | 2026-10-27 | `9ded8c5` | 2.22.0：riscv-emu 1：指令集模擬器 | |
-| v2.23 | 2026-10-27 | （本版） | 2.23.0：riscv-emu 2：IDE 的引擎 | |
+| v2.23 | 2026-10-27 | `0d52ded` | 2.23.0：riscv-emu 2：IDE 的引擎 | |
+| v2.24 | 2026-10-27 | （本版） | 2.24.0：riscv-emu 3：翻譯成 WebAssembly | |
 
 ---
 
@@ -494,6 +495,20 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - 驗證：npm test 在 Node 上用 riscv-emu 冷開機（約 1.6 秒、50 MIPS），檔案、MicroPython、C、GPIO 12 / 13、螢幕；瀏覽器實測開機、
   執行 `shapes.c`、切換兩種引擎。
 - 下一版的翻譯器（`jit.rs`、wasm 的 `rv_jit*` 與 `jit_ld` / `jit_st` / `jit_ar`、匯出可成長的函式表）已經在這版的程式裡，但沒有打開。
+
+### v2.24：riscv-emu 3，翻譯成 WebAssembly
+
+- `riscv-emu/src/jit.rs`：基本區塊（同一頁、最多 64 個指令）翻成一個模組的函式 `(m: i32) -> i32`，import 核心的記憶體與 `ld` / `st` / `ar`
+  三個 helper；`Machine` 改成 `repr(C)`，前面是 `x`、`pc`、`jit_fault`、`prv`，生成的碼用固定位移讀寫。核心用 `--export-table
+  --growable-table` 連結（`riscv-emu/.cargo/config.toml`），宿主把模組的函式放進表，核心用函式指標（= 表的索引）呼叫。
+- 第一版（每次都查 HashMap、載入儲存都呼叫 helper）指令只快 1.5 倍；加上依虛擬位址的區塊快取（4096 項）到 2.2 倍；載入 / 儲存先查
+  翻譯碼自己的 TLB（每個特權 512 項，helper 成功時填，satp / sfence / SUM / MXR / MPRV / MPP 改變時清；有翻譯碼的頁不放進儲存的
+  TLB，tohost 那頁也不放）到 3.6–4 倍。門檻：100 次翻得太多（6410 個區塊）、5000 次太少，用 1000。
+- 正確性：區塊以「實體 + 虛擬位址」為鍵（碼裡有虛擬的 pc）；寫到有翻譯碼的頁就丟掉那頁的區塊，如果是翻譯碼自己寫的，區塊在這個儲存之後
+  就結束（`jit_fault` = 2）；helper 發出例外時寫回暫存器、pc 停在那個指令（`jit_fault` = 1）。riscv-tests 在門檻 2（幾乎全部翻譯）
+  196 支全過；Linux 開機與指令在直譯、門檻 2（翻了 2.7 萬個區塊）、預設下輸出相同（`riscv-emu/tests/jit.mjs`，根目錄的 `test.sh`
+  與 CI 也跑）。修正：`Bus::reset` 要保留 tohost（wasm 裡先載入再重設的 riscv-tests 都沒結束）；wasm 加上 `rv_load_program`。
+- IDE 的 riscv-emu 打開翻譯；瀏覽器實測冷開機加上 `traffic.py` 約 15 秒內在跑。
 
 ---
 

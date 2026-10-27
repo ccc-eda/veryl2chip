@@ -40,6 +40,27 @@ target/release/rvemu ../examples/rv64/linux/build/opensbi/platform/generic/firmw
 the RAM read and written directly at `rv_ram`). `web/build.mjs` puts it into `web/dist/rvemu.js`; the IDE's emulator drives
 it with `web/src/rv_machine.ts`, its time following the real clock (`rv_set_time`). About 50 MIPS in Node (65–85 natively).
 
+## Translation to WebAssembly (like QEMU's TCG)
+
+Running in WebAssembly (a browser, Node), a basic block executed more than 1000 times (in one 4 KB page, at most 64
+instructions, up to a jump or branch, or up to an instruction it does not translate: SYSTEM, AMO, FENCE) becomes a function
+`(m) -> instructions` of a small wasm module made by `src/jit.rs`; the host (`web/src/rv_machine.ts` or `tests/jit.mjs`)
+compiles it, instantiates it with the core's memory and `jit_ld` / `jit_st` / `jit_ar` as imports and puts it into the
+function table the core exports, which then `call_indirect`s it (on wasm32 a function pointer is a table index). The
+registers a block uses live in locals and are written back at its exits; loads and stores look in the translated code's own
+TLB first (one per privilege, holding where a RAM page is in the core's memory), else call the helper (which translates the
+address and may trap). Blocks are keyed by physical and virtual address; a write to a page with translated code drops its
+blocks.
+
+| Node 24 (wasm) | interpreted | translated |
+|---|---|---|
+| Linux to the shell (83 M instructions) | 1.7 s (48 MIPS) | 1.6 s (52 MIPS) |
+| commands after it (`ls`, MicroPython summing 100 000 squares; 61 M instructions) | 1.4 s (44 MIPS) | 0.35 s (176 MIPS) |
+
+Booting is mostly code that runs once, so it gains little; code that keeps running is four times as fast.
+`node tests/jit.mjs` (after `cargo build --release --lib --target wasm32-unknown-unknown`): riscv-tests all pass at threshold 2
+(nearly every block translated), and Linux gives the same output interpreted, at threshold 2 and at the default.
+
 ## rvemu
 
 ```

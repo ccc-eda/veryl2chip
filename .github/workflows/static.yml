@@ -58,9 +58,12 @@ jobs:
           cargo test --release
           cargo build --release
 
-      - name: riscv-emu (cargo test)
+      - name: riscv-emu (cargo test; the translation to wasm in Node)
         working-directory: riscv-emu
-        run: cargo test --release
+        run: |
+          cargo test --release
+          cargo build --release --lib --target wasm32-unknown-unknown
+          node tests/jit.mjs
 
       - name: Tutorial (simulation, gate level, iCEBreaker bitstreams)
         run: ./tutorial/check.sh

@@ -146,6 +146,7 @@ UART 接到分頁裡的終端機。
   像 QEMU，冷開機幾秒就有 shell，`sleep(1)` 就是真的一秒（時間跟著時鐘走），狀態列顯示 MIPS；**veryl-emu** 模擬 Veryl 寫的硬體本身
   （每一拍、每個訊號，從快照開機），要看自己改過的 Veryl 設計就選它。GPIO、麵包板、檔案、▶ 執行、螢幕、💾 兩種引擎都一樣
   （存下的狀態屬於存它的引擎）。riscv-emu 不看專案的 Veryl 原始碼：它的 SoC 是 [riscv-emu](../riscv-emu/README.tw.md) 照 Rv64Soc 寫的。
+  v2.24 起 riscv-emu 把常跑的程式片段翻成 WebAssembly（像 QEMU），一直在跑的程式約快四倍。
 - **螢幕**（v2.21）：`machine.json` 有 `"fb": { "addr": "0x8EF00000", "width": 320, "height": 240 }` 時，板子和麵包板之間多一個
   320 × 240 的螢幕：Linux 的 `simple-framebuffer`（`/dev/fb0`，RGB565）放在 RAM 裡，worker 每 0.1 秒看一次，有變化才畫到 canvas。
   開機時 fbcon（tty1）顯示問候語；`echo hi > /dev/tty1` 寫字到螢幕上。MicroPython：`from pi import Screen` 是 320 × 240 的

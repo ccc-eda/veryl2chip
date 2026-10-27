@@ -76,6 +76,11 @@ fi
 riscv_emu_tests() {
     cd "$ROOT/riscv-emu"
     cargo test --release
+    # the translation to WebAssembly runs only in a WebAssembly host: Node
+    if command -v node > /dev/null; then
+        cargo build --release --lib --target wasm32-unknown-unknown
+        node tests/jit.mjs
+    fi
 }
 run riscv-emu riscv_emu_tests
 

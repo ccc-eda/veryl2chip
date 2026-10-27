@@ -36,6 +36,24 @@ target/release/rvemu ../examples/rv64/linux/build/opensbi/platform/generic/firmw
 `web/build.mjs` 把它放進 `web/dist/rvemu.js`，IDE 的模擬機用 `web/src/rv_machine.ts` 驅動，時間跟著真實時鐘（`rv_set_time`）。
 Node 上約 50 MIPS（原生約 65–85 MIPS）。
 
+## 翻譯成 WebAssembly（像 QEMU 的 TCG）
+
+在 WebAssembly 裡跑時（瀏覽器、Node），執行超過 1000 次的基本區塊（同一個 4 KB 頁、最多 64 個指令，到跳躍或分支為止，
+或停在不翻譯的指令前：SYSTEM、AMO、FENCE）由 `src/jit.rs` 翻成一個小 wasm 模組的函式 `(m) -> 指令數`；宿主（`web/src/rv_machine.ts`
+或 `tests/jit.mjs`）編譯它、用核心的記憶體與 `jit_ld` / `jit_st` / `jit_ar` 當 import 實例化，再放進核心匯出的函式表，核心以後
+直接 `call_indirect`（wasm32 的函式指標就是表的索引）。區塊用到的暫存器放在 local，結束時寫回；載入 / 儲存先查翻譯碼自己的 TLB
+（每個特權一張，記 RAM 頁在核心記憶體的位址），沒中再呼叫 helper（它做位址轉換，可能發出例外）。區塊依「實體位址 + 虛擬位址」
+記錄，寫到有翻譯碼的頁就丟掉那頁的區塊。
+
+| Node 24（wasm） | 直譯 | 翻譯 |
+|---|---|---|
+| 開 Linux 到 shell（8300 萬個指令） | 1.7 秒（48 MIPS） | 1.6 秒（52 MIPS） |
+| 之後的指令（`ls`、MicroPython 算 10 萬個平方和，6100 萬個指令） | 1.4 秒（44 MIPS） | 0.35 秒（176 MIPS） |
+
+開機大多是只跑一次的程式碼，所以快得不多；程式一直跑的部分快四倍。`node tests/jit.mjs`（要先
+`cargo build --release --lib --target wasm32-unknown-unknown`）：riscv-tests 在門檻 2（幾乎每個區塊都翻譯）全過，Linux 在
+直譯、門檻 2、預設三種下輸出相同。
+
 ## rvemu
 
 ```

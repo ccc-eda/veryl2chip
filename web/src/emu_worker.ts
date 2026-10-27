@@ -86,7 +86,7 @@ self.onmessage = async (e: MessageEvent) => {
     if (d.type === 'start') {
       gen++;
       running = false;
-      m = d.engine === 'riscv' ? await RvMachine.create(d.wasm, d.cfg, { realtime: true }) : await Machine.create(d.wasm, d.meta, d.cfg);
+      m = d.engine === 'riscv' ? await RvMachine.create(d.wasm, d.cfg, { realtime: true, jit: true }) : await Machine.create(d.wasm, d.meta, d.cfg);
       images = d.images;
       files = d.files ?? null;
       tail = '';
