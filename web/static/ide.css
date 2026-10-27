@@ -23,6 +23,7 @@ body.ide select { background: #3c3c3c; border: 1px solid #4a4a4a; border-radius:
 .tb-btn:disabled { opacity: .45; cursor: default; }
 .tb-link { color: var(--dim); text-decoration: none; font-size: 12px; white-space: nowrap; }
 .tb-link:hover { color: #fff; }
+#tbMore { display: none; font-size: 16px; padding: 0 10px; }
 
 #workbench { flex: 1; display: flex; min-height: 0; }
 #activity { flex: 0 0 46px; background: var(--act); display: flex; flex-direction: column; align-items: center; padding-top: 4px; }
@@ -85,20 +86,20 @@ button.icon:hover { background: #3a3d41; }
 #welcome h3 { color: #ccc; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
 
 /* code editor */
-.ed { background: var(--bg); }
+.ed { background: var(--bg); --edfs: 13px; --edlh: 19px; }
 .ed-scroll { position: absolute; inset: 0; overflow: auto; display: flex; align-items: flex-start; }
 .ed-gutter { position: sticky; left: 0; z-index: 3; flex: 0 0 auto; min-width: 52px; padding: 4px 14px 40vh 8px; text-align: right; background: var(--bg); color: #6e7681; user-select: none;
-  font: 13px/19px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.ed-gutter div { height: 19px; }
+  font: var(--edfs)/var(--edlh) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ed-gutter div { height: var(--edlh); }
 .ed-gutter .g-error { color: var(--err); font-weight: 700; }
 .ed-gutter .g-error::before { content: "● "; font-size: 9px; vertical-align: 2px; }
 .ed-gutter .g-warning { color: var(--warn); }
 .ed-code { position: relative; flex: 1; min-width: 0; min-height: 100%; }
-.ed-hl, .ed-ta { margin: 0; padding: 4px 40px 40vh 4px; border: none; font: 13px/19px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; white-space: pre; letter-spacing: 0; }
+.ed-hl, .ed-ta { margin: 0; padding: 4px 40px 40vh 4px; border: none; font: var(--edfs)/var(--edlh) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; white-space: pre; letter-spacing: 0; }
 .ed-hl { word-break: normal; flex: none; color: #d4d4d4; min-width: 100%; width: max-content; pointer-events: none; overflow: visible; }
 .ed-ta { position: absolute; top: 0; left: 0; resize: none; overflow: hidden; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: #aeafad; outline: none; border-radius: 0; z-index: 2; }
 .ed-ta::selection { background: rgba(38, 79, 120, .85); -webkit-text-fill-color: transparent; }
-.ed-cur { position: absolute; left: 0; right: 0; height: 19px; background: #ffffff08; border-top: 1px solid #282828; border-bottom: 1px solid #282828; pointer-events: none; }
+.ed-cur { position: absolute; left: 0; right: 0; height: var(--edlh); background: #ffffff08; border-top: 1px solid #282828; border-bottom: 1px solid #282828; pointer-events: none; }
 .t-kw { color: #569cd6; } .t-type { color: #4ec9b0; } .t-name { color: #dcdcaa; } .t-num { color: #b5cea8; }
 .t-str { color: #ce9178; } .t-com { color: #6a9955; font-style: italic; } .t-sys { color: #c586c0; } .t-attr { color: #9cdcfe; } .t-dom { color: #d7ba7d; }
 .ed-error { text-decoration: underline wavy var(--err); text-decoration-skip-ink: none; text-underline-offset: 3px; }
@@ -286,4 +287,61 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
   #sidebar { flex-basis: 180px; }
   .tb-group select { max-width: 110px; }
   #titlebar { overflow-x: auto; }
+}
+
+/* phones: the main actions in one row (⋯ shows the menus), the sidebar as a drawer over the editor,
+   larger text and touch targets; the stacked flow view */
+@media (max-width: 760px) {
+  #titlebar { height: auto; min-height: 40px; flex-wrap: wrap; gap: 6px; padding: 4px 6px; overflow: visible; }
+  #titlebar .brand, #demoLink { display: none; }
+  .tb-group { display: contents; }
+  #cmdRun { order: 1; } #cmdBoard { order: 2; } #titlebar > .spacer { order: 3; } #cmdPalette { order: 4; } #tbMore { order: 5; display: inline-block; }
+  #simTop, #simMode, #cmdVerify, #flowTarget, #flowStage, #synthTop, #langSel { order: 10; display: none; }
+  #titlebar.more #simTop, #titlebar.more #simMode, #titlebar.more #flowTarget, #titlebar.more #flowStage,
+  #titlebar.more #synthTop, #titlebar.more #langSel, #titlebar.more #cmdVerify { display: block; flex: 1 1 40%; max-width: none; min-width: 0; }
+  #tbMore.on { color: #fff; background: #3a3d41; }
+  .tb-btn { padding: 6px 12px; font-size: 14px; }
+  body.ide select { height: 32px; font-size: 14px; }
+
+  #workbench { position: relative; }
+  #center { height: auto; min-height: 0; padding: 0; gap: 0; }
+  #activity { flex-basis: 40px; }
+  #activity button { width: 40px; height: 46px; }
+  #sidebar { display: none; position: absolute; top: 0; bottom: 0; left: 40px; z-index: 30; width: min(320px, calc(100vw - 56px)); box-shadow: 4px 0 16px #000a; }
+  body.side-open #sidebar { display: block; }
+  #sideResize { display: none; }
+  .tree .item { line-height: 30px; font-size: 14px; }
+  .side-head button.icon { padding: 4px 8px; font-size: 16px; }
+
+  .ed { --edfs: 16px; --edlh: 22px; }
+  .ed-gutter { min-width: 34px; padding-right: 8px; padding-left: 4px; }
+  #edTabs .tab { font-size: 14px; }
+  #welcome { padding: 20px 16px; }
+  #welcome .cols { gap: 24px; }
+  #welcome a { padding: 6px 0; font-size: 15px; }
+
+  #panel { flex-basis: 34vh; }
+  #panelResize { flex-basis: 10px; margin: -5px 0; touch-action: none; }
+  #panelTabs { overflow-x: auto; scrollbar-width: none; }
+  #panelTabs button[data-panel] { flex: none; white-space: nowrap; padding: 8px 8px 6px; }
+  #statusbar #sbPos, #statusbar > span:last-child { display: none; }
+
+  .flowpane #synBar { overflow-x: auto; scrollbar-width: none; }
+  .flowpane #synBar button.icon, .flowpane #synZoom button { width: 32px; height: 30px; font-size: 15px; }
+  .flowpane #synBody { flex-direction: column; }
+  .flowpane #synCanvasWrap { flex: 1 1 60%; min-height: 0; }
+  .flowpane #synSide { flex: 0 1 auto; max-height: 40%; overflow: auto; border-left: none; border-top: 1px solid var(--line); }
+  #synCanvas, #waveCanvas { touch-action: none; }
+
+  #boardPane .vb-pins { inset: 10px; }
+  .vb-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; }
+  .vb-bar > * { flex: none; white-space: nowrap; }
+  .vb-stage { padding: 6px; }
+  .vb-cards { padding: 0 8px 8px; }
+  .vb-foot { max-height: 18%; padding: 4px 10px 6px; }
+}
+/* touch screens have no hover: show the row actions of the current item and the tab close buttons */
+@media (hover: none) {
+  .tree .item.cur .acts { display: flex; }
+  #edTabs .tab .x { visibility: visible; }
 }

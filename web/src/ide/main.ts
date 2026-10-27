@@ -922,9 +922,19 @@ function panel(p: string): void {
   if (p === 'wave') wave?.fit();
 }
 
+/** phone layout (ide.css): the sidebar is a drawer, the title bar's menus are behind ⋯ */
+const phone = () => matchMedia('(max-width: 760px)').matches;
+const drawer = (open: boolean) => document.body.classList.toggle('side-open', open);
+
+function moreMenu(on: boolean): void {
+  $('titlebar').classList.toggle('more', on);
+  $('tbMore').classList.toggle('on', on);
+}
+
 function sideView(v: string): void {
   const cur = $('activity').querySelector<HTMLElement>(`button[data-view="${v}"]`);
   const already = cur?.classList.contains('cur') && !$('sidebar').classList.contains('hidden');
+  if (phone()) drawer(!(already && document.body.classList.contains('side-open')));
   for (const b of $('activity').querySelectorAll<HTMLElement>('button')) b.classList.toggle('cur', b.dataset.view === v);
   for (const s of document.querySelectorAll<HTMLElement>('.sideview')) s.classList.toggle('hidden', s.id !== 'view-' + v);
   $('sidebar').classList.remove('hidden');
@@ -1101,6 +1111,7 @@ function wire(): void {
     const id = (e.target as HTMLElement).dataset.c;
     if (!id) return;
     const sel = $<HTMLSelectElement>(id);
+    if (!sel.offsetParent) moreMenu(true);
     try { sel.showPicker(); } catch { sel.focus(); }
   };
   const infoOpen = (on: boolean) => { $('synInfo').classList.toggle('hidden', !on); $('synInfoBtn').classList.toggle('on', on); };
@@ -1113,6 +1124,14 @@ function wire(): void {
   });
   $('sbSynth').onclick = () => runSynth();
   for (const b of $('activity').querySelectorAll<HTMLElement>('button')) b.onclick = () => sideView(b.dataset.view!);
+  // phones: a tap on an item in the drawer (not on its ✎ / 🗑) or outside it closes the drawer
+  // (capture: the lists redraw themselves on click)
+  $('sidebar').addEventListener('click', e => {
+    const t = e.target as HTMLElement;
+    if (phone() && t.closest('.tree .item') && !t.closest('button')) drawer(false);
+  }, true);
+  $('center').addEventListener('pointerdown', () => drawer(false));
+  $('tbMore').onclick = () => moreMenu(!$('titlebar').classList.contains('more'));
   for (const b of $('panelTabs').querySelectorAll<HTMLElement>('button[data-panel]')) b.onclick = () => panel(b.dataset.panel!);
   $('panelToggle').onclick = () => $('panel').classList.toggle('collapsed');
   $('sbProblems').onclick = () => panel('problems');

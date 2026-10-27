@@ -20,7 +20,8 @@ export class CodeEditor {
   onCursor: (line: number, col: number) => void = () => {};
   /** keyboard shortcuts the page handles (return true when handled) */
   onKey: (e: KeyboardEvent) => boolean = () => false;
-  readonly lineHeight = 19;
+  /** pixels per line: 19, or larger on phones (ide.css --edlh) */
+  get lineHeight(): number { return parseFloat(getComputedStyle(this.ta).lineHeight) || 19; }
   /** the language of the text (highlighting) */
   private _lang: Lang = 'veryl';
   get lang(): Lang { return this._lang; }

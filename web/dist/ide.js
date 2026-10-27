@@ -3979,7 +3979,6 @@ ${lines.join("\n")}
       });
       /** keyboard shortcuts the page handles (return true when handled) */
       __publicField(this, "onKey", () => false);
-      __publicField(this, "lineHeight", 19);
       /** the language of the text (highlighting) */
       __publicField(this, "_lang", "veryl");
       host.classList.add("ed");
@@ -4002,6 +4001,10 @@ ${lines.join("\n")}
       });
       for (const ev of ["keyup", "click", "select", "focus"]) this.ta.addEventListener(ev, () => this.cursor());
       this.ta.addEventListener("keydown", (e) => this.key(e));
+    }
+    /** pixels per line: 19, or larger on phones (ide.css --edlh) */
+    get lineHeight() {
+      return parseFloat(getComputedStyle(this.ta).lineHeight) || 19;
     }
     get lang() {
       return this._lang;
@@ -5034,9 +5037,16 @@ int main(void) {
     $2("waveTop").classList.toggle("hidden", p !== "wave" || vcds.length < 2);
     if (p === "wave") wave?.fit();
   }
+  var phone = () => matchMedia("(max-width: 760px)").matches;
+  var drawer = (open) => document.body.classList.toggle("side-open", open);
+  function moreMenu(on) {
+    $2("titlebar").classList.toggle("more", on);
+    $2("tbMore").classList.toggle("on", on);
+  }
   function sideView(v) {
     const cur2 = $2("activity").querySelector(`button[data-view="${v}"]`);
     const already = cur2?.classList.contains("cur") && !$2("sidebar").classList.contains("hidden");
+    if (phone()) drawer(!(already && document.body.classList.contains("side-open")));
     for (const b of $2("activity").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.view === v);
     for (const s of document.querySelectorAll(".sideview")) s.classList.toggle("hidden", s.id !== "view-" + v);
     $2("sidebar").classList.remove("hidden");
@@ -5241,6 +5251,7 @@ int main(void) {
       const id = e.target.dataset.c;
       if (!id) return;
       const sel = $2(id);
+      if (!sel.offsetParent) moreMenu(true);
       try {
         sel.showPicker();
       } catch {
@@ -5263,6 +5274,12 @@ int main(void) {
     });
     $2("sbSynth").onclick = () => runSynth();
     for (const b of $2("activity").querySelectorAll("button")) b.onclick = () => sideView(b.dataset.view);
+    $2("sidebar").addEventListener("click", (e) => {
+      const t = e.target;
+      if (phone() && t.closest(".tree .item") && !t.closest("button")) drawer(false);
+    }, true);
+    $2("center").addEventListener("pointerdown", () => drawer(false));
+    $2("tbMore").onclick = () => moreMenu(!$2("titlebar").classList.contains("more"));
     for (const b of $2("panelTabs").querySelectorAll("button[data-panel]")) b.onclick = () => panel(b.dataset.panel);
     $2("panelToggle").onclick = () => $2("panel").classList.toggle("collapsed");
     $2("sbProblems").onclick = () => panel("problems");
