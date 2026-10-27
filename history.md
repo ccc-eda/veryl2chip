@@ -22,7 +22,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v1.9 | 2026-10-27 | `285be7f` | IDE 裡可選 SKY130 | `v1.9` |
 | v2.0 | 2026-10-27 | `85fe18e` | 2.0.0：接上 SkyWater SKY130 | `v2.0`（= `d70d279`） |
 | v2.1 | 2026-10-27 | `c864946` 起 | 2.1.0：`v2c` 單一指令、使用手冊、手機版 IDE | （發布時由 `publish.sh` 打） |
-| v2.2 | 2026-10-27 | （本版） | 2.2.0：Lattice ECP5 對應 + nextpnr-ecp5 | |
+| v2.2 | 2026-10-27 | `1b57624` | 2.2.0：Lattice ECP5 對應 + nextpnr-ecp5 | |
+| v2.3 | 2026-10-27 | （本版） | 2.3.0：RV64 處理器 `Rv64Core`（Veryl），通過 riscv-tests | |
 
 ---
 
@@ -207,6 +208,20 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   `TRELLIS_COMB` 模型在 generate 區塊裡寫 `wire FCO = ...`，真正的 `FCO` 沒被驅動（改用 `fpga/ecp5_comb.v`）；
   nextpnr 把常數輸入併進真值表，靠的是沒接的 LUT 輸入讀成 1。
 - 之後的方向調整：先做 RV64 處理器（用官方 `veryl build` + Verilator 驗證，跑 xv6、Linux），ECP5 的 block RAM 等等之後再做。
+
+### v2.3：`Rv64Core`，通過 riscv-tests
+
+- 方向：先做出跑得起 xv6、之後 Linux 的 RV64 處理器，HDL 先用官方工具鏈驗證（`veryl build` + Verilator），
+  v2c 等 CPU 做對了再跟上。周邊一開始就用 Veryl 寫（之後上 FPGA 用得到）。
+- `examples/rv64/`（獨立的 Veryl 專案）：
+  - `Rv64Core`：多週期 RV64IMA + Zicsr + Zicntr + Zifencei + Sstc，M / S / U 模式、陷阱委派、
+    SV39（三層走訪、大頁、SUM / MXR / MPRV、A / D 由硬體寫回）。
+  - `Rv64Soc`：RAM 128 MB、CLINT、PLIC、UART 16550，記憶體映射和 QEMU `virt` 相同。
+  - Verilator 測試平台：載入 ELF、`tohost`、UART ↔ 終端機、spike 格式的指令紀錄。
+- 驗證：官方 riscv-tests 的 rv64ui / um / ua / si / mi，`-p` 與 `-v`（虛擬記憶體）共 194 支全部通過
+  （第一次跑就過了 192 支；補上除錯觸發器 CSR 與可讀寫的 PMP 暫存器之後全過）；`ma_data` 要硬體支援沒對齊存取，不在清單內。
+  `-p` 的測試和 spike 逐指令比對，除了 spike 有觸發器、`marchid`、A / D 用 page fault、SC 偶爾失敗這四個已知差異外完全相同。
+- 版本 2.3.0（兩個 crate 本身沒有變動，版本跟著專案走）。
 
 ---
 

@@ -1,0 +1,394 @@
+// ==========================================
+// Rv64Soc：Rv64Core + RAM + CLINT + PLIC + UART（QEMU virt 機器的記憶體映射）
+// ==========================================
+//   0x0200_0000  CLINT：msip（+0）、mtimecmp（+0x4000）、mtime（+0xBFF8，每拍加一）
+//   0x0C00_0000  PLIC ：來源 1..31 的優先權（+4 × id）、pending（+0x1000）、
+//                       致能（context 0 = M：+0x2000，context 1 = S：+0x2080）、
+//                       門檻 / claim（context 0：+0x200000 / +0x200004，context 1：+0x201000 / +0x201004）
+//   0x1000_0000  UART ：16550 的暫存器（位元組），中斷是 PLIC 的來源 10
+//   0x8000_0000  RAM  ：2^MEM_BITS 位元組
+// 其他位址：access fault。
+//
+// 匯流排：核心送出請求的下一拍回應（o_req 那一拍取樣、寫入、讀出，下一拍 ack），
+// 資料都在低位元（RAM 依位址的低 3 位元移位）。
+// 測試平台：i_ld_* 在重設時把程式寫進 RAM；o_tx_* 是 UART 送出的位元組、i_rx_* 是收到的；
+// o_dbg_* 是每次匯流排寫入（riscv-tests 的 tohost）；o_ret_* 是完成的指令。
+
+module Rv64Soc #(
+    param MEM_BITS: u32 = 27, // RAM 大小：2^27 = 128 MB
+) (
+    i_clk     : input  clock    ,
+    i_rst     : input  reset    ,
+    // 載入程式（核心在重設時）：RAM 的第 i_ld_addr 個 64 位元字
+    i_ld_we   : input  logic    ,
+    i_ld_addr : input  logic<32>,
+    i_ld_data : input  logic<64>,
+    // UART 的另一端
+    o_tx_valid: output logic    ,
+    o_tx_data : output logic<8> ,
+    i_rx_valid: input  logic    ,
+    i_rx_data : input  logic<8> ,
+    o_rx_ready: output logic    ,
+    // 除錯
+    o_dbg_wr   : output logic    ,
+    o_dbg_addr : output logic<64>,
+    o_dbg_wdata: output logic<64>,
+    o_ret      : output logic    ,
+    o_ret_pc   : output logic<64>,
+    o_ret_insn : output logic<32>,
+    o_ret_we   : output logic    ,
+    o_ret_rd   : output logic<5> ,
+    o_ret_wdata: output logic<64>,
+    o_ret_prv  : output logic<2> ,
+    o_trap      : output logic    ,
+    o_trap_cause: output logic<64>,
+) {
+    const WORDS: u32 = 1 << (MEM_BITS - 3);
+
+    var req  : logic    ;
+    var we   : logic    ;
+    var addr : logic<64>;
+    var size : logic<2> ;
+    var wdata: logic<64>;
+    var ack  : logic    ;
+    var err  : logic    ;
+    var rdata: logic<64>;
+
+    var mtip : logic    ;
+    var msip : logic    ;
+    var meip : logic    ;
+    var seip : logic    ;
+    var mtime: logic<64>;
+
+    inst u_core: Rv64Core (
+        i_clk                     ,
+        i_rst                     ,
+        o_req       : req         ,
+        o_we        : we          ,
+        o_addr      : addr        ,
+        o_size      : size        ,
+        o_wdata     : wdata       ,
+        i_ack       : ack         ,
+        i_err       : err         ,
+        i_rdata     : rdata       ,
+        i_mtip      : mtip        ,
+        i_msip      : msip        ,
+        i_meip      : meip        ,
+        i_seip      : seip        ,
+        i_mtime     : mtime       ,
+        o_ret                     ,
+        o_ret_pc                  ,
+        o_ret_insn                ,
+        o_ret_we                  ,
+        o_ret_rd                  ,
+        o_ret_wdata               ,
+        o_ret_prv                 ,
+        o_trap                    ,
+        o_trap_cause              ,
+    );
+
+    // 一次存取：請求的那一拍（還沒 ack）
+    let go: logic = req && !ack;
+
+    // 位址解碼
+    let sel_ram  : logic = addr[63:31] == 33'd1 && addr[30:0] <: (31'd1 << MEM_BITS);
+    let sel_clint: logic = addr[63:16] == 48'h0000_0000_0200;
+    let sel_plic : logic = addr[63:26] == 38'h00_0000_0003; // 0x0C00_0000 .. 0x0FFF_FFFF
+    let sel_uart : logic = addr[63:8] == 56'h00_0000_0010_0000;
+
+    // 存取寬度的遮罩，與 RAM 字裡的位元組位置
+    var bmask: logic<64>;
+    always_comb {
+        case size {
+            2'd0   : bmask = 64'h0000_0000_0000_00ff;
+            2'd1   : bmask = 64'h0000_0000_0000_ffff;
+            2'd2   : bmask = 64'h0000_0000_ffff_ffff;
+            default: bmask = 64'hffff_ffff_ffff_ffff;
+        }
+    }
+    let lane     : logic<6>  = {addr[2:0], 3'b000};
+    let lane_mask: logic<64> = bmask << lane;
+    let lane_data: logic<64> = wdata << lane;
+    // 8 位元組的暫存器被 4 位元組存取：addr[2] 選高半或低半
+    let hi       : logic     = addr[2];
+
+    // ---------------------------------------------------------------- RAM
+    var mem     : logic<64> [WORDS];
+    var ram_word: logic<64>;
+    let widx    : logic<MEM_BITS - 3> = addr[MEM_BITS - 1:3];
+    let merged  : logic<64>           = (mem[widx] & ~lane_mask) | (lane_data & lane_mask);
+
+    #[allow(missing_reset_statement)]
+    always_ff (i_clk) {
+        if i_ld_we {
+            mem[i_ld_addr[MEM_BITS - 4:0]] = i_ld_data;
+        } else if go && sel_ram && we {
+            mem[widx] = merged;
+        }
+        ram_word = mem[widx];
+    }
+
+    // ---------------------------------------------------------------- CLINT
+    var mtimecmp : logic<64>;
+    var msip_r   : logic    ;
+    let clint_off: logic<16> = addr[15:0];
+    var clint_rd : logic<64>;
+    always_comb {
+        if clint_off[15:3] == 13'h17ff {
+            clint_rd = if size == 2'd3 ? mtime : if hi ? {32'd0, mtime[63:32]} : {32'd0, mtime[31:0]};
+        } else if clint_off[15:3] == 13'h0800 {
+            clint_rd = if size == 2'd3 ? mtimecmp : if hi ? {32'd0, mtimecmp[63:32]} : {32'd0, mtimecmp[31:0]};
+        } else if clint_off == 16'h0000 {
+            clint_rd = {63'd0, msip_r};
+        } else {
+            clint_rd = 64'd0;
+        }
+    }
+    assign mtip = mtime >= mtimecmp;
+    assign msip = msip_r;
+
+    always_ff {
+        if_reset {
+            mtime    = 64'd0;
+            mtimecmp = 64'hffff_ffff_ffff_ffff;
+            msip_r   = 1'b0;
+        } else {
+            mtime = mtime + 64'd1;
+            if go && sel_clint && we {
+                if clint_off[15:3] == 13'h0800 {
+                    if size == 2'd3 {
+                        mtimecmp = wdata;
+                    } else if hi {
+                        mtimecmp[63:32] = wdata[31:0];
+                    } else {
+                        mtimecmp[31:0] = wdata[31:0];
+                    }
+                } else if clint_off[15:3] == 13'h17ff {
+                    if size == 2'd3 {
+                        mtime = wdata;
+                    } else if hi {
+                        mtime[63:32] = wdata[31:0];
+                    } else {
+                        mtime[31:0] = wdata[31:0];
+                    }
+                } else if clint_off == 16'h0000 {
+                    msip_r = wdata[0];
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- UART（16550 的子集）
+    // 送出：寫 THR 立刻送給測試平台（THR 永遠是空的）；收到：一個位元組的緩衝
+    var uart_ier : logic<4>;
+    var uart_lcr : logic<8>;
+    var uart_mcr : logic<8>;
+    var uart_scr : logic<8>;
+    var uart_fcr : logic   ; // FIFO 致能（只影響 IIR 的讀值）
+    var uart_dll : logic<8>;
+    var uart_dlm : logic<8>;
+    var rx_full  : logic   ;
+    var rx_byte  : logic<8>;
+    var thre_pend: logic   ; // THR 空了的中斷（讀到 IIR = THRE 或寫 THR 時清掉）
+    let dlab     : logic    = uart_lcr[7];
+    let u_off    : logic<3> = addr[2:0];
+    let u_rx_int : logic    = uart_ier[0] && rx_full;
+    let u_tx_int : logic    = uart_ier[1] && thre_pend;
+    let u_iir    : logic<8> = {if uart_fcr ? 2'b11 : 2'b00, 2'b00, if u_rx_int ? 4'h4 : if u_tx_int ? 4'h2 : 4'h1};
+    let uart_irq : logic    = u_rx_int || u_tx_int;
+    var uart_rd  : logic<8>;
+    always_comb {
+        case u_off {
+            3'd0   : uart_rd = if dlab ? uart_dll : rx_byte;
+            3'd1   : uart_rd = if dlab ? uart_dlm : {4'd0, uart_ier};
+            3'd2   : uart_rd = u_iir;
+            3'd3   : uart_rd = uart_lcr;
+            3'd4   : uart_rd = uart_mcr;
+            3'd5   : uart_rd = {1'b0, 1'b1, 1'b1, 4'd0, rx_full}; // TEMT、THRE、DR
+            3'd6   : uart_rd = 8'h00;
+            default: uart_rd = uart_scr;
+        }
+    }
+    let u_wr: logic = go && sel_uart && we;
+    let u_rd: logic = go && sel_uart && !we;
+    assign o_tx_valid = u_wr && u_off == 3'd0 && !dlab;
+    assign o_tx_data  = wdata[7:0];
+    assign o_rx_ready = !rx_full;
+
+    always_ff {
+        if_reset {
+            uart_ier  = 4'd0;
+            uart_lcr  = 8'd0;
+            uart_mcr  = 8'd0;
+            uart_scr  = 8'd0;
+            uart_fcr  = 1'b0;
+            uart_dll  = 8'd0;
+            uart_dlm  = 8'd0;
+            rx_full   = 1'b0;
+            rx_byte   = 8'd0;
+            thre_pend = 1'b0;
+        } else {
+            if i_rx_valid && !rx_full {
+                rx_full = 1'b1;
+                rx_byte = i_rx_data;
+            }
+            if u_rd && u_off == 3'd0 && !dlab {
+                rx_full = 1'b0;
+            }
+            if u_rd && u_off == 3'd2 && !u_rx_int && u_tx_int {
+                thre_pend = 1'b0;
+            }
+            if u_wr {
+                case u_off {
+                    3'd0: if dlab {
+                        uart_dll = wdata[7:0];
+                    } else {
+                        thre_pend = 1'b1; // 立刻送出，THR 又空了
+                    }
+                    3'd1: if dlab {
+                        uart_dlm = wdata[7:0];
+                    } else {
+                        // 打開 THRE 中斷時 THR 是空的：立刻有中斷
+                        if wdata[1] && !uart_ier[1] {
+                            thre_pend = 1'b1;
+                        }
+                        uart_ier = wdata[3:0];
+                    }
+                    3'd2   : uart_fcr = wdata[0];
+                    3'd3   : uart_lcr = wdata[7:0];
+                    3'd4   : uart_mcr = wdata[7:0];
+                    3'd7   : uart_scr = wdata[7:0];
+                    default: {}
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- PLIC（來源 1..31，兩個 context）
+    // 準位觸發：來源是 1 且沒有被 claim 就是 pending；claim 讀出優先權最高的
+    // （同樣優先權取編號小的），complete 寫回編號之後才能再 pending
+    var prio    : logic<3> [32];
+    var en0     : logic<32>;
+    var en1     : logic<32>;
+    var thr0    : logic<3> ;
+    var thr1    : logic<3> ;
+    var claimed : logic<32>;
+    let src     : logic<32> = {21'd0, uart_irq, 10'd0};
+    let pending : logic<32> = src & ~claimed;
+    let p_off   : logic<26> = addr[25:0];
+
+    // 各 context 優先權最高的來源
+    var best0   : logic<5>;
+    var best1   : logic<5>;
+    var bprio0  : logic<3>;
+    var bprio1  : logic<3>;
+    always_comb {
+        best0  = 5'd0;
+        best1  = 5'd0;
+        bprio0 = 3'd0;
+        bprio1 = 3'd0;
+        for i in 1..32 {
+            if pending[i] && en0[i] && prio[i] >: bprio0 {
+                best0  = i[4:0];
+                bprio0 = prio[i];
+            }
+            if pending[i] && en1[i] && prio[i] >: bprio1 {
+                best1  = i[4:0];
+                bprio1 = prio[i];
+            }
+        }
+    }
+    assign meip = bprio0 >: thr0;
+    assign seip = bprio1 >: thr1;
+
+    var plic_rd: logic<64>;
+    always_comb {
+        plic_rd = 64'd0;
+        if p_off[25:7] == 19'd0 {
+            plic_rd = {61'd0, prio[p_off[6:2]]};
+        } else if p_off == 26'h000_1000 {
+            plic_rd = {32'd0, pending};
+        } else if p_off == 26'h000_2000 {
+            plic_rd = {32'd0, en0};
+        } else if p_off == 26'h000_2080 {
+            plic_rd = {32'd0, en1};
+        } else if p_off == 26'h20_0000 {
+            plic_rd = {61'd0, thr0};
+        } else if p_off == 26'h20_0004 {
+            plic_rd = {59'd0, best0};
+        } else if p_off == 26'h20_1000 {
+            plic_rd = {61'd0, thr1};
+        } else if p_off == 26'h20_1004 {
+            plic_rd = {59'd0, best1};
+        }
+    }
+    let p_wr: logic = go && sel_plic && we;
+    let p_rd: logic = go && sel_plic && !we;
+
+    always_ff {
+        if_reset {
+            for i in 0..32 {
+                prio[i] = 3'd0;
+            }
+            en0     = 32'd0;
+            en1     = 32'd0;
+            thr0    = 3'd0;
+            thr1    = 3'd0;
+            claimed = 32'd0;
+        } else {
+            if p_rd && p_off == 26'h20_0004 && best0 != 5'd0 {
+                claimed[best0] = 1'b1;
+            }
+            if p_rd && p_off == 26'h20_1004 && best1 != 5'd0 {
+                claimed[best1] = 1'b1;
+            }
+            if p_wr {
+                if p_off[25:7] == 19'd0 {
+                    prio[p_off[6:2]] = wdata[2:0];
+                } else if p_off == 26'h000_2000 {
+                    en0 = wdata[31:0];
+                } else if p_off == 26'h000_2080 {
+                    en1 = wdata[31:0];
+                } else if p_off == 26'h20_0000 {
+                    thr0 = wdata[2:0];
+                } else if p_off == 26'h20_1000 {
+                    thr1 = wdata[2:0];
+                } else if p_off == 26'h20_0004 || p_off == 26'h20_1004 {
+                    claimed[wdata[4:0]] = 1'b0; // complete
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 回應
+    var ack_r  : logic    ;
+    var err_r  : logic    ;
+    var dev_r  : logic<64>;
+    var ram_r  : logic    ;
+    var lane_r : logic<6> ;
+    var mask_r : logic<64>;
+    always_ff {
+        if_reset {
+            ack_r  = 1'b0;
+            err_r  = 1'b0;
+            dev_r  = 64'd0;
+            ram_r  = 1'b0;
+            lane_r = 6'd0;
+            mask_r = 64'd0;
+        } else {
+            ack_r  = go;
+            err_r  = go && !(sel_ram || sel_clint || sel_plic || sel_uart);
+            ram_r  = sel_ram;
+            lane_r = lane;
+            mask_r = bmask;
+            dev_r  = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : 64'd0;
+        }
+    }
+    assign ack   = ack_r;
+    assign err   = err_r;
+    assign rdata = if ram_r ? (ram_word >> lane_r) & mask_r : dev_r;
+
+    assign o_dbg_wr    = go && we;
+    assign o_dbg_addr  = addr;
+    assign o_dbg_wdata = wdata;
+}

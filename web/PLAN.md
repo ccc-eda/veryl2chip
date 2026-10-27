@@ -60,7 +60,7 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 
 每個 M 完成就 commit。
 
-### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中）
+### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.3 完成）
 
 **目標**：一顆用 Veryl 寫的 RV64 處理器，先跑起 **xv6-riscv**，再跑 **Linux**。重點是 HDL 本身正確；
 EDA（v2c 的模擬、合成、FPGA）等 CPU 做對了再跟上。
@@ -87,7 +87,7 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | 版本 | 內容 | 驗證 |
 |---|---|---|
 | v2.2 ✓ | ECP5 對應 + nextpnr-ecp5（見 history.md） | test.sh |
-| v2.3 | **`Rv64Core`**（`examples/rv64/`，獨立的 Veryl 專案）：多週期 RV64IMA + Zicsr + Zifencei，M / S / U 三種模式、陷阱與委派（medeleg / mideleg）、`mret` / `sret` / `wfi`、`time` CSR、**SV39**（三層走訪、硬體設定 A / D、page fault、`sfence.vma`、SUM / MXR、MPRV）；Verilator 測試平台 `sim/`（C++：記憶體、HTIF `tohost`、CLINT、UART） | riscv-tests 的 rv64ui / um / ua / mi / si，`-p` 與 `-v` 全部通過 |
+| v2.3 ✓ | **`Rv64Core`**（`examples/rv64/`，獨立的 Veryl 專案）：多週期 RV64IMA + Zicsr + Zifencei，M / S / U 三種模式、陷阱與委派（medeleg / mideleg）、`mret` / `sret` / `wfi`、`time` CSR、**SV39**（三層走訪、硬體設定 A / D、page fault、`sfence.vma`、SUM / MXR、MPRV）；Verilator 測試平台 `sim/`（C++：記憶體、HTIF `tohost`、CLINT、UART） | riscv-tests 的 rv64ui / um / ua / mi / si，`-p` 與 `-v` 全部通過 |
 | v2.4 | **xv6-riscv**：PLIC、virtio 區塊裝置；`tools/xv6.sh` 下載官方 xv6（MIT 授權）用 `-march=rv64ima` 編譯；開到 `$`，跑 `usertests` | xv6 開機、`ls`、`usertests -q` 全過；和 QEMU 的輸出對照 |
 | v2.5 | **C 擴充**（壓縮指令：16 位元指令展開、跨 4 位元組邊界的取指）、TLB（加速，行為不變） | riscv-tests rv64uc；xv6 用 `rv64imac` 重編也能跑 |
 | v2.6 | **Linux**：OpenSBI（`fw_jump`）+ Linux kernel（`rv64imac`，不含 FPU）+ 只有一個小 init 的 initramfs；裝置樹描述上面的機器 | 開到 init 印出訊息；之後視情況加 F / D 擴充，跑 busybox |

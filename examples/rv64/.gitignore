@@ -1,0 +1,8 @@
+# veryl build
+/target
+/dependencies
+/.build
+*.f
+# Verilator
+/sim/obj
+/sim/obj.log

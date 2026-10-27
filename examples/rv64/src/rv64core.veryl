@@ -1,0 +1,943 @@
+// ==========================================
+// Rv64Core：多週期 RV64IMA + Zicsr + Zifencei + Sstc 處理器
+// ==========================================
+// M / S / U 三種特權模式、陷阱與委派（medeleg / mideleg）、mret / sret / wfi、
+// SV39 虛擬記憶體（三層分頁表走訪、硬體設定 A / D 位元、page fault、SUM / MXR / MPRV）。
+// 足夠跑 xv6-riscv。設計以好懂為先：沒有管線、沒有 TLB、乘除法是組合邏輯。
+//
+// 每個指令走過的狀態：
+//   Fetch → [Walk → (WalkW)]* → Mem（取指令）→ Exec
+//   load / store / AMO 在 Exec 之後再走一次 [Walk → (WalkW)] → Mem（→ AmoW）
+//   Walk ：讀一個分頁表項目（SV39 最多三層）；WalkW：把 A / D 位元寫回分頁表
+//   Mem  ：實體位址的讀寫；AmoW：AMO 寫回新值
+//   Exec ：解碼、運算、寫回、CSR、分支（一拍）
+//   Wfi  ：等中斷
+// 中斷在 Fetch 時檢查（指令之間）。例外可以在 Fetch、Walk、WalkW、Mem、AmoW、Exec 發生。
+//
+// 記憶體匯流排：一次一個存取。o_req 拉高、位址等等保持不變，直到 i_ack；
+// 資料都在低位元（o_size：0 = 1 位元組、1 = 2、2 = 4、3 = 8，位址一定對齊）。
+// i_err（和 i_ack 同時）= 這個位址沒有東西：access fault。
+
+module Rv64Core #(
+    param RESET_PC: logic<64> = 64'h0000_0000_8000_0000,
+) (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    // 記憶體匯流排
+    o_req  : output logic    ,
+    o_we   : output logic    ,
+    o_addr : output logic<64>,
+    o_size : output logic<2> ,
+    o_wdata: output logic<64>,
+    i_ack  : input  logic    ,
+    i_err  : input  logic    ,
+    i_rdata: input  logic<64>,
+    // 中斷（CLINT、PLIC）與 time
+    i_mtip : input  logic    ,
+    i_msip : input  logic    ,
+    i_meip : input  logic    ,
+    i_seip : input  logic    ,
+    i_mtime: input  logic<64>,
+    // 完成的指令（給測試平台印出、和 spike 比對）
+    o_ret      : output logic    ,
+    o_ret_pc   : output logic<64>,
+    o_ret_insn : output logic<32>,
+    o_ret_we   : output logic    ,
+    o_ret_rd   : output logic<5> ,
+    o_ret_wdata: output logic<64>,
+    o_ret_prv  : output logic<2> ,
+    // 陷阱（除錯用）
+    o_trap      : output logic    ,
+    o_trap_cause: output logic<64>,
+) {
+    const S_FETCH: logic<3> = 3'd0;
+    const S_WALK : logic<3> = 3'd1;
+    const S_WALKW: logic<3> = 3'd2;
+    const S_MEM  : logic<3> = 3'd3;
+    const S_EXEC : logic<3> = 3'd4;
+    const S_AMOW : logic<3> = 3'd5;
+    const S_WFI  : logic<3> = 3'd6;
+
+    // 存取的種類
+    const K_FETCH: logic<2> = 2'd0;
+    const K_LOAD : logic<2> = 2'd1;
+    const K_STORE: logic<2> = 2'd2; // store、SC
+    const K_AMO  : logic<2> = 2'd3; // 讀、改、寫
+
+    const PRV_U: logic<2> = 2'd0;
+    const PRV_S: logic<2> = 2'd1;
+    const PRV_M: logic<2> = 2'd3;
+
+    var state: logic<3> ;
+    var pc   : logic<64>;
+    var ir   : logic<32>;
+    var prv  : logic<2> ;
+
+    // ---------------------------------------------------------------- 暫存器檔
+    var rf: logic<64> [32];
+
+    let opcode: logic<7> = ir[6:0];
+    let rd    : logic<5> = ir[11:7];
+    let f3    : logic<3> = ir[14:12];
+    let rs1   : logic<5> = ir[19:15];
+    let rs2   : logic<5> = ir[24:20];
+    let f7    : logic<7> = ir[31:25];
+    let f5    : logic<5> = ir[31:27];
+
+    let x1: logic<64> = if rs1 == 5'd0 ? 64'd0 : rf[rs1];
+    let x2: logic<64> = if rs2 == 5'd0 ? 64'd0 : rf[rs2];
+
+    let imm_i: logic<64> = {ir[31] repeat 52, ir[31:20]};
+    let imm_s: logic<64> = {ir[31] repeat 52, ir[31:25], ir[11:7]};
+    let imm_b: logic<64> = {ir[31] repeat 52, ir[7], ir[30:25], ir[11:8], 1'b0};
+    let imm_u: logic<64> = {ir[31] repeat 32, ir[31:12], 12'd0};
+    let imm_j: logic<64> = {ir[31] repeat 44, ir[19:12], ir[20], ir[30:21], 1'b0};
+
+    let op_load  : logic = opcode == 7'b0000011;
+    let op_fence : logic = opcode == 7'b0001111;
+    let op_imm   : logic = opcode == 7'b0010011;
+    let op_auipc : logic = opcode == 7'b0010111;
+    let op_imm32 : logic = opcode == 7'b0011011;
+    let op_store : logic = opcode == 7'b0100011;
+    let op_amo   : logic = opcode == 7'b0101111;
+    let op_reg   : logic = opcode == 7'b0110011;
+    let op_lui   : logic = opcode == 7'b0110111;
+    let op_reg32 : logic = opcode == 7'b0111011;
+    let op_branch: logic = opcode == 7'b1100011;
+    let op_jalr  : logic = opcode == 7'b1100111;
+    let op_jal   : logic = opcode == 7'b1101111;
+    let op_system: logic = opcode == 7'b1110011;
+
+    let is_mul  : logic = (op_reg || op_reg32) && f7 == 7'b0000001;
+    let is_lr   : logic = op_amo && f5 == 5'b00010;
+    let is_sc   : logic = op_amo && f5 == 5'b00011;
+    let is_rmw  : logic = op_amo && !is_lr && !is_sc;
+    let is_csr  : logic = op_system && f3 != 3'd0 && f3 != 3'd4;
+    let is_ecall: logic = ir == 32'h0000_0073;
+    let is_ebrk : logic = ir == 32'h0010_0073;
+    let is_sret : logic = ir == 32'h1020_0073;
+    let is_mret : logic = ir == 32'h3020_0073;
+    let is_wfi  : logic = ir == 32'h1050_0073;
+    let is_sfence: logic = op_system && f3 == 3'd0 && f7 == 7'b0001001 && rd == 5'd0;
+    let is_ls   : logic = op_load || op_store || op_amo;
+
+    // ---------------------------------------------------------------- 整數運算（64 位元）
+    let alu_b  : logic<64> = if op_reg ? x2 : imm_i;
+    let alu_sub: logic     = op_reg && ir[30];
+    let shamt  : logic<6>  = alu_b[5:0];
+    let alu_sum: logic<64> = if alu_sub ? x1 - alu_b : x1 + alu_b;
+    let alu_sra: logic<64> = $signed(x1) >>> shamt;
+    var alu    : logic<64>;
+    always_comb {
+        case f3 {
+            3'b000 : alu = alu_sum;
+            3'b001 : alu = x1 << shamt;
+            3'b010 : alu = {63'd0, $signed(x1) <: $signed(alu_b)};
+            3'b011 : alu = {63'd0, x1 <: alu_b};
+            3'b100 : alu = x1 ^ alu_b;
+            3'b101 : alu = if ir[30] ? alu_sra : x1 >> shamt;
+            3'b110 : alu = x1 | alu_b;
+            default: alu = x1 & alu_b;
+        }
+    }
+
+    // 32 位元運算（*W）：結果符號擴展
+    let w_a  : logic<32> = x1[31:0];
+    let w_b  : logic<32> = if op_reg32 ? x2[31:0] : imm_i[31:0];
+    let w_sh : logic<5>  = w_b[4:0];
+    let w_add: logic<32> = if op_reg32 && ir[30] ? w_a - w_b : w_a + w_b;
+    let w_sra: logic<32> = $signed(w_a) >>> w_sh;
+    var w_res: logic<32>;
+    always_comb {
+        case f3 {
+            3'b001 : w_res = w_a << w_sh;
+            3'b101 : w_res = if ir[30] ? w_sra : w_a >> w_sh;
+            default: w_res = w_add;
+        }
+    }
+    let alu32: logic<64> = {w_res[31] repeat 32, w_res};
+
+    // ---------------------------------------------------------------- 乘除法（M 擴充，組合邏輯）
+    // 乘法：兩個運算元擴展成 128 位元（有號的話符號擴展），乘積的高 64 位元就是 mulh*
+    let m_a : logic<128> = {(x1[63] && (f3 == 3'b001 || f3 == 3'b010)) repeat 64, x1};
+    let m_b : logic<128> = {(x2[63] && f3 == 3'b001) repeat 64, x2};
+    let m_p : logic<128> = m_a * m_b;
+    // 除法：先取絕對值做無號除法，再修正正負號；除以 0 與溢位照規格
+    let d_sg: logic     = !f3[0];
+    let d_na: logic     = d_sg && x1[63];
+    let d_nb: logic     = d_sg && x2[63];
+    let d_ua: logic<64> = if d_na ? 64'd0 - x1 : x1;
+    let d_ub: logic<64> = if d_nb ? 64'd0 - x2 : x2;
+    let d_bz: logic     = x2 == 64'd0;
+    let d_q : logic<64> = if d_bz ? 64'd0 : d_ua / d_ub;
+    let d_r : logic<64> = if d_bz ? 64'd0 : d_ua % d_ub;
+    let d_qs: logic<64> = if d_na ^ d_nb ? 64'd0 - d_q : d_q;
+    let d_rs: logic<64> = if d_na ? 64'd0 - d_r : d_r;
+    var mres: logic<64>;
+    always_comb {
+        case f3 {
+            3'b000                  : mres = m_p[63:0];
+            3'b001, 3'b010, 3'b011  : mres = m_p[127:64];
+            3'b100, 3'b101          : mres = if d_bz ? 64'hffff_ffff_ffff_ffff : d_qs;
+            default                 : mres = if d_bz ? x1 : d_rs;
+        }
+    }
+    // *W：低 32 位元
+    let mw_p : logic<32> = x1[31:0] * x2[31:0];
+    let dw_na: logic     = d_sg && x1[31];
+    let dw_nb: logic     = d_sg && x2[31];
+    let dw_ua: logic<32> = if dw_na ? 32'd0 - x1[31:0] : x1[31:0];
+    let dw_ub: logic<32> = if dw_nb ? 32'd0 - x2[31:0] : x2[31:0];
+    let dw_bz: logic     = x2[31:0] == 32'd0;
+    let dw_q : logic<32> = if dw_bz ? 32'd0 : dw_ua / dw_ub;
+    let dw_r : logic<32> = if dw_bz ? 32'd0 : dw_ua % dw_ub;
+    let dw_qs: logic<32> = if dw_na ^ dw_nb ? 32'd0 - dw_q : dw_q;
+    let dw_rs: logic<32> = if dw_na ? 32'd0 - dw_r : dw_r;
+    var mw_r : logic<32>;
+    always_comb {
+        case f3 {
+            3'b000        : mw_r = mw_p;
+            3'b100, 3'b101: mw_r = if dw_bz ? 32'hffff_ffff : dw_qs;
+            default       : mw_r = if dw_bz ? x1[31:0] : dw_rs;
+        }
+    }
+    let mres32: logic<64> = {mw_r[31] repeat 32, mw_r};
+
+    // ---------------------------------------------------------------- 分支、跳躍
+    var take: logic;
+    always_comb {
+        case f3 {
+            3'b000 : take = x1 == x2;
+            3'b001 : take = x1 != x2;
+            3'b100 : take = $signed(x1) <: $signed(x2);
+            3'b101 : take = $signed(x1) >= $signed(x2);
+            3'b110 : take = x1 <: x2;
+            3'b111 : take = x1 >= x2;
+            default: take = 1'b0;
+        }
+    }
+    let pc4     : logic<64> = pc + 64'd4;
+    let br_tgt  : logic<64> = pc + imm_b;
+    let jal_tgt : logic<64> = pc + imm_j;
+    let jalr_sum: logic<64> = x1 + imm_i;
+    let jalr_tgt: logic<64> = {jalr_sum[63:1], 1'b0};
+    // 沒有 C 擴充：跳躍目標一定要 4 的倍數
+    let tgt_mis: logic = (op_jal && jal_tgt[1]) || (op_jalr && jalr_tgt[1]) || (op_branch && take && br_tgt[1]);
+    let tgt    : logic<64> = if op_jal ? jal_tgt : if op_jalr ? jalr_tgt : br_tgt;
+
+    // ---------------------------------------------------------------- CSR
+    var st_sie : logic   ; // mstatus 的各欄位
+    var st_mie : logic   ;
+    var st_spie: logic   ;
+    var st_mpie: logic   ;
+    var st_spp : logic   ;
+    var st_mpp : logic<2>;
+    var st_mprv: logic   ;
+    var st_sum : logic   ;
+    var st_mxr : logic   ;
+    var st_tvm : logic   ;
+    var st_tw  : logic   ;
+    var st_tsr : logic   ;
+
+    var medeleg   : logic<16>;
+    var mideleg   : logic<12>;
+    var mie_r     : logic<12>;
+    var ssip      : logic    ; // mip 裡軟體可寫的位元
+    var stip_r    : logic    ;
+    var seip_r    : logic    ;
+    var mtvec     : logic<64>;
+    var stvec     : logic<64>;
+    var mscratch  : logic<64>;
+    var sscratch  : logic<64>;
+    var mepc      : logic<64>;
+    var sepc      : logic<64>;
+    var mcause    : logic<64>;
+    var scause    : logic<64>;
+    var mtval     : logic<64>;
+    var stval     : logic<64>;
+    var mcounteren: logic<32>;
+    var scounteren: logic<32>;
+    var mcountinh : logic<32>;
+    var menv_stce : logic    ; // menvcfg.STCE（Sstc：stimecmp 有效）
+    var menv_fiom : logic    ;
+    var senv_fiom : logic    ;
+    var stimecmp  : logic<64>;
+    var satp_sv39 : logic    ;
+    var satp_asid : logic<16>;
+    var satp_ppn  : logic<44>;
+    var mcycle    : logic<64>;
+    var minstret  : logic<64>;
+    // PMP：16 組的 pmpaddr 與 pmpcfg0 / pmpcfg2 可以讀寫（軟體偵測得到），但還不檢查權限
+    var pmpcfg0   : logic<64>;
+    var pmpcfg2   : logic<64>;
+    var pmpaddr   : logic<54> [16];
+
+    let mstatus: logic<64> = {1'b0, 27'd0, 2'b10, 2'b10, 9'd0, st_tsr, st_tw, st_tvm, st_mxr, st_sum, st_mprv, 4'd0, st_mpp, 2'd0, st_spp, st_mpie, 1'b0, st_spie, 1'b0, st_mie, 1'b0, st_sie, 1'b0};
+    let sstatus: logic<64> = {1'b0, 29'd0, 2'b10, 12'd0, st_mxr, st_sum, 1'b0, 4'd0, 4'd0, st_spp, 1'b0, 1'b0, st_spie, 3'd0, st_sie, 1'b0};
+
+    // mip：MEIP / MTIP / MSIP 來自 CLINT 與 PLIC；STIP 在 Sstc 開啟時是 time ≥ stimecmp
+    let seip_e : logic     = seip_r || i_seip;
+    let stip_e : logic     = if menv_stce ? i_mtime >= stimecmp : stip_r;
+    let mip_v  : logic<12> = {i_meip, 1'b0, seip_e, 1'b0, i_mtip, 1'b0, stip_e, 1'b0, i_msip, 1'b0, ssip, 1'b0};
+    let mip_64 : logic<64> = {52'd0, mip_v};
+
+    let csr_addr: logic<12> = ir[31:20];
+    let csr_wr  : logic     = f3[1:0] == 2'b01 || rs1 != 5'd0; // csrrs / csrrc 在 rs1 = x0 時不寫
+    let csr_src : logic<64> = if f3[2] ? {59'd0, rs1} : x1;
+    // 讀出值（csr_ok = 這個 CSR 存在）
+    var csr_rdata: logic<64>;
+    var csr_ok   : logic    ;
+    let csr_pmp  : logic = csr_addr[11:4] == 8'h3A || (csr_addr >= 12'h3B0 && csr_addr <= 12'h3EF);
+    let csr_hpm  : logic = (csr_addr >= 12'hB03 && csr_addr <= 12'hB1F) || (csr_addr >= 12'h323 && csr_addr <= 12'h33F) || (csr_addr >= 12'hC03 && csr_addr <= 12'hC1F);
+    always_comb {
+        csr_ok    = 1'b1;
+        csr_rdata = 64'd0;
+        if csr_pmp {
+            // PMP：pmpcfg0 / 2、pmpaddr0..15；其他的讀 0。RV64 沒有奇數號的 pmpcfg
+            csr_ok = !(csr_addr[11:4] == 8'h3A && csr_addr[0]);
+            if csr_addr == 12'h3A0 {
+                csr_rdata = pmpcfg0;
+            } else if csr_addr == 12'h3A2 {
+                csr_rdata = pmpcfg2;
+            } else if csr_addr[11:4] == 8'h3B {
+                csr_rdata = {10'd0, pmpaddr[csr_addr[3:0]]};
+            }
+        } else if csr_addr[11:2] == 10'b0111_1010_00 {
+            csr_rdata = 64'd0; // tselect、tdata1..3：沒有除錯觸發器（tdata1 讀 0 = 沒有這種觸發器）
+        } else if csr_hpm {
+            csr_rdata = 64'd0; // 硬體效能計數器：讀 0
+        } else {
+            case csr_addr {
+                12'h100: csr_rdata = sstatus;
+                12'h104: csr_rdata = {52'd0, mie_r & mideleg};
+                12'h105: csr_rdata = stvec;
+                12'h106: csr_rdata = {32'd0, scounteren};
+                12'h10A: csr_rdata = {63'd0, senv_fiom};
+                12'h140: csr_rdata = sscratch;
+                12'h141: csr_rdata = sepc;
+                12'h142: csr_rdata = scause;
+                12'h143: csr_rdata = stval;
+                12'h144: csr_rdata = {52'd0, mip_v & mideleg};
+                12'h14D: csr_rdata = stimecmp;
+                12'h180: csr_rdata = {if satp_sv39 ? 4'd8 : 4'd0, satp_asid, satp_ppn};
+                12'h300: csr_rdata = mstatus;
+                12'h301: csr_rdata = 64'h8000_0000_0014_1101; // RV64 A I M S U
+                12'h302: csr_rdata = {48'd0, medeleg};
+                12'h303: csr_rdata = {52'd0, mideleg};
+                12'h304: csr_rdata = {52'd0, mie_r};
+                12'h305: csr_rdata = mtvec;
+                12'h306: csr_rdata = {32'd0, mcounteren};
+                12'h30A: csr_rdata = {menv_stce, 62'd0, menv_fiom};
+                12'h320: csr_rdata = {32'd0, mcountinh};
+                12'h340: csr_rdata = mscratch;
+                12'h341: csr_rdata = mepc;
+                12'h342: csr_rdata = mcause;
+                12'h343: csr_rdata = mtval;
+                12'h344: csr_rdata = mip_64;
+                12'hB00, 12'hC00: csr_rdata = mcycle;
+                12'hB02, 12'hC02: csr_rdata = minstret;
+                12'hC01: csr_rdata = i_mtime;
+                12'hF11, 12'hF12, 12'hF13, 12'hF14, 12'hF15: csr_rdata = 64'd0;
+                default: csr_ok = 1'b0;
+            }
+        }
+    }
+    // 存取權限：位址 [9:8] 是最低特權、[11:10] = 3 是唯讀；計數器看 m / scounteren；
+    // S 模式的 satp 受 TVM 限制、stimecmp 要 STCE 與 mcounteren.TM
+    let csr_cnt : logic = csr_addr[11:5] == 7'b1100000;
+    let cnt_bit : logic = mcounteren[csr_addr[4:0]] && (prv != PRV_U || scounteren[csr_addr[4:0]]);
+    let csr_bad : logic = !csr_ok || prv <: csr_addr[9:8] || (csr_addr[11:10] == 2'b11 && csr_wr)
+        || (csr_cnt && prv != PRV_M && !cnt_bit)
+        || (csr_addr == 12'h180 && prv == PRV_S && st_tvm)
+        || (csr_addr == 12'h14D && prv == PRV_S && (!menv_stce || !mcounteren[1]));
+    var csr_new: logic<64>;
+    always_comb {
+        case f3[1:0] {
+            2'b01  : csr_new = csr_src;
+            2'b10  : csr_new = csr_rdata | csr_src;
+            default: csr_new = csr_rdata & ~csr_src;
+        }
+    }
+
+    // ---------------------------------------------------------------- 合法的指令
+    var legal: logic;
+    always_comb {
+        legal = 1'b1;
+        if op_lui || op_auipc || op_jal {
+            legal = 1'b1;
+        } else if op_jalr {
+            legal = f3 == 3'd0;
+        } else if op_branch {
+            legal = f3 != 3'd2 && f3 != 3'd3;
+        } else if op_load {
+            legal = f3 != 3'd7;
+        } else if op_store {
+            legal = f3 <: 3'd4;
+        } else if op_imm {
+            legal = if f3 == 3'd1 ? ir[31:26] == 6'd0 : if f3 == 3'd5 ? (ir[31:26] == 6'd0 || ir[31:26] == 6'b010000) : 1'b1;
+        } else if op_reg {
+            legal = f7 == 7'd0 || f7 == 7'd1 || (f7 == 7'h20 && (f3 == 3'd0 || f3 == 3'd5));
+        } else if op_imm32 {
+            legal = f3 == 3'd0 || (f3 == 3'd1 && f7 == 7'd0) || (f3 == 3'd5 && (f7 == 7'd0 || f7 == 7'h20));
+        } else if op_reg32 {
+            legal = (f7 == 7'd0 && (f3 == 3'd0 || f3 == 3'd1 || f3 == 3'd5)) || (f7 == 7'h20 && (f3 == 3'd0 || f3 == 3'd5))
+                || (f7 == 7'd1 && (f3 == 3'd0 || f3 == 3'd4 || f3 == 3'd5 || f3 == 3'd6 || f3 == 3'd7));
+        } else if op_fence {
+            legal = f3 == 3'd0 || f3 == 3'd1;
+        } else if op_amo {
+            legal = (f3 == 3'd2 || f3 == 3'd3) && ((f5 == 5'b00010 && rs2 == 5'd0) || f5 == 5'b00011 || f5 == 5'b00001 || f5 == 5'b00000
+                || f5 == 5'b00100 || f5 == 5'b01100 || f5 == 5'b01000 || f5 == 5'b10000 || f5 == 5'b10100 || f5 == 5'b11000 || f5 == 5'b11100);
+        } else if op_system {
+            if f3 == 3'd0 {
+                // 特權指令：mret 只能在 M；sret 不能在 U、TSR 時也不能在 S；
+                // wfi 不能在 U、TW 時也不能在 S；sfence.vma 不能在 U、TVM 時也不能在 S
+                legal = is_ecall || is_ebrk
+                    || (is_mret && prv == PRV_M)
+                    || (is_sret && (prv == PRV_M || (prv == PRV_S && !st_tsr)))
+                    || (is_wfi && (prv == PRV_M || (prv == PRV_S && !st_tw)))
+                    || (is_sfence && (prv == PRV_M || (prv == PRV_S && !st_tvm)));
+            } else {
+                legal = f3 != 3'd4 && !csr_bad;
+            }
+        } else {
+            legal = 1'b0;
+        }
+    }
+
+    // ---------------------------------------------------------------- 中斷
+    // M 層級：在 M 以下的模式、或 M 模式且 MIE；委派給 S 的：在 U、或 S 模式且 SIE
+    let pend    : logic<12> = mip_v & mie_r;
+    let m_en    : logic     = prv != PRV_M || st_mie;
+    let s_en    : logic     = prv == PRV_U || (prv == PRV_S && st_sie);
+    let m_pend  : logic<12> = if m_en ? pend & ~mideleg : 12'd0;
+    let s_pend  : logic<12> = if s_en ? pend & mideleg : 12'd0;
+    let irq     : logic     = m_pend != 12'd0 || s_pend != 12'd0;
+    let isel    : logic<12> = if m_pend != 12'd0 ? m_pend : s_pend;
+    // 優先順序：MEI、MSI、MTI、SEI、SSI、STI
+    let irq_code: logic<5>  = if isel[11] ? 5'd11 : if isel[3] ? 5'd3 : if isel[7] ? 5'd7 : if isel[9] ? 5'd9 : if isel[1] ? 5'd1 : 5'd5;
+    let wake    : logic     = pend != 12'd0;
+
+    // ---------------------------------------------------------------- 存取與 SV39
+    var acc_kind : logic<2> ;
+    var acc_va   : logic<64>;
+    var acc_pa   : logic<64>;
+    var acc_size : logic<2> ;
+    var acc_wdata: logic<64>;
+    var walk_addr: logic<64>;
+    var walk_lvl : logic<2> ;
+    var walk_pte : logic<64>; // 要寫回的分頁表項目（加上 A / D）
+    var amo_wr   : logic<64>;
+    var amo_old  : logic<64>;
+    var resv_v   : logic    ; // LR / SC 的保留
+    var resv_pa  : logic<64>;
+
+    // Exec 的 load / store 位址
+    let ls_imm : logic<64> = if op_store ? imm_s : if op_amo ? 64'd0 : imm_i;
+    let ls_va  : logic<64> = x1 + ls_imm;
+    let ls_size: logic<2>  = if op_amo ? (if f3[0] ? 2'd3 : 2'd2) : f3[1:0];
+    let ls_kind: logic<2>  = if op_load || is_lr ? K_LOAD : if op_store || is_sc ? K_STORE : K_AMO;
+    let ls_mis : logic     = (ls_size == 2'd1 && ls_va[0]) || (ls_size == 2'd2 && ls_va[1:0] != 2'd0) || (ls_size == 2'd3 && ls_va[2:0] != 3'd0);
+    // 資料存取的有效特權：M 模式且 MPRV 時用 MPP
+    let ls_prv : logic<2>  = if st_mprv && prv == PRV_M ? st_mpp : prv;
+    let ls_vm  : logic     = satp_sv39 && ls_prv != PRV_M;
+    let pc_vm  : logic     = satp_sv39 && prv != PRV_M;
+    // SV39：位址的 63..39 位元要等於第 38 位元
+    let ls_canon: logic = ls_va[63:38] == 26'd0 || ls_va[63:38] == 26'h3ff_ffff;
+    let pc_canon: logic = pc[63:38] == 26'd0 || pc[63:38] == 26'h3ff_ffff;
+
+    // 目前這次存取（Walk 時）的有效特權
+    let a_prv  : logic<2> = if acc_kind != K_FETCH && st_mprv && prv == PRV_M ? st_mpp : prv;
+    let a_wr   : logic    = acc_kind == K_STORE || acc_kind == K_AMO;
+    // 讀到的分頁表項目
+    let pte    : logic<64> = i_rdata;
+    let p_v    : logic     = pte[0];
+    let p_r    : logic     = pte[1];
+    let p_w    : logic     = pte[2];
+    let p_x    : logic     = pte[3];
+    let p_u    : logic     = pte[4];
+    let p_a    : logic     = pte[6];
+    let p_d    : logic     = pte[7];
+    let p_ppn  : logic<44> = pte[53:10];
+    let p_leaf : logic     = p_r || p_x;
+    let p_inv  : logic     = !p_v || (!p_r && p_w) || pte[63:54] != 10'd0;
+    // 權限：U 頁只給 U 模式（S 模式在 SUM 時可以讀寫、永遠不能執行）
+    let p_user : logic     = if a_prv == PRV_U ? p_u : (!p_u || (acc_kind != K_FETCH && st_sum));
+    let p_perm : logic     = if acc_kind == K_FETCH ? p_x : if a_wr ? p_w : (p_r || (st_mxr && p_x));
+    // 大頁（1 GB、2 MB）的實體頁號低位元要是 0
+    let p_mis  : logic     = (walk_lvl == 2'd2 && p_ppn[17:0] != 18'd0) || (walk_lvl == 2'd1 && p_ppn[8:0] != 9'd0);
+    // 非葉節點的 A / D / U 是保留位元
+    let p_nlbad: logic     = !p_leaf && (p_a || p_d || p_u || walk_lvl == 2'd0);
+    let p_fault: logic     = p_inv || p_nlbad || (p_leaf && (!p_user || !p_perm || p_mis));
+    let p_needad: logic    = !p_a || (a_wr && !p_d);
+    var p_pa   : logic<64>;
+    always_comb {
+        case walk_lvl {
+            2'd2   : p_pa = {8'd0, p_ppn[43:18], acc_va[29:0]};
+            2'd1   : p_pa = {8'd0, p_ppn[43:9], acc_va[20:0]};
+            default: p_pa = {8'd0, p_ppn, acc_va[11:0]};
+        }
+    }
+    let p_next : logic<64> = {8'd0, p_ppn, if walk_lvl == 2'd2 ? acc_va[29:21] : acc_va[20:12], 3'b000};
+
+    // SC：保留失效時不寫記憶體（位址轉換照做）
+    let sc_skip : logic = acc_kind == K_STORE && is_sc && !(resv_v && resv_pa == acc_pa);
+    let mem_done: logic = state == S_MEM && (i_ack || sc_skip);
+
+    // load 的值（LR、AMO 的 f3 = 2 / 3，和 lw / ld 一樣）
+    var ld_val: logic<64>;
+    always_comb {
+        case f3 {
+            3'b000 : ld_val = {i_rdata[7] repeat 56, i_rdata[7:0]};
+            3'b001 : ld_val = {i_rdata[15] repeat 48, i_rdata[15:0]};
+            3'b010 : ld_val = {i_rdata[31] repeat 32, i_rdata[31:0]};
+            3'b100 : ld_val = {56'd0, i_rdata[7:0]};
+            3'b101 : ld_val = {48'd0, i_rdata[15:0]};
+            3'b110 : ld_val = {32'd0, i_rdata[31:0]};
+            default: ld_val = i_rdata;
+        }
+    }
+    // AMO 的新值
+    let am_w   : logic     = !f3[0];
+    let am_rs2 : logic<64> = if am_w ? {x2[31] repeat 32, x2[31:0]} : x2;
+    let am_ua  : logic<64> = if am_w ? {32'd0, ld_val[31:0]} : ld_val;
+    let am_ub  : logic<64> = if am_w ? {32'd0, x2[31:0]} : x2;
+    let am_lts : logic     = $signed(ld_val) <: $signed(am_rs2);
+    let am_ltu : logic     = am_ua <: am_ub;
+    var am_new : logic<64>;
+    always_comb {
+        case f5 {
+            5'b00001: am_new = am_rs2;
+            5'b00000: am_new = ld_val + am_rs2;
+            5'b00100: am_new = ld_val ^ am_rs2;
+            5'b01100: am_new = ld_val & am_rs2;
+            5'b01000: am_new = ld_val | am_rs2;
+            5'b10000: am_new = if am_lts ? ld_val : am_rs2;
+            5'b10100: am_new = if am_lts ? am_rs2 : ld_val;
+            5'b11000: am_new = if am_ltu ? ld_val : am_rs2;
+            default : am_new = if am_ltu ? am_rs2 : ld_val;
+        }
+    }
+
+    // ---------------------------------------------------------------- 匯流排
+    always_comb {
+        o_req   = 1'b0;
+        o_we    = 1'b0;
+        o_addr  = acc_pa;
+        o_size  = acc_size;
+        o_wdata = acc_wdata;
+        case state {
+            S_WALK: {
+                o_req  = 1'b1;
+                o_addr = walk_addr;
+                o_size = 2'd3;
+            }
+            S_WALKW: {
+                o_req   = 1'b1;
+                o_we    = 1'b1;
+                o_addr  = walk_addr;
+                o_size  = 2'd3;
+                o_wdata = walk_pte;
+            }
+            S_MEM: {
+                o_req = !sc_skip;
+                o_we  = acc_kind == K_STORE;
+            }
+            S_AMOW: {
+                o_req   = 1'b1;
+                o_we    = 1'b1;
+                o_wdata = amo_wr;
+            }
+            default: {}
+        }
+    }
+
+    // ---------------------------------------------------------------- 例外與中斷
+    var tk     : logic    ;
+    var tk_int : logic    ;
+    var tk_code: logic<5> ;
+    var tk_tval: logic<64>;
+    // 這次存取的 access fault / page fault 編號
+    let af_code: logic<5> = if acc_kind == K_FETCH ? 5'd1 : if acc_kind == K_LOAD ? 5'd5 : 5'd7;
+    let pf_code: logic<5> = if acc_kind == K_FETCH ? 5'd12 : if acc_kind == K_LOAD ? 5'd13 : 5'd15;
+    always_comb {
+        tk      = 1'b0;
+        tk_int  = 1'b0;
+        tk_code = 5'd0;
+        tk_tval = 64'd0;
+        case state {
+            S_FETCH: if irq {
+                tk      = 1'b1;
+                tk_int  = 1'b1;
+                tk_code = irq_code;
+            } else if pc_vm && !pc_canon {
+                tk      = 1'b1;
+                tk_code = 5'd12;
+                tk_tval = pc;
+            }
+            S_WALK: if i_ack && (i_err || p_fault) {
+                tk      = 1'b1;
+                tk_code = if i_err ? af_code : pf_code;
+                tk_tval = acc_va;
+            }
+            S_WALKW, S_MEM, S_AMOW: if i_ack && i_err {
+                tk      = 1'b1;
+                tk_code = af_code;
+                tk_tval = acc_va;
+            }
+            S_EXEC: if !legal {
+                tk      = 1'b1;
+                tk_code = 5'd2;
+                tk_tval = {32'd0, ir};
+            } else if is_ecall {
+                tk      = 1'b1;
+                tk_code = if prv == PRV_U ? 5'd8 : if prv == PRV_S ? 5'd9 : 5'd11;
+            } else if is_ebrk {
+                tk      = 1'b1;
+                tk_code = 5'd3;
+                tk_tval = pc;
+            } else if tgt_mis {
+                tk      = 1'b1;
+                tk_code = 5'd0;
+                tk_tval = tgt;
+            } else if is_ls && ls_mis {
+                tk      = 1'b1;
+                tk_code = if ls_kind == K_LOAD ? 5'd4 : 5'd6;
+                tk_tval = ls_va;
+            } else if is_ls && ls_vm && !ls_canon {
+                tk      = 1'b1;
+                tk_code = if ls_kind == K_LOAD ? 5'd13 : 5'd15;
+                tk_tval = ls_va;
+            }
+            default: {}
+        }
+    }
+    // 委派給 S：在 M 以下的模式發生、且 medeleg / mideleg 的那一位元是 1
+    let tk_deleg: logic     = prv != PRV_M && (if tk_int ? mideleg[tk_code[3:0]] : medeleg[tk_code[3:0]]);
+    let tk_vec  : logic<64> = if tk_deleg ? stvec : mtvec;
+    let tk_base : logic<64> = {tk_vec[63:2], 2'b00};
+    let tk_pc   : logic<64> = if tk_vec[0] && tk_int ? tk_base + {57'd0, tk_code, 2'b00} : tk_base;
+    let tk_cause: logic<64> = {tk_int, 58'd0, tk_code};
+
+    // ---------------------------------------------------------------- 寫回
+    var wb_we  : logic    ;
+    var wb_data: logic<64>;
+    var retire : logic    ;
+    always_comb {
+        wb_we   = 1'b0;
+        wb_data = 64'd0;
+        retire  = 1'b0;
+        if !tk {
+            case state {
+                S_EXEC: if !is_ls {
+                    retire  = 1'b1;
+                    wb_we   = op_lui || op_auipc || op_jal || op_jalr || op_imm || op_reg || op_imm32 || op_reg32 || is_csr;
+                    wb_data = if op_lui ? imm_u : if op_auipc ? pc + imm_u : if op_jal || op_jalr ? pc4
+                        : if is_csr ? csr_rdata : if op_reg32 ? (if is_mul ? mres32 : alu32) : if op_imm32 ? alu32
+                        : if is_mul ? mres : alu;
+                }
+                S_MEM: if mem_done && (acc_kind == K_LOAD || acc_kind == K_STORE) {
+                    retire  = 1'b1;
+                    wb_we   = acc_kind == K_LOAD || is_sc;
+                    wb_data = if is_sc ? {63'd0, sc_skip} : ld_val;
+                }
+                S_AMOW: if i_ack {
+                    retire  = 1'b1;
+                    wb_we   = 1'b1;
+                    wb_data = amo_old;
+                }
+                default: {}
+            }
+        }
+    }
+    let rf_we: logic = wb_we && rd != 5'd0;
+
+    always_ff (i_clk) {
+        if rf_we {
+            rf[rd] = wb_data;
+        }
+    }
+
+    assign o_ret       = retire;
+    assign o_ret_pc    = pc;
+    assign o_ret_insn  = ir;
+    assign o_ret_we    = rf_we;
+    assign o_ret_rd    = rd;
+    assign o_ret_wdata = wb_data;
+    assign o_ret_prv   = prv;
+    assign o_trap      = tk;
+    assign o_trap_cause = tk_cause;
+
+    let exec_ok : logic = state == S_EXEC && !tk;
+    let csr_we  : logic = exec_ok && is_csr && csr_wr;
+
+    // ---------------------------------------------------------------- 狀態機
+    always_ff {
+        if_reset {
+            state     = S_FETCH;
+            pc        = RESET_PC;
+            ir        = 32'd0;
+            prv       = PRV_M;
+            st_sie    = 1'b0;
+            st_mie    = 1'b0;
+            st_spie   = 1'b0;
+            st_mpie   = 1'b0;
+            st_spp    = 1'b0;
+            st_mpp    = 2'd0;
+            st_mprv   = 1'b0;
+            st_sum    = 1'b0;
+            st_mxr    = 1'b0;
+            st_tvm    = 1'b0;
+            st_tw     = 1'b0;
+            st_tsr    = 1'b0;
+            medeleg   = 16'd0;
+            mideleg   = 12'd0;
+            mie_r     = 12'd0;
+            ssip      = 1'b0;
+            stip_r    = 1'b0;
+            seip_r    = 1'b0;
+            mtvec     = 64'd0;
+            stvec     = 64'd0;
+            mscratch  = 64'd0;
+            sscratch  = 64'd0;
+            mepc      = 64'd0;
+            sepc      = 64'd0;
+            mcause    = 64'd0;
+            scause    = 64'd0;
+            mtval     = 64'd0;
+            stval     = 64'd0;
+            mcounteren = 32'd0;
+            scounteren = 32'd0;
+            mcountinh = 32'd0;
+            menv_stce = 1'b0;
+            menv_fiom = 1'b0;
+            senv_fiom = 1'b0;
+            stimecmp  = 64'hffff_ffff_ffff_ffff;
+            satp_sv39 = 1'b0;
+            satp_asid = 16'd0;
+            satp_ppn  = 44'd0;
+            mcycle    = 64'd0;
+            minstret  = 64'd0;
+            pmpcfg0   = 64'd0;
+            pmpcfg2   = 64'd0;
+            for i in 0..16 {
+                pmpaddr[i] = 54'd0;
+            }
+            acc_kind  = K_FETCH;
+            acc_va    = 64'd0;
+            acc_pa    = 64'd0;
+            acc_size  = 2'd0;
+            acc_wdata = 64'd0;
+            walk_addr = 64'd0;
+            walk_lvl  = 2'd0;
+            walk_pte  = 64'd0;
+            amo_wr    = 64'd0;
+            amo_old   = 64'd0;
+            resv_v    = 1'b0;
+            resv_pa   = 64'd0;
+        } else {
+            // 計數器（CSR 指令寫入時，那一拍以寫入的值為準）
+            mcycle = mcycle + 64'd1;
+            if retire {
+                minstret = minstret + 64'd1;
+            }
+            if tk {
+                // ---- 進入陷阱
+                if tk_deleg {
+                    scause  = tk_cause;
+                    sepc    = pc;
+                    stval   = tk_tval;
+                    st_spp  = prv[0];
+                    st_spie = st_sie;
+                    st_sie  = 1'b0;
+                    prv     = PRV_S;
+                } else {
+                    mcause  = tk_cause;
+                    mepc    = pc;
+                    mtval   = tk_tval;
+                    st_mpp  = prv;
+                    st_mpie = st_mie;
+                    st_mie  = 1'b0;
+                    prv     = PRV_M;
+                }
+                pc    = tk_pc;
+                state = S_FETCH;
+            } else {
+                case state {
+                    S_FETCH: {
+                        acc_kind = K_FETCH;
+                        acc_va   = pc;
+                        acc_size = 2'd2;
+                        if pc_vm {
+                            walk_addr = {8'd0, satp_ppn, pc[38:30], 3'b000};
+                            walk_lvl  = 2'd2;
+                            state     = S_WALK;
+                        } else {
+                            acc_pa = pc;
+                            state  = S_MEM;
+                        }
+                    }
+                    S_WALK: if i_ack {
+                        if p_leaf {
+                            acc_pa = p_pa;
+                            if p_needad {
+                                walk_pte = pte | {56'd0, a_wr, 1'b1, 6'd0};
+                                state    = S_WALKW;
+                            } else {
+                                state = S_MEM;
+                            }
+                        } else {
+                            walk_addr = p_next;
+                            walk_lvl  = walk_lvl - 2'd1;
+                        }
+                    }
+                    S_WALKW: if i_ack {
+                        state = S_MEM;
+                    }
+                    S_MEM: if mem_done {
+                        case acc_kind {
+                            K_FETCH: {
+                                ir    = i_rdata[31:0];
+                                state = S_EXEC;
+                            }
+                            K_LOAD: {
+                                if is_lr {
+                                    resv_v  = 1'b1;
+                                    resv_pa = acc_pa;
+                                }
+                                pc    = pc4;
+                                state = S_FETCH;
+                            }
+                            K_STORE: {
+                                if is_sc {
+                                    resv_v = 1'b0;
+                                }
+                                pc    = pc4;
+                                state = S_FETCH;
+                            }
+                            default: {
+                                amo_old = ld_val;
+                                amo_wr  = am_new;
+                                state   = S_AMOW;
+                            }
+                        }
+                    }
+                    S_AMOW: if i_ack {
+                        pc    = pc4;
+                        state = S_FETCH;
+                    }
+                    S_EXEC: if is_ls {
+                        // load / store / AMO：位址轉換之後在 Mem 存取
+                        acc_kind  = ls_kind;
+                        acc_va    = ls_va;
+                        acc_size  = ls_size;
+                        acc_wdata = x2;
+                        if ls_vm {
+                            walk_addr = {8'd0, satp_ppn, ls_va[38:30], 3'b000};
+                            walk_lvl  = 2'd2;
+                            state     = S_WALK;
+                        } else {
+                            acc_pa = ls_va;
+                            state  = S_MEM;
+                        }
+                    } else {
+                        pc    = if op_jal || op_jalr || (op_branch && take) ? tgt : pc4;
+                        state = S_FETCH;
+                        if is_mret {
+                            prv     = st_mpp;
+                            st_mie  = st_mpie;
+                            st_mpie = 1'b1;
+                            st_mpp  = PRV_U;
+                            if st_mpp != PRV_M {
+                                st_mprv = 1'b0;
+                            }
+                            pc = mepc;
+                        }
+                        if is_sret {
+                            prv     = {1'b0, st_spp};
+                            st_sie  = st_spie;
+                            st_spie = 1'b1;
+                            st_spp  = 1'b0;
+                            st_mprv = 1'b0;
+                            pc      = sepc;
+                        }
+                        if is_wfi && !wake {
+                            state = S_WFI;
+                        }
+                        if csr_we {
+                            case csr_addr {
+                                12'h100: {
+                                    st_sie  = csr_new[1];
+                                    st_spie = csr_new[5];
+                                    st_spp  = csr_new[8];
+                                    st_sum  = csr_new[18];
+                                    st_mxr  = csr_new[19];
+                                }
+                                12'h104: mie_r = (mie_r & ~mideleg) | (csr_new[11:0] & mideleg);
+                                12'h105: stvec = {csr_new[63:2], 1'b0, csr_new[0]};
+                                12'h106: scounteren = csr_new[31:0];
+                                12'h10A: senv_fiom = csr_new[0];
+                                12'h140: sscratch = csr_new;
+                                12'h141: sepc = {csr_new[63:2], 2'b00};
+                                12'h142: scause = csr_new;
+                                12'h143: stval = csr_new;
+                                12'h144: if mideleg[1] {
+                                    ssip = csr_new[1];
+                                }
+                                12'h14D: stimecmp = csr_new;
+                                12'h180: if csr_new[63:60] == 4'd0 || csr_new[63:60] == 4'd8 {
+                                    satp_sv39 = csr_new[63:60] == 4'd8;
+                                    satp_asid = csr_new[59:44];
+                                    satp_ppn  = csr_new[43:0];
+                                }
+                                12'h300: {
+                                    st_sie  = csr_new[1];
+                                    st_mie  = csr_new[3];
+                                    st_spie = csr_new[5];
+                                    st_mpie = csr_new[7];
+                                    st_spp  = csr_new[8];
+                                    st_mpp  = if csr_new[12:11] == 2'b10 ? PRV_U : csr_new[12:11];
+                                    st_mprv = csr_new[17];
+                                    st_sum  = csr_new[18];
+                                    st_mxr  = csr_new[19];
+                                    st_tvm  = csr_new[20];
+                                    st_tw   = csr_new[21];
+                                    st_tsr  = csr_new[22];
+                                }
+                                12'h302: medeleg = csr_new[15:0] & 16'hb3ff;
+                                12'h303: mideleg = csr_new[11:0] & 12'h222;
+                                12'h304: mie_r = csr_new[11:0] & 12'haaa;
+                                12'h305: mtvec = {csr_new[63:2], 1'b0, csr_new[0]};
+                                12'h306: mcounteren = csr_new[31:0];
+                                12'h30A: {
+                                    menv_stce = csr_new[63];
+                                    menv_fiom = csr_new[0];
+                                }
+                                12'h320: mcountinh = csr_new[31:0] & 32'hffff_fffd;
+                                12'h340: mscratch = csr_new;
+                                12'h341: mepc = {csr_new[63:2], 2'b00};
+                                12'h342: mcause = csr_new;
+                                12'h343: mtval = csr_new;
+                                12'h344: {
+                                    ssip   = csr_new[1];
+                                    stip_r = csr_new[5];
+                                    seip_r = csr_new[9];
+                                }
+                                12'h3A0: pmpcfg0 = csr_new;
+                                12'h3A2: pmpcfg2 = csr_new;
+                                12'h3B0, 12'h3B1, 12'h3B2, 12'h3B3, 12'h3B4, 12'h3B5, 12'h3B6, 12'h3B7,
+                                12'h3B8, 12'h3B9, 12'h3BA, 12'h3BB, 12'h3BC, 12'h3BD, 12'h3BE, 12'h3BF: pmpaddr[csr_addr[3:0]] = csr_new[53:0];
+                                12'hB00: mcycle = csr_new;
+                                12'hB02: minstret = csr_new;
+                                default: {}
+                            }
+                        }
+                    }
+                    S_WFI: if wake {
+                        state = S_FETCH;
+                    }
+                    default: state = S_FETCH;
+                }
+            }
+        }
+    }
+}
