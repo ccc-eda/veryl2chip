@@ -44,7 +44,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.21 | 2026-10-27 | `dfdddd2` | 2.21.0：開發板 7：螢幕 | |
 | v2.22 | 2026-10-27 | `9ded8c5` | 2.22.0：riscv-emu 1：指令集模擬器 | |
 | v2.23 | 2026-10-27 | `0d52ded` | 2.23.0：riscv-emu 2：IDE 的引擎 | |
-| v2.24 | 2026-10-27 | （本版） | 2.24.0：riscv-emu 3：翻譯成 WebAssembly | |
+| v2.24 | 2026-10-27 | `cfa72ae` | 2.24.0：riscv-emu 3：翻譯成 WebAssembly | |
+| v2.25 | 2026-10-27 | （本版） | 2.25.0：四種目標：FPGA / ASIC / veryl-emu / riscv-emu | |
 
 ---
 
@@ -509,6 +510,15 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   196 支全過；Linux 開機與指令在直譯、門檻 2（翻了 2.7 萬個區塊）、預設下輸出相同（`riscv-emu/tests/jit.mjs`，根目錄的 `test.sh`
   與 CI 也跑）。修正：`Bus::reset` 要保留 tohost（wasm 裡先載入再重設的 riscv-tests 都沒結束）；wasm 加上 `rv_load_program`。
 - IDE 的 riscv-emu 打開翻譯；瀏覽器實測冷開機加上 `traffic.py` 約 15 秒內在跑。
+
+### v2.25：四種目標
+
+- 使用者的目標：一個融合 Arduino（FPGA 虛擬板）、樹莓派（RV64 開發板）、FPGA、ASIC 的平台，讓使用者依需要與速度選。
+- IDE 標題列的目標選單分成兩組：合成（FPGA、ASIC · vlib、ASIC · SKY130）與模擬機（veryl-emu、riscv-emu）。選模擬機就打開模擬機分頁、
+  用那個引擎開機（另一個引擎的機器正在跑就重新開機）；選合成回到合成流程。合成的後端記在 `synthTarget`，所以選單停在模擬機時合成
+  照樣用上一次的後端；選單跟著分頁走（`syncTarget`），專案用不到的模擬機是灰的。
+- 手冊新增第 15 章「選哪一種」：四種目標跑的是什麼、看得到什麼、速度、什麼時候用，以及 veryl-emu（硬體）和 riscv-emu（指令集）
+  的差別與一致性怎麼驗證。README 更新模擬機的說明。
 
 ---
 

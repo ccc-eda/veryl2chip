@@ -1,6 +1,6 @@
 [package]
 name = "veryl2chip-sim"
-version = "2.24.0"
+version = "2.25.0"
 edition = "2021"
 description = "Event-driven simulator for Veryl HDL testbenches ($tb::clock_gen, $assert, VCD), part of veryl2chip"
 license = "MIT"

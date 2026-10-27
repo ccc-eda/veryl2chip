@@ -142,6 +142,9 @@ UART 接到分頁裡的終端機。
   編成 RV64 Linux 執行檔，放進 `/root`（檔名去掉 `.c`）再執行 `./檔名`；編譯錯誤在「問題」面板。組合語言分頁顯示打開的那個 `.c`。
   函式庫：`printf`、`delay_ms`、`gpio_write`、`gpio_read`、`pin_mode`、檔案的 `open` / `read` / `write` 等。範例 `blink.c`、`count.c`、
   `lights.c` 對應三個 MicroPython 範例。`savefiles` 不會把編譯出來的執行檔送回專案（只收文字檔）。
+- **目標選單**（v2.25）：標題列的目標選單有兩組：合成（FPGA、ASIC · vlib、ASIC · SKY130）與模擬機（veryl-emu、riscv-emu）。
+  選模擬機就打開模擬機分頁、用那個引擎開機；選合成就回到合成流程。選單跟著分頁走（在模擬機分頁顯示它的引擎），專案用不到的模擬機
+  是灰的（沒有 `machine.json`，或不是 Rv64Soc 時的 riscv-emu）。四種目標怎麼選見[第 15 章](15-targets.md)。
 - **引擎**（v2.23）：`machine.json` 有 `"riscv": true`（設計是 Rv64Soc）時，模擬機工具列可以選引擎：**riscv-emu**（預設）只模擬指令集，
   像 QEMU，冷開機幾秒就有 shell，`sleep(1)` 就是真的一秒（時間跟著時鐘走），狀態列顯示 MIPS；**veryl-emu** 模擬 Veryl 寫的硬體本身
   （每一拍、每個訊號，從快照開機），要看自己改過的 Veryl 設計就選它。GPIO、麵包板、檔案、▶ 執行、螢幕、💾 兩種引擎都一樣

@@ -167,6 +167,7 @@ function showActive(): void {
   $('cmdRun').textContent = onBoard ? tr('▶ 執行', '▶ Run') : tr('▶ 測試', '▶ Test');
   $('cmdRun').title = onBoard ? tr(`在板子上執行 ${a}（Ctrl/⌘+Enter）`, `Run ${a} on the board (Ctrl/⌘+Enter)`) : tr('執行測試（Ctrl/⌘+Enter）', 'Run tests (Ctrl/⌘+Enter)');
   if (a === EMU_TAB) ensureEmu().runLabel();
+  syncTarget();
   // the board simulates only while it is visible
   if (board) {
     if (a === BOARD_TAB) { if (boardWasRunning) { boardWasRunning = false; board.resume(); } }
@@ -839,8 +840,21 @@ function runSynth(stage?: string): void {
 }
 
 /** the title bar's back end: FPGA, or ASIC on vlib / SKY130 */
-const flowTarget = (): 'fpga' | 'asic' => $<HTMLSelectElement>('flowTarget').value === 'fpga' ? 'fpga' : 'asic';
-const flowPdk = (): 'vlib' | 'sky130' => $<HTMLSelectElement>('flowTarget').value === 'sky130' ? 'sky130' : 'vlib';
+/** the target menu has the synthesis back ends and the emulators: the last synthesis one chosen */
+let synthTarget = 'fpga';
+const synthValue = (): string => { const v = $<HTMLSelectElement>('flowTarget').value; if (!v.startsWith('emu-')) synthTarget = v; return synthTarget; };
+const flowTarget = (): 'fpga' | 'asic' => synthValue() === 'fpga' ? 'fpga' : 'asic';
+const flowPdk = (): 'vlib' | 'sky130' => synthValue() === 'sky130' ? 'sky130' : 'vlib';
+
+/** the target menu follows the tab: the emulator's engine there, else the synthesis target; emulators the project cannot use are off */
+function syncTarget(): void {
+  const sel = $<HTMLSelectElement>('flowTarget');
+  const cfg = machineCfg();
+  (sel.querySelector('[value="emu-veryl"]') as HTMLOptionElement).disabled = !cfg;
+  (sel.querySelector('[value="emu-riscv"]') as HTMLOptionElement).disabled = !cfg?.riscv;
+  const want = proj.active === EMU_TAB && cfg ? `emu-${emuEngine()}` : synthValue();
+  if (sel.value !== want) sel.value = want;
+}
 
 /** the title bar's stage menu: the back end's stages, then the comparison; "⚙ Synthesize" while the flow tab is not shown */
 function fillStages(): void {
@@ -971,7 +985,7 @@ function ensureEmu(): Emulator {
     emu.getRun = boardRun;
     emu.getRunFiles = boardRunFiles;
     emu.getEngine = () => (machineCfg()?.riscv ? emuEngine() : null);
-    emu.onEngine = (e) => { proj.emuEngine = e; persist(); };
+    emu.onEngine = (e) => { proj.emuEngine = e; persist(); syncTarget(); };
     emu.getFiles = projectArea;
     emu.onFilesBack = filesBack;
     emu.onSave = async (st) => { if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st }); };
@@ -1317,6 +1331,8 @@ function globalKey(e: KeyboardEvent): boolean {
 // ---------------------------------------------------------------- boot
 
 function wire(): void {
+  ($('tgSynth') as HTMLOptGroupElement).label = tr('合成（看電路）', 'Synthesis (the circuit)');
+  ($('tgEmu') as HTMLOptGroupElement).label = tr('模擬機（跑軟體）', 'Emulator (software)');
   ed = new CodeEditor($('editorHost'));
   ed.onChange = text => {
     const f = file(proj.active ?? '');
@@ -1353,6 +1369,18 @@ function wire(): void {
     if (proj.active === FLOW_TAB) runSynth(synth?.current); else syncStage();
   };
   $<HTMLSelectElement>('flowTarget').onchange = () => {
+    const v = $<HTMLSelectElement>('flowTarget').value;
+    if (v.startsWith('emu-')) {
+      // an emulator: open it with that engine (a running machine of the other engine boots again)
+      const engine = v.slice(4) as 'veryl' | 'riscv';
+      if (machineCfg()?.riscv) proj.emuEngine = engine;
+      persist();
+      const e = ensureEmu();
+      openFile(EMU_TAB);
+      if (!e.running || e.engine !== emuEngine()) e.boot();
+      return;
+    }
+    if (proj.active === EMU_TAB) { openFile(FLOW_TAB); }
     fillStages();
     if (proj.active === FLOW_TAB && synth?.synthesized) {
       const asic = flowTarget() === 'asic';

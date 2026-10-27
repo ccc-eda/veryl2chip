@@ -22,11 +22,11 @@
     <button id="cmdVerify" class="tb-btn" disabled title="RTL + 三種閘級網表全部跑一遍（驗證矩陣）" data-en-title="Run RTL and all three gate-level netlists (verification matrix)" data-en="✔ Verify all">✔ 全面驗證</button>
   </div>
   <div class="tb-group">
-    <select id="flowTarget" disabled title="合成的後端" data-en-title="Synthesis back end"><option value="fpga">FPGA</option><option value="asic">ASIC · vlib</option><option value="sky130">ASIC · SKY130</option></select>
+    <select id="flowTarget" disabled title="目標：合成（看電路變成什麼）或模擬機（讓機器開機、跑軟體）" data-en-title="Target: synthesis (see what the circuit becomes) or an emulator (boot a machine, run software)"><optgroup id="tgSynth"><option value="fpga">FPGA</option><option value="asic">ASIC · vlib</option><option value="sky130">ASIC · SKY130</option></optgroup><optgroup id="tgEmu"><option value="emu-veryl" data-en="veryl-emu (the hardware)">veryl-emu（硬體）</option><option value="emu-riscv" data-en="riscv-emu (instruction set)">riscv-emu（指令集）</option></optgroup></select>
     <select id="flowStage" disabled title="合成並檢視這個階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view this stage (Ctrl/⌘+Shift+B)"></select>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
     <button id="cmdBoard" class="tb-btn" disabled title="合成並燒錄到虛擬 iCEBreaker 開發板" data-en-title="Synthesize and flash to a virtual iCEBreaker board" data-en="⚡ Virtual board">⚡ 虛擬板</button>
-    <button id="cmdEmu" class="tb-btn" disabled title="模擬機：用 veryl-emu 把設計編譯成 WebAssembly，當成一台機器開機（放不進 FPGA / ASIC 的大設計，例如 RV64 + Linux；需要 machine.json）" data-en-title="Emulator: veryl-emu compiles the design to WebAssembly and boots it as a machine (for designs too large for the FPGA / ASIC flows, e.g. RV64 + Linux; needs machine.json)" data-en="🖥 Emulator">🖥 模擬機</button>
+    <button id="cmdEmu" class="tb-btn" disabled title="模擬機：讓一台機器開機（需要 machine.json）：veryl-emu 把設計編譯成 WebAssembly（硬體本身），riscv-emu 只模擬 RV64 開發板的指令集（快幾十倍）" data-en-title="Emulator: boot a machine (needs machine.json): veryl-emu compiles the design to WebAssembly (the hardware itself), riscv-emu emulates the RV64 board's instruction set only (tens of times faster)" data-en="🖥 Emulator">🖥 模擬機</button>
   </div>
   <span class="spacer"></span>
   <button id="cmdPalette" class="tb-btn ghost" title="命令選單（Ctrl/⌘+Shift+P）" data-en-title="Command palette (Ctrl/⌘+Shift+P)" data-en="⌘ Commands">⌘ 命令</button>

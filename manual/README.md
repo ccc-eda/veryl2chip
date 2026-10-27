@@ -25,6 +25,7 @@ veryl2chip 是給 [Veryl](https://veryl-lang.org/) 硬體描述語言用的一�
 | [12. 虛擬開發板](12-board.md) | 三種模式、周邊、麵包板、分享實驗 |
 | [13. 驗證與開發](13-develop.md) | 專案的測試、形式驗證、給想改程式的人 |
 | [14. 參考](14-reference.md) | `v2c` 指令總表、環境變數、記憶體映射、疑難排解 |
+| [15. 選哪一種](15-targets.md) | FPGA、ASIC、veryl-emu、riscv-emu：看電路還是跑軟體、速度 |
 
 ## 其他文件
 

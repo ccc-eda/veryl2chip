@@ -4310,6 +4310,10 @@ ${lines.join("\n")}
     get running() {
       return this.state === "run";
     }
+    /** the engine of the machine now (undefined: none started) */
+    get engine() {
+      return this.state === "off" ? void 0 : this.last?.engine;
+    }
     set(s) {
       this.state = s;
       this.pi?.setPower(s === "run" || s === "pause");
@@ -5041,6 +5045,7 @@ ${lines.join("\n")}
     $2("cmdRun").textContent = onBoard ? tr("\u25B6 \u57F7\u884C", "\u25B6 Run") : tr("\u25B6 \u6E2C\u8A66", "\u25B6 Test");
     $2("cmdRun").title = onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${a}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${a} on the board (Ctrl/\u2318+Enter)`) : tr("\u57F7\u884C\u6E2C\u8A66\uFF08Ctrl/\u2318+Enter\uFF09", "Run tests (Ctrl/\u2318+Enter)");
     if (a === EMU_TAB) ensureEmu().runLabel();
+    syncTarget();
     if (board) {
       if (a === BOARD_TAB) {
         if (boardWasRunning) {
@@ -5721,8 +5726,22 @@ int main(void) {
       synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage);
     } else if (stage) synth.showStage(stage);
   }
-  var flowTarget = () => $2("flowTarget").value === "fpga" ? "fpga" : "asic";
-  var flowPdk = () => $2("flowTarget").value === "sky130" ? "sky130" : "vlib";
+  var synthTarget = "fpga";
+  var synthValue = () => {
+    const v = $2("flowTarget").value;
+    if (!v.startsWith("emu-")) synthTarget = v;
+    return synthTarget;
+  };
+  var flowTarget = () => synthValue() === "fpga" ? "fpga" : "asic";
+  var flowPdk = () => synthValue() === "sky130" ? "sky130" : "vlib";
+  function syncTarget() {
+    const sel = $2("flowTarget");
+    const cfg = machineCfg();
+    sel.querySelector('[value="emu-veryl"]').disabled = !cfg;
+    sel.querySelector('[value="emu-riscv"]').disabled = !cfg?.riscv;
+    const want = proj.active === EMU_TAB && cfg ? `emu-${emuEngine()}` : synthValue();
+    if (sel.value !== want) sel.value = want;
+  }
   function fillStages() {
     const sel = $2("flowStage");
     sel.innerHTML = `<option value="" hidden>${tr("\u2699 \u5408\u6210", "\u2699 Synthesize")}</option>` + flow(flowTarget() === "asic").map(([k, l]) => `<option value="${k}">${esc4(l)}</option>`).join("") + `<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option><option value="cmp">${tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC")}</option>`;
@@ -5844,6 +5863,7 @@ int main(void) {
       emu.onEngine = (e) => {
         proj.emuEngine = e;
         persist();
+        syncTarget();
       };
       emu.getFiles = projectArea;
       emu.onFilesBack = filesBack;
@@ -6188,6 +6208,8 @@ int main(void) {
     return false;
   }
   function wire() {
+    $2("tgSynth").label = tr("\u5408\u6210\uFF08\u770B\u96FB\u8DEF\uFF09", "Synthesis (the circuit)");
+    $2("tgEmu").label = tr("\u6A21\u64EC\u6A5F\uFF08\u8DD1\u8EDF\u9AD4\uFF09", "Emulator (software)");
     ed = new CodeEditor($2("editorHost"));
     ed.onChange = (text) => {
       const f = file(proj.active ?? "");
@@ -6239,6 +6261,19 @@ int main(void) {
       else syncStage();
     };
     $2("flowTarget").onchange = () => {
+      const v = $2("flowTarget").value;
+      if (v.startsWith("emu-")) {
+        const engine = v.slice(4);
+        if (machineCfg()?.riscv) proj.emuEngine = engine;
+        persist();
+        const e = ensureEmu();
+        openFile(EMU_TAB);
+        if (!e.running || e.engine !== emuEngine()) e.boot();
+        return;
+      }
+      if (proj.active === EMU_TAB) {
+        openFile(FLOW_TAB);
+      }
       fillStages();
       if (proj.active === FLOW_TAB && synth?.synthesized) {
         const asic = flowTarget() === "asic";

@@ -190,6 +190,8 @@ export class Emulator {
   private get inEl(): HTMLTextAreaElement { return this.host.querySelector('.em-in') as HTMLTextAreaElement; }
   private note(s: string): void { (this.host.querySelector('.em-note') as HTMLElement).textContent = s; }
   get running(): boolean { return this.state === 'run'; }
+  /** the engine of the machine now (undefined: none started) */
+  get engine(): 'veryl' | 'riscv' | undefined { return this.state === 'off' ? undefined : this.last?.engine; }
 
   private set(s: Emulator['state']): void {
     this.state = s;
