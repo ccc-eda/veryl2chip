@@ -16,8 +16,8 @@
 | `fpga/ecp5.sh`、`fpga/ulx3s.lpf` | `Rv64Fpga` → nextpnr-ecp5 佈局繞線 → 位元流（ULX3S 85F） |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
-| `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.c` | OpenSBI + Linux 6.12 + 只有一個程式的 initramfs |
-| `linux/test.sh` | 開 Linux、檢查輸出（init 最後關機，模擬結束） |
+| `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.sh`、`musl.mak`、`musl-cc` | OpenSBI + Linux 6.12 + busybox（musl）的 initramfs |
+| `linux/test.sh` | 開 Linux、在 busybox 的 shell 打幾個指令、關機，檢查輸出 |
 | `verify/randgen.py`、`verify/random.sh` | 隨機指令測試：M / S / U 模式（S、U 跑在隨機權限的 Sv39 分頁上），和 spike 逐指令比對 |
 | `verify/irq.S` | 中斷的定向測試（會自己檢查）：計時器、軟體、外部（PLIC + UART）、委派、wfi、優先順序 |
 
@@ -206,39 +206,54 @@ sim/obj/rv64sim -m 0 -s /tmp/ut.txt -l 0x88000000:xv6/build/fs.img xv6/build/ker
 
 ## Linux
 
-**OpenSBI**（M 模式韌體）+ **Linux 6.12**，都是官方原始碼、不用改：
+**OpenSBI**（M 模式韌體）+ **Linux 6.12** + **busybox 1.36**（C 函式庫用 **musl 1.2.5**），都是官方原始碼、不用改。
+開機後是 busybox 的 shell，可以直接在終端機打指令：
+
+```
+[   17.783681] Run /init as init process
+
+Hello from busybox on Rv64Core
+Linux version 6.12.0 (…) (Homebrew clang version 22.1.4, Homebrew LLD 22.1.4) …
+isa		: rv64imac_zicntr_zicsr_zifencei_zca_sstc
+mmu		: sv39
+rv64:~$ echo $((6 * 7))
+42
+rv64:~$ ps
+PID   USER     TIME  COMMAND
+    1 0         0:08 {init} /bin/sh /init
+…
+   21 0         0:00 sh
+   24 0         0:00 ps
+rv64:~$ free
+              total        used        free      shared  buff/cache   available
+Mem:         255688        3056      251560        1072        1072      248536
+rv64:~$ poweroff -f
+[   21.288251] reboot: Power down
+```
 
 - `linux/rv64soc.dts`：描述這台機器的裝置樹（CPU 的 ISA 與 sv39、CLINT、PLIC、16550、記憶體、關機裝置）。
 - `linux/rv64soc.config`：加在 `tinyconfig` 上的設定：RV64IMAC、沒有 FPU、單一 hart、只有 initramfs（沒有區塊裝置、網路、模組）、
-  8250 序列埠、syscon 關機。
-- `linux/init.c`：initramfs 裡唯一的程式，不用 C 函式庫（直接 `ecall`）：掛上 `/proc`，印出 `/proc/version`、`/proc/cpuinfo`，然後關機。
+  8250 序列埠（收字靠 PLIC 的外部中斷）、syscon 關機；給 busybox 的 shell 腳本、多使用者、futex、tmpfs。
+- initramfs：靜態連結的 busybox（defconfig、不含 `tc`，約 1 MB、401 個指令的連結）與 `linux/init.sh`（`/init`：掛上 `/proc`、`/sys`、
+  `/dev`、`/tmp`，印出版本，用 `setsid cttyhack sh` 開 shell；shell 結束就關機）。
+- C 函式庫：musl 只用 `make` 編（`linux/musl.mak` 取代它的 configure 腳本），裝進 `linux/build/sysroot`，連同 kernel 的
+  `headers_install`；`linux/musl-cc` 是 clang 加上 musl 與 rv64imac / lp64 的 libgcc（`riscv64-unknown-elf-gcc` 附的，提供 128 位元浮點等）。
 - OpenSBI 建成 `fw_payload`：韌體、裝置樹、kernel 包成一個檔案，從 0x8000_0000 載入（`rv64sim` 遇到不是 ELF 的檔案就整個載入那裡）。
 
 ```sh
 git clone --depth 1 https://github.com/riscv-software-src/opensbi /Users/Shared/ccc/opensbi
 git clone --depth 1 --branch v6.12 --filter=blob:none --no-checkout https://github.com/torvalds/linux /Users/Shared/ccc/linux
 cd /Users/Shared/ccc/linux && git sparse-checkout init --no-cone && cp <本目錄>/linux/sparse-checkout .git/info/ && git checkout v6.12
-linux/build.sh            # → linux/build/opensbi/platform/generic/firmware/fw_payload.bin（約 1.5 分鐘）
-linux/test.sh             # 開機、檢查輸出
+git clone --depth 1 --branch v1.2.5 https://git.musl-libc.org/git/musl /Users/Shared/ccc/musl
+git clone --depth 1 --branch 1_36_1 https://git.busybox.net/busybox /Users/Shared/ccc/busybox
+linux/build.sh            # → linux/build/opensbi/platform/generic/firmware/fw_payload.bin（第一次約 2 分鐘）
+sim/obj/rv64sim -m 0 linux/build/opensbi/platform/generic/firmware/fw_payload.bin    # 互動：直接打字，exit 或 poweroff -f 結束
+linux/test.sh             # 自動：開機、打幾個指令、poweroff -f，檢查輸出
 ```
 
 - sparse checkout 只取每個 Kconfig / Makefile 和用得到的驅動，kernel 原始碼約 300 MB。
-- 要用 **LLVM**（clang + ld.lld）：GNU 的 `riscv64-unknown-elf-ld` 做不出共享物件（vDSO）和 PIE（OpenSBI）。
-- 在 macOS 上編 kernel：GNU make / sed / coreutils、bison 3（Homebrew），kernel 的主機工具還要 `<elf.h>`（用 RISC-V 工具鏈附的 musl 版）、
+- 要用 **LLVM**（clang + ld.lld）：GNU 的 `riscv64-unknown-elf-ld` 做不出共享物件（vDSO）和 PIE（OpenSBI），也沒有 Linux 用的 C 函式庫。
+- 在 macOS 上編 kernel 與 busybox：GNU make / sed / coreutils、bison 3（Homebrew），kernel 的主機工具還要 `<elf.h>`（用 RISC-V 工具鏈附的 musl 版）、
   `<byteswap.h>`（腳本自己寫）與 `-D_UUID_T`；`build.sh` 都處理好了。
 
-開機到 init 印完、關機：約 4200 萬個指令、1.2 億拍，Verilator 上約 20 秒。
-
-```
-OpenSBI v1.x … Boot HART ISA Extensions : sstc,zicntr,sdtrig,svadu … Boot HART MIDELEG : 0x0000000000000222
-[    0.000000] Linux version 6.12.0 … riscv-timer: Timer interrupt in S-mode is available via sstc extension …
-[    8.281802] 10000000.serial: ttyS0 at MMIO 0x10000000 (irq = 1, base_baud = 230400) is a 16550A
-[    8.548652] Run /init as init process
-
-Hello from user space on Rv64Core, a RISC-V processor written in Veryl!
-…
-isa		: rv64imac_zicntr_zicsr_zifencei_zca_sstc
-mmu		: sv39
-…
-[    8.672239] reboot: Power down
-```
+開機到出現 shell 提示：約 8000 萬個指令、2.3 億拍，Verilator 上約 30 秒。

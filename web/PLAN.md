@@ -60,7 +60,7 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 
 每個 M 完成就 commit。
 
-### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.10 完成）
+### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.11 完成）
 
 **目標**：一顆用 Veryl 寫的 RV64 處理器，先跑起 **xv6-riscv**，再跑 **Linux**。重點是 HDL 本身正確；
 EDA（v2c 的模擬、合成、FPGA）等 CPU 做對了再跟上。
@@ -96,6 +96,7 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.9 ✓ | **FPGA 佈局繞線**：`Rv64Fpga`（128 KB block RAM、序列 UART、載入埠）；veryl-eda 的 ECP5 對應加上 `DP16KD`；nextpnr-ecp5（85F、ULX3S 腳位）→ 位元流，繞線後的網表再模擬（`fpga/ecp5.sh`、`sim/build_fpga.sh`） | RTL、ECP5 網表、繞線後的網表都通過 110 支 `-p` riscv-tests；Fmax 12.7 MHz |
 | v2.10 ✓ | **ASIC 佈局繞線（vlib）**：veryl-eda 自己的佈局繞線跑 `Rv64Core`（6.6 萬個元件）。大設計先做全域佈局（二次線長 + 遞迴二分攤開 + 排進列），再退火微調；DEF 輸出加速；繞線後的標準元件網表再模擬（`sim/build_gates.sh vlib_routed`） | 約 5 分鐘、0 衝突 0 斷線、Fmax 25.6 MHz；繞線後網表通過 196 支 riscv-tests |
 | 暫緩 | **SKY130 佈局繞線**：同一個 `Rv64Core` 在 SKY130 上細部繞線還留下衝突與 1–3 個斷線（晶片放大也消不掉，像是腳位接不進去），找出原因、DRC 乾淨 | 繞線後網表通過 riscv-tests、DRC 0 |
+| v2.11 ✓ | **Linux + busybox**：musl 1.2.5（只用 make 編）、busybox 1.36（靜態、defconfig）當 initramfs，`/init` 開 shell；kernel 加上腳本、多使用者、futex、tmpfs | Verilator 上開機到 shell 約 30 秒，`linux/test.sh` 打指令、關機 |
 | v2.12 | **上板**：時序（PLL 12.5 MHz 或縮短關鍵路徑）、UART 載入器取代載入埠，ULX3S 實機 | 實機跑 riscv-tests 與小程式 |
 | 之後 | 回到 v2c（veryl-sim 跑得動 Rv64：記憶體、事件驅動，修補檔已存）；F / D 與 busybox；ULX3S 實機 | |
 

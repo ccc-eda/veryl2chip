@@ -30,7 +30,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.7 | 2026-10-27 | `6149049` | 2.7.0：隨機指令測試與中斷測試 | |
 | v2.8 | 2026-10-27 | `70cf899` | 2.8.0：veryl-eda 合成 `Rv64Core`，閘級網表在 Verilator 上通過測試 | |
 | v2.9 | 2026-10-27 | `fcfa73b` | 2.9.0：ECP5 block RAM，`Rv64Fpga` 經 nextpnr-ecp5 佈局繞線，繞線後的網表通過測試 | |
-| v2.10 | 2026-10-27 | （本版） | 2.10.0：大設計的全域佈局，`Rv64Core` 在 vlib 上自己佈局繞線，繞線後的網表通過測試 | |
+| v2.10 | 2026-10-27 | `8dbe56c` | 2.10.0：大設計的全域佈局，`Rv64Core` 在 vlib 上自己佈局繞線，繞線後的網表通過測試 | |
+| v2.11 | 2026-10-27 | （本版） | 2.11.0：Linux 跑 busybox，有 shell 可以互動 | |
 
 ---
 
@@ -316,6 +317,20 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   `examples/rv64/sim/build_gates.sh vlib_routed` 把繞線後的網表（含時脈樹、緩衝器）放回 Verilator，通過 196 支 riscv-tests。
 - SKY130 版：晶片放大三次後細部繞線仍留下幾十個衝突與 1–3 個斷線，暫緩處理。
 - 原則（使用者）：Linux、xv6 這種很久的測試只在 RTL 的 Verilator 版上跑，網表只跑 riscv-tests。
+
+### v2.11：Linux 有 shell 了（busybox）
+
+- 方向（使用者）：先不處理 SKY130 的衝突；不重建網頁、不跑 npm test；很久的測試只在 RTL 的 Verilator 版上跑。
+- C 函式庫：官方 musl 1.2.5。它的 configure 腳本不在允許執行的範圍（只允許 `git clone` 與 `make`），所以 `linux/musl.mak`
+  手寫 config.mak，`make` 編成靜態的 `libc.a`，裝進 `linux/build/sysroot`，再加上 kernel 的 `headers_install`。
+  編譯器是 clang（`--target=riscv64-unknown-linux-musl`，rv64imac / lp64），128 位元浮點等輔助函式用
+  `riscv64-unknown-elf-gcc` 附的 rv64imac / lp64 `libgcc.a`；`linux/musl-cc` 包起來（clang 找不到 GCC，所以自己放 musl 的 crt1 / crti / crtn，
+  部分連結 `-r` / `-nostdlib` 時不放）。
+- busybox 1.36.1：defconfig、靜態、拿掉 `tc`（需要較舊的 kernel 標頭），1 MB、401 個指令；主機工具在 macOS 上直接能編。
+- initramfs：busybox 與它的連結、`linux/init.sh`（`/init`：掛上 proc / sysfs / devtmpfs / tmpfs，`setsid cttyhack sh`，shell 結束就關機）；
+  `linux/init.c` 拿掉。kernel 設定加上 `BINFMT_SCRIPT`、`MULTIUSER`、`FUTEX`、`POSIX_TIMERS`、`SHMEM` / `TMPFS`。
+- 結果：開機到 shell 約 8000 萬個指令、2.3 億拍，Verilator 上約 30 秒；鍵盤輸入經 UART 收字中斷（PLIC）進來，`ps`、`free`、`ls`、
+  算術都正常；`linux/test.sh` 用 `rv64sim -s` 打幾個指令，最後 `poweroff -f` 結束模擬。
 
 ---
 

@@ -1,0 +1,14 @@
+#!/bin/sh
+# clang for RV64IMAC Linux with musl (linux/build/sysroot, built by linux/build.sh): static only.
+# The C runtime start files are musl's; the compiler support library is the rv64imac/lp64
+# libgcc of riscv64-unknown-elf-gcc (copied into the sysroot).
+S=$(cd "$(dirname "$0")" && pwd)/build/sysroot
+T="--target=riscv64-unknown-linux-musl -march=rv64imac_zicsr_zifencei -mabi=lp64 --sysroot=$S -Qunused-arguments"
+for a in "$@"; do
+    case $a in -c|-S|-E|-M|-MM) exec clang $T "$@" ;; esac
+done
+# partial links and links that bring their own start files
+for a in "$@"; do
+    case $a in -r|-Wl,-r|-nostdlib|-nostartfiles|-shared) exec clang $T -fuse-ld=lld "$@" ;; esac
+done
+exec clang $T -static -fuse-ld=lld -rtlib=libgcc -unwindlib=none -nostartfiles "$S/lib/crt1.o" "$S/lib/crti.o" "$@" "$S/lib/crtn.o"
