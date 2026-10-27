@@ -1,13 +1,15 @@
 // Rv64Soc 的 Verilator 測試平台
 //
-//   rv64sim [-t] [-m CYCLES] [-l ADDR:FILE]... PROG.elf
+//   rv64sim [-t] [-m CYCLES] [-l ADDR:FILE]... [-s SCRIPT] PROG.elf
 //
 // 把 ELF 的程式段載入 RAM（0x8000_0000 起），放開重設，一拍一拍跑：
 //   - UART 送出的位元組印到 stdout；stdin 的輸入送進 UART（xv6 的 console）
 //   - 程式寫入 ELF 裡的 tohost 符號（riscv-tests 的慣例）：1 = 通過，其他 = 失敗（值 >> 1 是測試編號）
 //   - -t：每個完成的指令印一行，和 `spike -l --log-commits` 的格式相同（可以 diff）
 //   - -l ADDR:FILE：另外把一個二進位檔載入 ADDR（例如 xv6 的檔案系統映像）
-//   - -m CYCLES：最多跑幾拍（預設 1 億）
+//   - -m CYCLES：最多跑幾拍（預設 1 億；0 = 不限）
+//   - -s SCRIPT：每次程式印出 shell 的提示「$ 」就送出腳本的下一行（xv6 自動測試）；
+//     腳本送完之後再看到提示就結束（結束碼 0）
 // 結束碼：0 通過，1 失敗，2 超過時脈數。
 #include "Vrv64_Rv64Soc.h"
 #include "verilated.h"
@@ -17,6 +19,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <chrono>
+#include <csignal>
 #include <fcntl.h>
 #include <string>
 #include <sys/select.h>
@@ -82,6 +86,7 @@ static void load_elf(const char *path, Image &img) {
 static struct termios saved_tio;
 static bool raw_mode = false;
 static void restore_tty() { if (raw_mode) tcsetattr(0, TCSANOW, &saved_tio); }
+static void on_signal(int) { restore_tty(); _exit(130); }
 static void set_raw_tty() {
     if (!isatty(0)) return;
     tcgetattr(0, &saved_tio);
@@ -92,6 +97,8 @@ static void set_raw_tty() {
     tcsetattr(0, TCSANOW, &t);
     raw_mode = true;
     atexit(restore_tty);
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
 }
 
 int main(int argc, char **argv) {
@@ -101,9 +108,21 @@ int main(int argc, char **argv) {
     const char *elf = nullptr;
     Image img;
     std::vector<std::pair<uint64_t, std::string>> extra;
+    std::vector<std::string> script;
+    bool scripted = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-t")) trace = true;
         else if (!strcmp(argv[i], "-m") && i + 1 < argc) max_cycles = strtoull(argv[++i], nullptr, 0);
+        else if (!strcmp(argv[i], "-s") && i + 1 < argc) {
+            std::vector<uint8_t> f = read_file(argv[++i]);
+            std::string line;
+            for (uint8_t c : f) {
+                if (c == '\n') { script.push_back(line); line.clear(); }
+                else line += (char)c;
+            }
+            if (!line.empty()) script.push_back(line);
+            scripted = true;
+        }
         else if (!strcmp(argv[i], "-l") && i + 1 < argc) {
             std::string a = argv[++i];
             size_t c = a.find(':');
@@ -113,7 +132,8 @@ int main(int argc, char **argv) {
             // Verilator 的參數
         } else elf = argv[i];
     }
-    if (!elf) { fprintf(stderr, "usage: rv64sim [-t] [-m CYCLES] [-l ADDR:FILE]... PROG.elf\n"); return 2; }
+    if (!elf) { fprintf(stderr, "usage: rv64sim [-t] [-m CYCLES] [-l ADDR:FILE]... [-s SCRIPT] PROG.elf\n"); return 2; }
+    if (max_cycles == 0) max_cycles = ~0ull;
     load_elf(elf, img);
     for (auto &e : extra) img.parts.push_back({e.first, read_file(e.second.c_str())});
 
@@ -149,13 +169,16 @@ int main(int argc, char **argv) {
     tick();
     top->i_rst = 1;
 
-    set_raw_tty();
+    if (!scripted) set_raw_tty();
     std::deque<uint8_t> rx;
+    size_t next_line = 0;
+    char last = 0;
+    auto t0 = std::chrono::steady_clock::now();
     int code = 2;
     uint64_t cyc = 0, insns = 0;
     for (; cyc < max_cycles; cyc++) {
         // 鍵盤輸入（每 4096 拍看一次）
-        if ((cyc & 4095) == 0) {
+        if (!scripted && (cyc & 4095) == 0) {
             fd_set fds;
             FD_ZERO(&fds);
             FD_SET(0, &fds);
@@ -180,11 +203,23 @@ int main(int argc, char **argv) {
                 printf("\n");
             }
         }
-        if (top->o_tx_valid) {
-            putchar(top->o_tx_data);
-            fflush(stdout);
-        }
         bool done = false;
+        if (top->o_tx_valid) {
+            char c = (char)top->o_tx_data;
+            putchar(c);
+            fflush(stdout);
+            // 腳本：看到提示「$ 」送出下一行；送完之後再看到提示就結束
+            if (scripted && last == '$' && c == ' ') {
+                if (next_line < script.size()) {
+                    for (char k : script[next_line++]) rx.push_back((uint8_t)k);
+                    rx.push_back('\r');
+                } else {
+                    code = 0;
+                    done = true;
+                }
+            }
+            last = c;
+        }
         if (top->o_dbg_wr && img.tohost && top->o_dbg_addr == img.tohost) {
             uint64_t v = top->o_dbg_wdata;
             if (v == 1) code = 0;
@@ -196,8 +231,11 @@ int main(int argc, char **argv) {
         if (rx_taken) rx.pop_front();
         if (done) break;
     }
-    if (code == 2) fprintf(stderr, "TIMEOUT after %llu cycles (%llu instructions)\n", (unsigned long long)cyc, (unsigned long long)insns);
-    else fprintf(stderr, "%s after %llu cycles, %llu instructions\n", code == 0 ? "PASS" : "FAIL", (unsigned long long)cyc, (unsigned long long)insns);
+    double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    char speed[64];
+    snprintf(speed, sizeof speed, "%.1f s, %.2f MHz", sec, sec > 0 ? cyc / sec / 1e6 : 0.0);
+    if (code == 2) fprintf(stderr, "\nTIMEOUT after %llu cycles (%llu instructions; %s)\n", (unsigned long long)cyc, (unsigned long long)insns, speed);
+    else fprintf(stderr, "\n%s after %llu cycles, %llu instructions (%s)\n", code == 0 ? "PASS" : "FAIL", (unsigned long long)cyc, (unsigned long long)insns, speed);
     delete top;
     return code;
 }

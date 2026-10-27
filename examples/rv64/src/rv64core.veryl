@@ -1,14 +1,14 @@
 // ==========================================
-// Rv64Core：多週期 RV64IMA + Zicsr + Zifencei + Sstc 處理器
+// Rv64Core：多週期 RV64IMA + Zicsr + Zicntr + Zifencei + Sstc + Svadu 處理器
 // ==========================================
 // M / S / U 三種特權模式、陷阱與委派（medeleg / mideleg）、mret / sret / wfi、
-// SV39 虛擬記憶體（三層分頁表走訪、硬體設定 A / D 位元、page fault、SUM / MXR / MPRV）。
-// 足夠跑 xv6-riscv。設計以好懂為先：沒有管線、沒有 TLB、乘除法是組合邏輯。
+// SV39 虛擬記憶體（三層分頁表走訪、page fault、SUM / MXR / MPRV；Svadu：menvcfg.ADUE 時由硬體設定 A / D 位元）。
+// 足夠跑 xv6-riscv。設計以好懂為先：沒有管線、乘除法是組合邏輯；16 筆的 TLB 只為了速度（行為不變）。
 //
 // 每個指令走過的狀態：
 //   Fetch → [Walk → (WalkW)]* → Mem（取指令）→ Exec
 //   load / store / AMO 在 Exec 之後再走一次 [Walk → (WalkW)] → Mem（→ AmoW）
-//   Walk ：讀一個分頁表項目（SV39 最多三層）；WalkW：把 A / D 位元寫回分頁表
+//   Walk ：讀一個分頁表項目（SV39 最多三層）；WalkW：把 A / D 位元寫回分頁表（ADUE = 1 時）
 //   Mem  ：實體位址的讀寫；AmoW：AMO 寫回新值
 //   Exec ：解碼、運算、寫回、CSR、分支（一拍）
 //   Wfi  ：等中斷
@@ -238,6 +238,7 @@ module Rv64Core #(
     var st_tvm : logic   ;
     var st_tw  : logic   ;
     var st_tsr : logic   ;
+    var st_fs  : logic<2>; // FS：沒有 F 擴充，但有 S 模式時可以可寫（和 spike 一樣）；SD = (FS == 3)
 
     var medeleg   : logic<16>;
     var mideleg   : logic<12>;
@@ -260,6 +261,7 @@ module Rv64Core #(
     var mcountinh : logic<32>;
     var menv_stce : logic    ; // menvcfg.STCE（Sstc：stimecmp 有效）
     var menv_fiom : logic    ;
+    var menv_adue : logic    ; // menvcfg.ADUE（Svadu）：1 = 硬體寫回 A / D，0 = page fault
     var senv_fiom : logic    ;
     var stimecmp  : logic<64>;
     var satp_sv39 : logic    ;
@@ -272,8 +274,9 @@ module Rv64Core #(
     var pmpcfg2   : logic<64>;
     var pmpaddr   : logic<54> [16];
 
-    let mstatus: logic<64> = {1'b0, 27'd0, 2'b10, 2'b10, 9'd0, st_tsr, st_tw, st_tvm, st_mxr, st_sum, st_mprv, 4'd0, st_mpp, 2'd0, st_spp, st_mpie, 1'b0, st_spie, 1'b0, st_mie, 1'b0, st_sie, 1'b0};
-    let sstatus: logic<64> = {1'b0, 29'd0, 2'b10, 12'd0, st_mxr, st_sum, 1'b0, 4'd0, 4'd0, st_spp, 1'b0, 1'b0, st_spie, 3'd0, st_sie, 1'b0};
+    let st_sd  : logic     = st_fs == 2'b11;
+    let mstatus: logic<64> = {st_sd, 27'd0, 2'b10, 2'b10, 9'd0, st_tsr, st_tw, st_tvm, st_mxr, st_sum, st_mprv, 2'd0, st_fs, st_mpp, 2'd0, st_spp, st_mpie, 1'b0, st_spie, 1'b0, st_mie, 1'b0, st_sie, 1'b0};
+    let sstatus: logic<64> = {st_sd, 29'd0, 2'b10, 12'd0, st_mxr, st_sum, 1'b0, 2'd0, st_fs, 4'd0, st_spp, 1'b0, 1'b0, st_spie, 3'd0, st_sie, 1'b0};
 
     // mip：MEIP / MTIP / MSIP 來自 CLINT 與 PLIC；STIP 在 Sstc 開啟時是 time ≥ stimecmp
     let seip_e : logic     = seip_r || i_seip;
@@ -327,7 +330,7 @@ module Rv64Core #(
                 12'h304: csr_rdata = {52'd0, mie_r};
                 12'h305: csr_rdata = mtvec;
                 12'h306: csr_rdata = {32'd0, mcounteren};
-                12'h30A: csr_rdata = {menv_stce, 62'd0, menv_fiom};
+                12'h30A: csr_rdata = {menv_stce, 1'b0, menv_adue, 60'd0, menv_fiom};
                 12'h320: csr_rdata = {32'd0, mcountinh};
                 12'h340: csr_rdata = mscratch;
                 12'h341: csr_rdata = mepc;
@@ -467,8 +470,9 @@ module Rv64Core #(
     let p_mis  : logic     = (walk_lvl == 2'd2 && p_ppn[17:0] != 18'd0) || (walk_lvl == 2'd1 && p_ppn[8:0] != 9'd0);
     // 非葉節點的 A / D / U 是保留位元
     let p_nlbad: logic     = !p_leaf && (p_a || p_d || p_u || walk_lvl == 2'd0);
-    let p_fault: logic     = p_inv || p_nlbad || (p_leaf && (!p_user || !p_perm || p_mis));
     let p_needad: logic    = !p_a || (a_wr && !p_d);
+    // A / D 要更新但沒開 ADUE：page fault（軟體自己設）
+    let p_fault: logic     = p_inv || p_nlbad || (p_leaf && (!p_user || !p_perm || p_mis || (p_needad && !menv_adue)));
     var p_pa   : logic<64>;
     always_comb {
         case walk_lvl {
@@ -478,6 +482,52 @@ module Rv64Core #(
         }
     }
     let p_next : logic<64> = {8'd0, p_ppn, if walk_lvl == 2'd2 ? acc_va[29:21] : acc_va[20:12], 3'b000};
+
+    // ---------------------------------------------------------------- TLB（16 筆全關聯，取指令與資料共用）
+    // 只存走訪成功的葉節點。命中、權限夠、A / D 不用更新時直接用存的實體頁號；
+    // 其他情況照樣走訪分頁表（例外與 A / D 的行為不變），走訪完覆蓋那一筆。
+    // sfence.vma 與寫 satp 時全部清掉（不分 ASID）。
+    var tlb_v   : logic<16>;
+    var tlb_vpn : logic<27> [16];
+    var tlb_lvl : logic<2>  [16];
+    var tlb_flg : logic<8>  [16]; // PTE 的 D A G U X W R V
+    var tlb_ppn : logic<44> [16];
+    var tlb_rr  : logic<4>;       // 輪流取代
+    var acc_thit: logic;          // 這次存取有命中但不能直接用：走訪後覆蓋 acc_tidx
+    var acc_tidx: logic<4>;
+
+    // 開始一次存取的位址：Fetch 時是 pc，Exec 時是 load / store / AMO 的位址
+    let bg_va  : logic<64> = if state == S_EXEC ? ls_va : pc;
+    let bg_kind: logic<2>  = if state == S_EXEC ? ls_kind : K_FETCH;
+    let bg_prv : logic<2>  = if state == S_EXEC ? ls_prv : prv;
+    var th_any : logic   ;
+    var th_idx : logic<4>;
+    always_comb {
+        th_any = 1'b0;
+        th_idx = 4'd0;
+        for i in 0..16 {
+            if !th_any && tlb_v[i] && bg_va[38:30] == tlb_vpn[i][26:18] && (tlb_lvl[i] == 2'd2 || bg_va[29:21] == tlb_vpn[i][17:9]) && (tlb_lvl[i] != 2'd0 || bg_va[20:12] == tlb_vpn[i][8:0]) {
+                th_any = 1'b1;
+                th_idx = i[3:0];
+            }
+        }
+    }
+    let th_flg : logic<8>  = tlb_flg[th_idx];
+    let th_lvl : logic<2>  = tlb_lvl[th_idx];
+    let th_ppn : logic<44> = tlb_ppn[th_idx];
+    let th_wr  : logic     = bg_kind == K_STORE || bg_kind == K_AMO;
+    let th_user: logic     = if bg_prv == PRV_U ? th_flg[4] : (!th_flg[4] || (bg_kind != K_FETCH && st_sum));
+    let th_perm: logic     = if bg_kind == K_FETCH ? th_flg[3] : if th_wr ? th_flg[2] : (th_flg[1] || (st_mxr && th_flg[3]));
+    let th_ad  : logic     = th_flg[6] && (!th_wr || th_flg[7]);
+    let th_ok  : logic     = th_any && th_user && th_perm && th_ad;
+    var th_pa  : logic<64>;
+    always_comb {
+        case th_lvl {
+            2'd2   : th_pa = {8'd0, th_ppn[43:18], bg_va[29:0]};
+            2'd1   : th_pa = {8'd0, th_ppn[43:9], bg_va[20:0]};
+            default: th_pa = {8'd0, th_ppn, bg_va[11:0]};
+        }
+    }
 
     // SC：保留失效時不寫記憶體（位址轉換照做）
     let sc_skip : logic = acc_kind == K_STORE && is_sc && !(resv_v && resv_pa == acc_pa);
@@ -670,6 +720,33 @@ module Rv64Core #(
     let exec_ok : logic = state == S_EXEC && !tk;
     let csr_we  : logic = exec_ok && is_csr && csr_wr;
 
+    // TLB 的填入（走訪找到可以用的葉節點）與清除
+    let tlb_fill : logic    = state == S_WALK && i_ack && !i_err && p_leaf && !p_fault;
+    let tlb_at   : logic<4> = if acc_thit ? acc_tidx : tlb_rr;
+    let tlb_flush: logic    = exec_ok && (is_sfence || (csr_we && csr_addr == 12'h180));
+    always_ff {
+        if_reset {
+            tlb_v  = 16'd0;
+            tlb_rr = 4'd0;
+        } else if tlb_flush {
+            tlb_v = 16'd0;
+        } else if tlb_fill {
+            tlb_v[tlb_at] = 1'b1;
+            if !acc_thit {
+                tlb_rr = tlb_rr + 4'd1;
+            }
+        }
+    }
+    #[allow(missing_reset_statement)]
+    always_ff (i_clk) {
+        if tlb_fill {
+            tlb_vpn[tlb_at] = acc_va[38:12];
+            tlb_lvl[tlb_at] = walk_lvl;
+            tlb_flg[tlb_at] = pte[7:0] | (if p_needad ? {a_wr, 1'b1, 6'd0} : 8'd0);
+            tlb_ppn[tlb_at] = p_ppn;
+        }
+    }
+
     // ---------------------------------------------------------------- 狀態機
     always_ff {
         if_reset {
@@ -689,6 +766,7 @@ module Rv64Core #(
             st_tvm    = 1'b0;
             st_tw     = 1'b0;
             st_tsr    = 1'b0;
+            st_fs     = 2'd0;
             medeleg   = 16'd0;
             mideleg   = 12'd0;
             mie_r     = 12'd0;
@@ -710,6 +788,7 @@ module Rv64Core #(
             mcountinh = 32'd0;
             menv_stce = 1'b0;
             menv_fiom = 1'b0;
+            menv_adue = 1'b0;
             senv_fiom = 1'b0;
             stimecmp  = 64'hffff_ffff_ffff_ffff;
             satp_sv39 = 1'b0;
@@ -734,6 +813,8 @@ module Rv64Core #(
             amo_old   = 64'd0;
             resv_v    = 1'b0;
             resv_pa   = 64'd0;
+            acc_thit  = 1'b0;
+            acc_tidx  = 4'd0;
         } else {
             // 計數器（CSR 指令寫入時，那一拍以寫入的值為準）
             mcycle = mcycle + 64'd1;
@@ -767,9 +848,14 @@ module Rv64Core #(
                         acc_kind = K_FETCH;
                         acc_va   = pc;
                         acc_size = 2'd2;
-                        if pc_vm {
+                        if pc_vm && th_ok {
+                            acc_pa = th_pa;
+                            state  = S_MEM;
+                        } else if pc_vm {
                             walk_addr = {8'd0, satp_ppn, pc[38:30], 3'b000};
                             walk_lvl  = 2'd2;
+                            acc_thit  = th_any;
+                            acc_tidx  = th_idx;
                             state     = S_WALK;
                         } else {
                             acc_pa = pc;
@@ -831,9 +917,14 @@ module Rv64Core #(
                         acc_va    = ls_va;
                         acc_size  = ls_size;
                         acc_wdata = x2;
-                        if ls_vm {
+                        if ls_vm && th_ok {
+                            acc_pa = th_pa;
+                            state  = S_MEM;
+                        } else if ls_vm {
                             walk_addr = {8'd0, satp_ppn, ls_va[38:30], 3'b000};
                             walk_lvl  = 2'd2;
+                            acc_thit  = th_any;
+                            acc_tidx  = th_idx;
                             state     = S_WALK;
                         } else {
                             acc_pa = ls_va;
@@ -866,6 +957,7 @@ module Rv64Core #(
                         if csr_we {
                             case csr_addr {
                                 12'h100: {
+                                    st_fs   = csr_new[14:13];
                                     st_sie  = csr_new[1];
                                     st_spie = csr_new[5];
                                     st_spp  = csr_new[8];
@@ -890,6 +982,7 @@ module Rv64Core #(
                                     satp_ppn  = csr_new[43:0];
                                 }
                                 12'h300: {
+                                    st_fs   = csr_new[14:13];
                                     st_sie  = csr_new[1];
                                     st_mie  = csr_new[3];
                                     st_spie = csr_new[5];
@@ -910,6 +1003,7 @@ module Rv64Core #(
                                 12'h306: mcounteren = csr_new[31:0];
                                 12'h30A: {
                                     menv_stce = csr_new[63];
+                                    menv_adue = csr_new[61];
                                     menv_fiom = csr_new[0];
                                 }
                                 12'h320: mcountinh = csr_new[31:0] & 32'hffff_fffd;

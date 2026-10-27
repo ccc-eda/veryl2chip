@@ -4,5 +4,5 @@ version = "0.1.0"
 [build]
 sources = ["src"]
 target = {type = "directory", path = "target"}
-# 128 MB 的 RAM 是 2^24 個元素的陣列，超過分析器預設的上限（2^20）
-evaluate_size_limit = 33554432
+# 256 MB 的 RAM 是 2^25 個元素的陣列，超過分析器預設的上限（2^20）
+evaluate_size_limit = 67108864

@@ -6,7 +6,7 @@
 //                       致能（context 0 = M：+0x2000，context 1 = S：+0x2080）、
 //                       門檻 / claim（context 0：+0x200000 / +0x200004，context 1：+0x201000 / +0x201004）
 //   0x1000_0000  UART ：16550 的暫存器（位元組），中斷是 PLIC 的來源 10
-//   0x8000_0000  RAM  ：2^MEM_BITS 位元組
+//   0x8000_0000  RAM  ：2^MEM_BITS 位元組（256 MB）
 // 其他位址：access fault。
 //
 // 匯流排：核心送出請求的下一拍回應（o_req 那一拍取樣、寫入、讀出，下一拍 ack），
@@ -15,7 +15,7 @@
 // o_dbg_* 是每次匯流排寫入（riscv-tests 的 tohost）；o_ret_* 是完成的指令。
 
 module Rv64Soc #(
-    param MEM_BITS: u32 = 27, // RAM 大小：2^27 = 128 MB
+    param MEM_BITS: u32 = 28, // RAM 大小：2^28 = 256 MB（xv6 用前 128 MB，後面放檔案系統映像）
 ) (
     i_clk     : input  clock    ,
     i_rst     : input  reset    ,

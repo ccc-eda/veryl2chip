@@ -23,7 +23,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.0 | 2026-10-27 | `85fe18e` | 2.0.0：接上 SkyWater SKY130 | `v2.0`（= `d70d279`） |
 | v2.1 | 2026-10-27 | `c864946` 起 | 2.1.0：`v2c` 單一指令、使用手冊、手機版 IDE | （發布時由 `publish.sh` 打） |
 | v2.2 | 2026-10-27 | `1b57624` | 2.2.0：Lattice ECP5 對應 + nextpnr-ecp5 | |
-| v2.3 | 2026-10-27 | （本版） | 2.3.0：RV64 處理器 `Rv64Core`（Veryl），通過 riscv-tests | |
+| v2.3 | 2026-10-27 | `225f9b3` | 2.3.0：RV64 處理器 `Rv64Core`（Veryl），通過 riscv-tests | |
+| v2.4 | 2026-10-27 | （本版） | 2.4.0：xv6 在 `Rv64Core` 上開到 shell | |
 
 ---
 
@@ -222,6 +223,19 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   （第一次跑就過了 192 支；補上除錯觸發器 CSR 與可讀寫的 PMP 暫存器之後全過）；`ma_data` 要硬體支援沒對齊存取，不在清單內。
   `-p` 的測試和 spike 逐指令比對，除了 spike 有觸發器、`marchid`、A / D 用 page fault、SC 偶爾失敗這四個已知差異外完全相同。
 - 版本 2.3.0（兩個 crate 本身沒有變動，版本跟著專案走）。
+
+### v2.4：xv6 開到 shell
+
+- 官方 xv6-riscv 只改三處（`examples/rv64/xv6/build.sh`）：`-march=rv64ima_zicsr_zifencei -mabi=lp64`；
+  `virtio_disk.c` 換成 RAM 磁碟 `xv6/ramdisk.c`（同樣三個函式，fs.img 放在 0x8800_0000，SoC 的 RAM 改成 256 MB）；
+  `vm.c` 把它對應進 kernel 分頁表。UART、PLIC、CLINT、Sstc 都照 QEMU `virt` 做，xv6 的驅動不用改。
+- 第一次開機就到 `$`，`ls` 正確。`xv6/test.sh` 用測試平台的腳本功能（每看到提示「$ 」送一行）自動打
+  `echo`、`cat`、`mkdir`、`ls`、`wc` 並檢查輸出。
+- 核心：Svadu（`menvcfg.ADUE = 1` 才由硬體寫回 A / D，否則 page fault，xv6 會打開）；16 筆全關聯 TLB
+  （只存成功的葉節點，命中但權限或 A / D 不夠時照樣走訪，所以行為不變），虛擬記憶體下每個指令從約 10 拍降到約 4.8 拍；
+  `mstatus.FS` 改成可寫（沒有 F 擴充但有 S 模式時規格允許，和 spike 一樣）。
+- 改完之後 riscv-tests 的 `-p` 與 `-v` 共 194 支都和 spike 逐指令相同，只剩三個已知差異（觸發器、`marchid`、spike 偶爾讓 SC 失敗）。
+- 開機到 `$` 約 4.5 億個指令、21 億拍，Verilator 上約 5–6 分鐘；九成花在 `kinit` 逐位元組填滿 128 MB。
 
 ---
 

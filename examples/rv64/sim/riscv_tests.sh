@@ -7,14 +7,14 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 DIR=${RISCV_TESTS:-/Users/Shared/ccc/riscv-tests}
 [ -d "$DIR" ] || DIR=$HOME/riscv-tests
-PAT=${1:-'rv64[um][ias]-[pv]-*'}
+PAT=${1:-'rv64*-[pv]-*'}
 pass=0; fail=0; failed=()
 for t in $DIR/isa/$PAT; do
     case $t in *.dump) continue ;; esac
     # ma_data 要硬體支援沒對齊的存取；Rv64Core 對沒對齊的存取發出例外（規格允許，OpenSBI 會模擬）
     case $t in *-ma_data) continue ;; esac
     n=$(basename "$t")
-    if r=$(./sim/obj/rv64sim -m 5000000 "$t" 2>&1 < /dev/null); then
+    if r=$(./${OBJ:-sim/obj}/rv64sim -m 5000000 "$t" 2>&1 < /dev/null); then
         pass=$((pass + 1))
     else
         fail=$((fail + 1)); failed+=("$n: $(tail -1 <<< "$r")")

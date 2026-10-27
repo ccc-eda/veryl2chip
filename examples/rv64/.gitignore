@@ -4,5 +4,5 @@
 /.build
 *.f
 # Verilator
-/sim/obj
-/sim/obj.log
+/sim/obj*
+/xv6/build
