@@ -21,6 +21,27 @@ body.ide select { background: #3c3c3c; border: 1px solid #4a4a4a; border-radius:
 .tb-btn.primary:hover:not(:disabled) { background: #1b8ae6; }
 .tb-btn.ghost { background: transparent; border-color: transparent; color: var(--dim); }
 .tb-btn:disabled { opacity: .45; cursor: default; }
+/* an action this project cannot use: still clickable, it says why */
+.tb-btn.off { opacity: .45; cursor: help; border-style: dashed; }
+.tb-btn.off.primary { background: #3a3d41; border-color: #4a4d51; }
+#capPop { position: fixed; z-index: 60; max-width: 380px; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); padding: 10px 12px; font-size: 12px; line-height: 1.55; color: var(--fg); }
+#capPop p { margin: 6px 0 8px; color: #c5c5c5; }
+#capPop .fixes { display: flex; flex-wrap: wrap; gap: 6px; }
+/* the suggested steps above the editor */
+#guide { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 5px 10px; background: #1f2a36; border-bottom: 1px solid var(--line); font-size: 12px; }
+#guide .lbl { color: var(--dim); margin-right: 2px; }
+#guide .step { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: transparent; border: 1px solid #3c4a5a; border-radius: 4px; padding: 3px 9px; color: var(--fg); cursor: pointer; text-align: left; font: inherit; }
+#guide .step:hover { background: #2a3a4c; }
+#guide .step.first { border-color: var(--accent); background: #12385a; }
+#guide .step b { font-weight: 600; white-space: nowrap; }
+#guide .step span { color: var(--dim); font-size: 11px; }
+#guide .arr { color: var(--dim); }
+#guide .close { margin-left: auto; background: transparent; border: 0; color: var(--dim); font-size: 16px; cursor: pointer; padding: 0 4px; }
+#guide .close:hover { color: #fff; }
+.tree .item .badges { margin-left: auto; flex: 0 0 auto; display: flex; gap: 1px; font-size: 11px; }
+.tree .item .badges span { padding: 0 2px; border: 1px solid transparent; border-radius: 3px; opacity: .8; }
+.tree .item .badges .st, .side-hint .st { border: 1px solid var(--accent); border-radius: 3px; opacity: 1; }
+.side-hint .st { padding: 0 3px; }
 .tb-link { color: var(--dim); text-decoration: none; font-size: 12px; white-space: nowrap; }
 .tb-link:hover { color: #fff; }
 #tbMore { display: none; font-size: 16px; padding: 0 10px; }
@@ -324,6 +345,7 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
 /* phones: the main actions in one row (⋯ shows the menus), the sidebar as a drawer over the editor,
    larger text and touch targets; the stacked flow view */
 @media (max-width: 760px) {
+  #guide .step span { display: none; }
   #titlebar { height: auto; min-height: 40px; flex-wrap: wrap; gap: 6px; padding: 4px 6px; overflow: visible; }
   #titlebar .brand, #demoLink { display: none; }
   .tb-group { display: contents; }

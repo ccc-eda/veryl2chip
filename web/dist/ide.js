@@ -4808,9 +4808,9 @@ ${lines.join("\n")}
       line = Math.max(1, Math.min(line, ls.length));
       let off = 0;
       for (let k = 0; k < line - 1; k++) off += ls[k].length + 1;
-      const start = off + Math.max(0, Math.min(col - 1, ls[line - 1].length));
+      const start2 = off + Math.max(0, Math.min(col - 1, ls[line - 1].length));
       this.ta.focus({ preventScroll: true });
-      this.ta.setSelectionRange(start, selectLine ? off + ls[line - 1].length : start);
+      this.ta.setSelectionRange(start2, selectLine ? off + ls[line - 1].length : start2);
       const y = (line - 1) * this.lineHeight;
       const h = this.scroller.clientHeight;
       if (y < this.scroller.scrollTop || y > this.scroller.scrollTop + h - 3 * this.lineHeight) this.scroller.scrollTop = Math.max(0, y - h / 3);
@@ -4917,10 +4917,75 @@ ${lines.join("\n")}
     return e;
   }
 
+  // src/ide/caps.ts
+  function machine(files) {
+    const f = files.find((x) => x.name === "machine.json");
+    if (!f) return null;
+    try {
+      return JSON.parse(f.src);
+    } catch {
+      return null;
+    }
+  }
+  var boardProgram = (n) => /\.(py|sh|c)$/.test(n);
+  var hasTests = (i) => i.mods ? i.mods.some((m) => m.test) : i.files.some((f) => f.name.endsWith(".veryl") && /#\[test\b/.test(f.src));
+  var hasPcf = (i) => i.files.some((f) => f.name.endsWith(".pcf"));
+  function caps(i) {
+    const m = machine(i.files);
+    const tests = hasTests(i);
+    const program = i.files.some((f) => boardProgram(f.name)) && !!m?.files;
+    const noTests = { on: false, why: tr("\u9019\u500B\u5C08\u6848\u6C92\u6709 #[test] \u6A21\u7D44\uFF08testbench\uFF09\uFF0C\u6C92\u6709\u6771\u897F\u53EF\u4EE5\u6E2C\u8A66\u3002\u5BEB\u6CD5\u898B\u624B\u518A\u7B2C 4 \u7AE0\u3002", "This project has no #[test] module (testbench): nothing to test. See chapter 4 of the manual.") };
+    const isMachine = {
+      on: false,
+      why: tr(
+        `\u9019\u500B\u5C08\u6848\u662F\u4E00\u53F0\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF1A${m?.top ?? ""} \u592A\u5927\uFF0C\u4E0D\u80FD\u7528 testbench \u6A21\u64EC\u3002\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D\u958B\u6A5F${program ? "\uFF0C\u6216\u6253\u958B\u677F\u4E0A\u7684\u7A0B\u5F0F\uFF08.py / .c / .sh\uFF09\u6309\u300C\u25B6 \u57F7\u884C\u300D" : ""}\u3002`,
+        `This project is a machine (machine.json): ${m?.top ?? ""} is too large for the testbench simulator. Boot it with "\u{1F5A5} Emulator"${program ? ', or open a program for the board (.py / .c / .sh) and press "\u25B6 Run"' : ""}.`
+      ),
+      fix: program ? ["openProgram", "emu"] : ["emu"]
+    };
+    const runOnBoard2 = !!m?.files && !!i.active && boardProgram(i.active) && i.files.some((f) => f.name === i.active);
+    return {
+      test: runOnBoard2 ? { on: true } : m ? isMachine : tests ? { on: true } : noTests,
+      verify: m ? isMachine : tests ? { on: true } : noTests,
+      board: m ? { on: false, why: tr("\u9019\u500B\u5C08\u6848\u662F\u4E00\u53F0\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u653E\u4E0D\u9032\u865B\u64EC iCEBreaker \u7684 FPGA\u3002\u8ACB\u7528\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D\u3002", `This project is a machine (machine.json): it does not fit the virtual iCEBreaker's FPGA. Use "\u{1F5A5} Emulator".`), fix: ["emu"] } : !i.top ? { on: false, why: tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF1A#[test] \u6A21\u7D44\uFF08testbench\uFF09\u4E0D\u80FD\u71D2\u9304\u3002", "No synthesizable module: #[test] modules (testbenches) cannot be flashed.") } : !hasPcf(i) ? { on: false, why: tr("\u9019\u500B\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF08.pcf\uFF09\uFF0C\u4E0D\u77E5\u9053\u8A2D\u8A08\u7684\u57E0\u63A5\u5230\u677F\u5B50\u7684\u54EA\u652F\u8173\u3002\u4ECD\u8981\u71D2\u9304\u7684\u8A71\u6703\u7528 iCEBreaker \u7684\u9810\u8A2D\u8173\u4F4D\uFF08i_clk\u3001i_rst\u3001o_led[0..4]\u3001i_btn\u3001o_ledr\u3001o_ledg\u3001i_rx\u3001o_tx\uFF09\uFF0C\u540D\u5B57\u4E0D\u540C\u7684\u57E0\u4E0D\u6703\u63A5\u5230\u4EFB\u4F55\u6771\u897F\u3002", "This project has no pin file (.pcf): the design's ports are not assigned to the board's pins. Flashing anyway uses the iCEBreaker defaults (i_clk, i_rst, o_led[0..4], i_btn, o_ledr, o_ledg, i_rx, o_tx); ports with other names stay unconnected."), fix: ["addPcf", "flashAnyway"] } : { on: true },
+      emu: m ? { on: true } : { on: false, why: tr("\u6A21\u64EC\u6A5F\u8981\u6709 machine.json\uFF08\u8AAA\u660E\u6A5F\u5668\u7684\u9802\u5C64\u3001UART\u3001RAM \u8207\u8981\u8F09\u5165\u7684\u6620\u50CF\uFF09\u3002\u7BC4\u4F8B\u300CRV64 \u958B\u767C\u677F\u300D\u5C31\u662F\u4E00\u53F0\u3002", `The emulator needs a machine.json (the machine's top, UART, RAM and the images to load). The "RV64 board" example is one.`), fix: ["openBoardExample"] },
+      synth: i.top ? { on: true } : { on: false, why: tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08\u53EA\u6709 #[test] \u6A21\u7D44\uFF09\u3002", "No synthesizable module (only #[test] modules).") }
+    };
+  }
+  function start(i) {
+    const c = caps({ ...i, active: void 0 });
+    if (c.emu.on) return "emu";
+    if (c.board.on) return "board";
+    if (c.test.on) return "test";
+    return "synth";
+  }
+  function steps(i) {
+    const c = caps({ ...i, active: void 0 });
+    const s = start(i);
+    if (s === "emu") return ["emu"];
+    return [s, ...["test", "board", "synth"].filter((a) => a !== s && c[a].on)].slice(0, 3);
+  }
+  function badges(i) {
+    const c = caps({ ...i, active: void 0 });
+    return [["\u{1F9EA}", "test"], ["\u26A1", "board"], ["\u{1F5A5}", "emu"]].filter(([, a]) => c[a].on).map(([icon, act2]) => ({ icon, act: act2 }));
+  }
+  function actName(a) {
+    return { test: tr("\u25B6 \u6E2C\u8A66", "\u25B6 Test"), verify: tr("\u2714 \u5168\u9762\u9A57\u8B49", "\u2714 Verify all"), board: tr("\u26A1 \u865B\u64EC\u677F", "\u26A1 Virtual board"), emu: tr("\u{1F5A5} \u6A21\u64EC\u6A5F", "\u{1F5A5} Emulator"), synth: tr("\u2699 \u5408\u6210", "\u2699 Synthesize") }[a];
+  }
+  function actHint(a, i) {
+    const m = machine(i.files);
+    if (a === "emu") return m?.files ? tr("\u958B\u6A5F\uFF08\u5E7E\u79D2\uFF09\uFF0C\u7136\u5F8C\u6253\u958B main.py \u7B49\u677F\u4E0A\u7684\u7A0B\u5F0F\u6309\u300C\u25B6 \u57F7\u884C\u300D", 'boot it (a few seconds), then open a program such as main.py and press "\u25B6 Run"') : tr("\u8B93\u9019\u53F0\u6A5F\u5668\u958B\u6A5F", "boot this machine");
+    if (a === "board") return i.files.some((f) => f.name.endsWith(".c")) ? tr("\u628A SoC \u548C C \u7A0B\u5F0F\u653E\u4E0A\u865B\u64EC\u677F\uFF0C\u6309\u6309\u9215\u3001\u770B LED \u548C\u7D42\u7AEF\u6A5F", "put the SoC and the C program on the virtual board: press buttons, watch the LEDs and the terminal") : tr("\u71D2\u9032\u865B\u64EC\u677F\uFF0C\u6309\u6309\u9215\u3001\u770B LED", "flash it to the virtual board: press buttons, watch the LEDs");
+    if (a === "test") return tr("\u8DD1 testbench\uFF0C\u770B\u7D50\u679C\u548C\u6CE2\u5F62", "run the testbenches, see the results and waveforms");
+    if (a === "synth") return tr("\u770B\u96FB\u8DEF\u8B8A\u6210\u4EC0\u9EBC\uFF1A\u9598\u3001FPGA\u3001\u6676\u7247\u7248\u5716", "see what the circuit becomes: gates, FPGA, chip layout");
+    return "";
+  }
+
   // src/ide/main.ts
   var $2 = (id) => document.getElementById(id);
   var mod = (e) => e.ctrlKey || e.metaKey;
   var esc4 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  var attr = (s) => esc4(s).replace(/"/g, "&quot;");
   var KEY = "veryl2chip-ide:";
   function store() {
     try {
@@ -4977,6 +5042,7 @@ ${lines.join("\n")}
   var ed;
   var vcds = [];
   var mods = [];
+  var modsKnown = false;
   var problems = [];
   var testState = /* @__PURE__ */ new Map();
   var synthKey = "";
@@ -5083,6 +5149,7 @@ ${lines.join("\n")}
     if (a === WELCOME) welcome();
     renderTabs();
     renderFiles();
+    applyCaps();
   }
   function renderTabs() {
     const box = $2("edTabs");
@@ -5244,6 +5311,7 @@ ${lines.join("\n")}
     proj = p;
     synthKey = "";
     testState = /* @__PURE__ */ new Map();
+    modsKnown = false;
     problems = [];
     vcds = [];
     wave?.set(null);
@@ -5374,8 +5442,11 @@ ${lines.join("\n")}
       const d = document.createElement("div");
       const opened = projects.some((p) => p.from === ex.id);
       d.className = "item";
-      d.title = (ex.note ? exNote(ex) + "\n" : "") + ex.files.map((f) => f.name).join(", ");
-      d.innerHTML = `<span class="ic">${opened ? "\u25CF" : "\u25CB"}</span><span class="nm">${esc4(exTitle(ex))}</span>`;
+      const ci = exCapIn(ex);
+      const first = start(ci);
+      const bs = badges(ci);
+      d.title = (ex.note ? exNote(ex) + "\n" : "") + ex.files.map((f) => f.name).join(", ") + "\n" + bs.map((b) => `${b.icon} ${badgeName(b.act)}`).join("  ") + tr(`\u3000\u5EFA\u8B70\u7B2C\u4E00\u6B65\uFF1A${actName(first)}`, `  first step: ${actName(first)}`);
+      d.innerHTML = `<span class="ic">${opened ? "\u25CF" : "\u25CB"}</span><span class="nm">${esc4(exTitle(ex))}</span><span class="badges">${bs.map((b) => `<span class="${b.act === first ? "st" : ""}" title="${attr(badgeName(b.act))}">${b.icon}</span>`).join("")}</span>`;
       d.onclick = () => {
         openExample(ex);
         renderExamples();
@@ -5419,6 +5490,7 @@ ${lines.join("\n")}
     let errs = [];
     try {
       mods = (await core.call({ cmd: "list", files })).modules;
+      modsKnown = true;
     } catch (e) {
       errs = parseErrors(String(e.message ?? e), "check");
     }
@@ -5435,6 +5507,7 @@ ${lines.join("\n")}
     if (errs.length) problems = problems.filter((p) => p.from === "check" || !p.file);
     refreshTops();
     renderProblems();
+    applyCaps();
   }
   var C_TEMPLATE = `// A C program for the RISC-V SoC (RvSoc in rvsoc.veryl): \u26A1 Virtual board compiles it
 // into the SoC's block RAM. Library: printf, putchar, getchar, puts, delay_ms, millis, rand,
@@ -5907,8 +5980,119 @@ int main(void) {
     e.run();
   }
   function runKey() {
+    if (!core) return;
+    if (!projCaps().test.on) {
+      showWhy("test", $2("cmdRun"));
+      return;
+    }
     if (machineCfg()?.files && boardCmd(proj.active ?? "")) runOnBoard();
     else runTests();
+  }
+  function capIn() {
+    return { files: proj.files, mods: modsKnown ? mods : null, top: synthTop(), active: proj.active };
+  }
+  function projCaps() {
+    return caps(capIn());
+  }
+  function exCapIn(ex) {
+    return { files: ex.pcf ? [...ex.files, { name: PCF, src: ex.pcf }] : ex.files, mods: null, top: ex.synth ?? "" };
+  }
+  var badgeName = (a) => a === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66", "has testbenches: \u25B6 Test") : a === "board" ? tr("\u6709\u8173\u4F4D\uFF1A\u26A1 \u653E\u4E0A\u865B\u64EC\u677F", "has pins: \u26A1 virtual board") : tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: \u{1F5A5} boot it in the emulator");
+  var ACT_BTN = [["test", "cmdRun"], ["verify", "cmdVerify"], ["board", "cmdBoard"], ["emu", "cmdEmu"]];
+  var btnTitle = /* @__PURE__ */ new Map();
+  function applyCaps() {
+    if (!core) return;
+    const c = projCaps();
+    const first = start(capIn());
+    const onBoard = c.test.on && !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
+    for (const [a, id] of ACT_BTN) {
+      const b = $2(id);
+      if (!btnTitle.has(id)) btnTitle.set(id, [b.title, b.dataset.enTitle ?? b.title]);
+      const [zh, en] = btnTitle.get(id);
+      b.classList.toggle("off", !c[a].on);
+      b.setAttribute("aria-disabled", String(!c[a].on));
+      b.title = !c[a].on ? `${c[a].why}
+${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what to do)")}` : id === "cmdRun" && onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${proj.active}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${proj.active} on the board (Ctrl/\u2318+Enter)`) : tr(zh, en);
+      b.classList.toggle("primary", onBoard ? id === "cmdRun" : a === first);
+    }
+    const fs = $2("flowStage");
+    fs.disabled = !c.synth.on;
+    fs.title = c.synth.on ? tr("\u5408\u6210\u4E26\u6AA2\u8996\u9019\u500B\u968E\u6BB5\uFF08Ctrl/\u2318+Shift+B\uFF09", "Synthesize and view this stage (Ctrl/\u2318+Shift+B)") : c.synth.why;
+    renderGuide();
+  }
+  function act(a, el2) {
+    if (!core) return;
+    if (!projCaps()[a].on) {
+      showWhy(a, el2);
+      return;
+    }
+    hideWhy();
+    if (a === "test") runKey();
+    else if (a === "verify") verifyAll();
+    else if (a === "board") flashBoard();
+    else if (a === "emu") openEmu();
+    else runSynth();
+  }
+  var PCF_TEMPLATE = `# Pins of the iCEBreaker (iCE40UP5K-SG48): set_io PORT PIN, PORT = a port of the design
+# synthesized (rename these to yours). -nowarn: the design may leave pins out.
+set_io -nowarn i_clk    35  # 12 MHz oscillator
+set_io -nowarn i_rst    10  # BTN_N, onboard button (pressed = 0)
+set_io -nowarn o_ledr   11  # LEDR_N, onboard red LED (lit at 0)
+set_io -nowarn o_ledg   37  # LEDG_N, onboard green LED (lit at 0)
+set_io -nowarn o_led[0] 26  # LED1 (break-off section, lit at 1)
+set_io -nowarn o_led[1] 27  # LED2
+set_io -nowarn o_led[2] 25  # LED3
+set_io -nowarn o_led[3] 23  # LED4
+set_io -nowarn o_led[4] 21  # LED5
+set_io -nowarn i_btn    20  # BTN1 (break-off section, pressed = 1)
+set_io -nowarn i_rx     6   # RX: the FTDI serial port into the FPGA
+set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
+`;
+  var firstProgram = () => file("main.py") ? "main.py" : proj.files.map((f) => f.name).find((n) => !!boardCmd(n));
+  function fixName(f) {
+    return f === "flashAnyway" ? tr("\u4ECD\u8981\u71D2\u9304\uFF08\u9810\u8A2D\u8173\u4F4D\uFF09", "Flash anyway (default pins)") : f === "addPcf" ? tr(`\u65B0\u589E ${PCF}`, `Add ${PCF}`) : f === "openProgram" ? tr(`\u6253\u958B ${firstProgram() ?? ""}`, `Open ${firstProgram() ?? ""}`) : f === "emu" ? tr("\u{1F5A5} \u958B\u6A5F", "\u{1F5A5} Boot") : tr("\u958B\u555F\u7BC4\u4F8B\u300CRV64 \u958B\u767C\u677F\u300D", 'Open the "RV64 board" example');
+  }
+  function doFix(f) {
+    if (f === "flashAnyway") flashBoard();
+    else if (f === "addPcf") {
+      if (!file(PCF)) proj.files.push({ name: PCF, src: PCF_TEMPLATE });
+      openFile(PCF);
+      changed();
+    } else if (f === "openProgram") {
+      const n = firstProgram();
+      if (n) openFile(n);
+    } else if (f === "emu") openEmu();
+    else {
+      const ex = examples().find((e) => e.id === "rv64_linux");
+      if (ex) openExample(ex);
+    }
+  }
+  function showWhy(a, anchor) {
+    const c = projCaps()[a];
+    const pop = $2("capPop");
+    pop.innerHTML = `<b>${esc4(actName(a))} ${tr("\u4E0D\u80FD\u76F4\u63A5\u7528", "is not available")}</b><p>${esc4(c.why ?? "")}</p>` + (c.fix?.length ? `<div class="fixes">${c.fix.map((f) => `<button class="tb-btn" data-fix="${f}">${esc4(fixName(f))}</button>`).join("")}</div>` : "");
+    pop.classList.remove("hidden");
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = `${r.bottom + 6}px`;
+    pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+    pop.onclick = (e) => {
+      const f = e.target.dataset.fix;
+      if (f) {
+        hideWhy();
+        doFix(f);
+      }
+    };
+  }
+  function hideWhy() {
+    $2("capPop").classList.add("hidden");
+  }
+  function renderGuide() {
+    const g = $2("guide");
+    const show = !!core && !proj.guideOff;
+    g.classList.toggle("hidden", !show);
+    if (!show) return;
+    const ci = capIn();
+    g.innerHTML = `<span class="lbl">${tr("\u5EFA\u8B70\u6B65\u9A5F", "Suggested steps")}</span>` + steps(ci).map((a, i) => `<button class="step${i ? "" : " first"}" data-step="${a}"><b>${"\u2460\u2461\u2462"[i]} ${esc4(actName(a))}</b><span>${esc4(actHint(a, ci))}</span></button>`).join('<span class="arr">\u2192</span>') + `<button class="close" title="${attr(tr("\u95DC\u9589\uFF08\u547D\u4EE4\u9078\u55AE\u7684\u300C\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F\u300D\u53EF\u4EE5\u518D\u6253\u958B\uFF09", `Close (the command palette's "Show the suggested steps" brings it back)`))}">\xD7</button>`;
   }
   function openEmu() {
     const e = ensureEmu();
@@ -6083,11 +6267,11 @@ int main(void) {
       e.preventDefault();
       r.classList.add("drag");
       r.setPointerCapture(e.pointerId);
-      const start = axis === "x" ? e.clientX : e.clientY;
+      const start2 = axis === "x" ? e.clientX : e.clientY;
       const target = id === "sideResize" ? $2("sidebar") : $2("panel");
       const s0 = axis === "x" ? target.getBoundingClientRect().width : target.getBoundingClientRect().height;
       const move = (ev) => {
-        const d = (axis === "x" ? ev.clientX : ev.clientY) - start;
+        const d = (axis === "x" ? ev.clientX : ev.clientY) - start2;
         const v = Math.max(min, Math.min(max(), s0 + (invert ? -d : d)));
         document.body.style.setProperty(prop, v + "px");
         save(prop, v);
@@ -6133,6 +6317,11 @@ int main(void) {
       { label: tr("\u986F\u793A\uFF1A\u8F38\u51FA", "View: Output"), run: () => panel("output") },
       { label: tr("\u986F\u793A\uFF1A\u6CE2\u5F62", "View: Waveform"), run: () => panel("wave") },
       { label: tr("\u6B61\u8FCE\u9801", "Welcome page"), run: () => openFile(WELCOME) },
+      { label: tr("\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F", "Show the suggested steps"), run: () => {
+        proj.guideOff = false;
+        persist();
+        renderGuide();
+      } },
       ...LANGS.map(([l, name]) => ({ label: `${tr("\u4ECB\u9762\u8A9E\u8A00\uFF1A", "Language: ")}${name}`, run: () => switchLang(l) })),
       ...projects.filter((p) => p !== proj).map((p) => ({ label: `${tr("\u5207\u63DB\u5C08\u6848\uFF1A", "Switch project: ")}${projName(p)}`, run: () => switchProject(p.id) })),
       ...examples().map((e) => ({ label: `${tr("\u958B\u555F\u7BC4\u4F8B\uFF1A", "Open example: ")}${exTitle(e)}`, run: () => openExample(e) }))
@@ -6250,9 +6439,21 @@ int main(void) {
     $2("palIn").addEventListener("blur", () => setTimeout(closePal, 100));
     $2("cmdPalette").onclick = () => palette(false);
     $2("cmdRun").onclick = () => runKey();
-    $2("cmdVerify").onclick = verifyAll;
-    $2("cmdBoard").onclick = () => flashBoard();
-    $2("cmdEmu").onclick = () => openEmu();
+    $2("cmdVerify").onclick = () => act("verify", $2("cmdVerify"));
+    $2("cmdBoard").onclick = () => act("board", $2("cmdBoard"));
+    $2("cmdEmu").onclick = () => act("emu", $2("cmdEmu"));
+    $2("guide").onclick = (e) => {
+      const t = e.target.closest("[data-step]");
+      if (t) act(t.dataset.step, t);
+      else if (e.target.closest(".close")) {
+        proj.guideOff = true;
+        persist();
+        renderGuide();
+      }
+    };
+    document.addEventListener("mousedown", (e) => {
+      if (!e.target.closest("#capPop, .off, [data-step]")) hideWhy();
+    });
     $2("testsRun").onclick = () => runTests();
     $2("testsVerify").onclick = verifyAll;
     $2("synthTop").onchange = () => {
@@ -6386,6 +6587,7 @@ int main(void) {
       core = await startCore(fromBase64(VERYL_WASM_B64));
       $2("sbCore").textContent = `\u2713 WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr("\uFF08\u80CC\u666F\u57F7\u884C\u7DD2\uFF09", " (worker thread)") : ""}`;
       for (const id of ["cmdRun", "cmdVerify", "cmdBoard", "cmdEmu", "flowTarget", "flowStage"]) $2(id).disabled = false;
+      applyCaps();
       synth = new SynthOverlay(core, {
         embedded: true,
         onStage: (k) => {

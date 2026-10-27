@@ -478,7 +478,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   fs.writeFileSync(ip, js);
   const { hans } = createRequire(import.meta.url)(ip);
   const srcDir = path.join(dist, '../src');
-  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts', 'ide/emu.ts', 'ide/pi.ts'];
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts', 'ide/emu.ts', 'ide/pi.ts', 'ide/caps.ts'];
   const han = /[\u3400-\u9fff]/;
   const trad = new Set('極製複貼麵學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
   let pairs = 0, badEn = [], badHans = [];
@@ -494,6 +494,36 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const ok = pairs > 150 && !badEn.length && !badHans.length;
   if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} i18n     ${pairs} tr() pairs${badEn.length ? '; Chinese in English: ' + badEn.slice(0, 3).join(' | ') : ''}${badHans.length ? '; not simplified: ' + badHans.slice(0, 3).join(' | ') : ''}; ${hans('檔案總管：模擬退火後繞線')}`);
+}
+
+// what each example can do (ide/caps.ts): the title bar's actions, the first step, the badges
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/caps.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const cp = path.join(tmp, 'caps.cjs');
+  fs.writeFileSync(cp, js);
+  const { caps, start, steps, badges } = createRequire(import.meta.url)(cp);
+  const errs = [];
+  const firsts = {};
+  for (const ex of ctx.VERYL_EXAMPLES) {
+    const files = [...ex.files, ...(ex.pcf ? [{ name: 'pins.pcf', src: ex.pcf }] : [])];
+    const i = { files, mods: null, top: ex.synth ?? '' };
+    const c = caps(i), s = start(i);
+    firsts[s] = (firsts[s] ?? 0) + 1;
+    const want = ex.emu ? 'emu' : ex.pcf ? 'board' : 'test';
+    if (s !== want) errs.push(`${ex.id}: first step ${s}, expected ${want}`);
+    if (steps(i)[0] !== s) errs.push(`${ex.id}: steps do not start with ${s}`);
+    if (!badges(i).some((b) => b.act === s)) errs.push(`${ex.id}: no badge for its first step`);
+    for (const [a, v] of Object.entries(c)) if (!v.on && !v.why) errs.push(`${ex.id}: ${a} off without a reason`);
+    if (ex.emu) {
+      if (c.test.on || c.board.on || c.verify.on) errs.push(`${ex.id}: a machine offers test / board`);
+      if (!caps({ ...i, active: 'main.py' }).test.on) errs.push(`${ex.id}: ▶ is off with main.py open`);
+    } else if (!c.test.on || !c.verify.on || c.emu.on) errs.push(`${ex.id}: test ${c.test.on} verify ${c.verify.on} emu ${c.emu.on}`);
+    if (!ex.emu && !ex.pcf && (c.board.on || !c.board.fix?.includes('addPcf'))) errs.push(`${ex.id}: no pins, but the board is ${c.board.on ? 'on' : 'off without "add pins.pcf"'}`);
+  }
+  const ok = !errs.length;
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} caps     ${ctx.VERYL_EXAMPLES.length} examples, first steps ${JSON.stringify(firsts)}${errs.length ? ': ' + errs.slice(0, 4).join('; ') : ''}`);
 }
 
 // the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine

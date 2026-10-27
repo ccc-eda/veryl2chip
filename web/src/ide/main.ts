@@ -17,12 +17,14 @@ import { fingerprint, MachineCfg, machineStops } from '../emu_machine';
 import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
+import { Act, actHint, actName, badges, CapInput, caps, Fix, start, steps } from './caps';
 
 declare const VERYL_WASM_B64: string;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const mod = (e: KeyboardEvent) => e.ctrlKey || e.metaKey;
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const attr = (s: string) => esc(s).replace(/"/g, '&quot;');
 
 // ---------------------------------------------------------------- projects
 
@@ -44,6 +46,8 @@ interface Project {
   piBoard?: import('./bbmodel').Part[];
   /** the emulator's engine for a machine riscv-emu can run (machine.json "riscv") */
   emuEngine?: 'veryl' | 'riscv';
+  /** the suggested steps bar was closed */
+  guideOff?: boolean;
 }
 
 const KEY = 'veryl2chip-ide:';
@@ -88,6 +92,8 @@ let wave: WaveView | null = null;
 let ed: CodeEditor;
 let vcds: { top: string; text: string }[] = [];
 let mods: ModuleInfo[] = [];
+/** mods are the current project's (the parser answered since the project was opened) */
+let modsKnown = false;
 let problems: { file?: string; line?: number; col?: number; msg: string; severity: 'error' | 'warning'; from: 'check' | 'run' }[] = [];
 let testState = new Map<string, 'pass' | 'fail' | 'run'>();
 /** files + top of the last synthesis, to know when the flow views are stale */
@@ -194,6 +200,7 @@ function showActive(): void {
   if (a === WELCOME) welcome();
   renderTabs();
   renderFiles();
+  applyCaps();
 }
 
 function renderTabs(): void {
@@ -341,6 +348,7 @@ function switchProject(id: string): void {
   proj = p;
   synthKey = '';
   testState = new Map();
+  modsKnown = false;
   problems = [];
   vcds = [];
   wave?.set(null);
@@ -469,8 +477,13 @@ function renderExamples(): void {
     const d = document.createElement('div');
     const opened = projects.some(p => p.from === ex.id);
     d.className = 'item';
-    d.title = (ex.note ? exNote(ex) + '\n' : '') + ex.files.map(f => f.name).join(', ');
-    d.innerHTML = `<span class="ic">${opened ? '●' : '○'}</span><span class="nm">${esc(exTitle(ex))}</span>`;
+    const ci = exCapIn(ex);
+    const first = start(ci);
+    const bs = badges(ci);
+    d.title = (ex.note ? exNote(ex) + '\n' : '') + ex.files.map(f => f.name).join(', ')
+      + '\n' + bs.map(b => `${b.icon} ${badgeName(b.act)}`).join('  ') + tr(`　建議第一步：${actName(first)}`, `  first step: ${actName(first)}`);
+    d.innerHTML = `<span class="ic">${opened ? '●' : '○'}</span><span class="nm">${esc(exTitle(ex))}</span>`
+      + `<span class="badges">${bs.map(b => `<span class="${b.act === first ? 'st' : ''}" title="${attr(badgeName(b.act))}">${b.icon}</span>`).join('')}</span>`;
     d.onclick = () => { openExample(ex); renderExamples(); };
     box.appendChild(d);
   }
@@ -519,6 +532,7 @@ async function check(): Promise<void> {
   let errs: typeof problems = [];
   try {
     mods = (await core.call<{ modules: ModuleInfo[] }>({ cmd: 'list', files })).modules;
+    modsKnown = true;
   } catch (e) {
     errs = parseErrors(String((e as Error).message ?? e), 'check');
   }
@@ -531,6 +545,7 @@ async function check(): Promise<void> {
   if (errs.length) problems = problems.filter(p => p.from === 'check' || !p.file);
   refreshTops();
   renderProblems();
+  applyCaps();
 }
 
 // ---------------------------------------------------------------- C programs (RISC-V SoC)
@@ -1030,7 +1045,113 @@ function runOnBoard(): void {
 
 /** ▶ / Ctrl+Enter: a script open in a board project runs on the board, else the tests */
 function runKey(): void {
+  if (!core) return;
+  if (!projCaps().test.on) { showWhy('test', $('cmdRun')); return; }
   if (machineCfg()?.files && boardCmd(proj.active ?? '')) runOnBoard(); else runTests();
+}
+
+// ---------------------------------------------------------------- what the project can do
+
+function capIn(): CapInput { return { files: proj.files, mods: modsKnown ? mods : null, top: synthTop(), active: proj.active }; }
+function projCaps(): ReturnType<typeof caps> { return caps(capIn()); }
+function exCapIn(ex: Example): CapInput { return { files: ex.pcf ? [...ex.files, { name: PCF, src: ex.pcf }] : ex.files, mods: null, top: ex.synth ?? '' }; }
+const badgeName = (a: Act) => a === 'test' ? tr('有 testbench：▶ 測試', 'has testbenches: ▶ Test')
+  : a === 'board' ? tr('有腳位：⚡ 放上虛擬板', 'has pins: ⚡ virtual board') : tr('一台機器：🖥 模擬機開機', 'a machine: 🖥 boot it in the emulator');
+/** the title bar button of each action */
+const ACT_BTN: [Act, string][] = [['test', 'cmdRun'], ['verify', 'cmdVerify'], ['board', 'cmdBoard'], ['emu', 'cmdEmu']];
+/** the buttons' own tooltips [Chinese, English] */
+const btnTitle = new Map<string, [string, string]>();
+
+/** buttons the project cannot use look off and explain why when clicked; the suggested first step is the primary button */
+function applyCaps(): void {
+  if (!core) return;
+  const c = projCaps();
+  const first = start(capIn());
+  const onBoard = c.test.on && !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
+  for (const [a, id] of ACT_BTN) {
+    const b = $(id);
+    if (!btnTitle.has(id)) btnTitle.set(id, [b.title, b.dataset.enTitle ?? b.title]);
+    const [zh, en] = btnTitle.get(id)!;
+    b.classList.toggle('off', !c[a].on);
+    b.setAttribute('aria-disabled', String(!c[a].on));
+    b.title = !c[a].on ? `${c[a].why}\n${tr('（點一下看怎麼辦）', '(click for what to do)')}`
+      : id === 'cmdRun' && onBoard ? tr(`在板子上執行 ${proj.active}（Ctrl/⌘+Enter）`, `Run ${proj.active} on the board (Ctrl/⌘+Enter)`) : tr(zh, en);
+    b.classList.toggle('primary', onBoard ? id === 'cmdRun' : a === first);
+  }
+  const fs = $<HTMLSelectElement>('flowStage');
+  fs.disabled = !c.synth.on;
+  fs.title = c.synth.on ? tr('合成並檢視這個階段（Ctrl/⌘+Shift+B）', 'Synthesize and view this stage (Ctrl/⌘+Shift+B)') : c.synth.why!;
+  renderGuide();
+}
+
+/** a title bar action or a suggested step: done if the project can, else why not */
+function act(a: Act, el: HTMLElement): void {
+  if (!core) return;
+  if (!projCaps()[a].on) { showWhy(a, el); return; }
+  hideWhy();
+  if (a === 'test') runKey();
+  else if (a === 'verify') verifyAll();
+  else if (a === 'board') flashBoard();
+  else if (a === 'emu') openEmu();
+  else runSynth();
+}
+
+const PCF_TEMPLATE = `# Pins of the iCEBreaker (iCE40UP5K-SG48): set_io PORT PIN, PORT = a port of the design
+# synthesized (rename these to yours). -nowarn: the design may leave pins out.
+set_io -nowarn i_clk    35  # 12 MHz oscillator
+set_io -nowarn i_rst    10  # BTN_N, onboard button (pressed = 0)
+set_io -nowarn o_ledr   11  # LEDR_N, onboard red LED (lit at 0)
+set_io -nowarn o_ledg   37  # LEDG_N, onboard green LED (lit at 0)
+set_io -nowarn o_led[0] 26  # LED1 (break-off section, lit at 1)
+set_io -nowarn o_led[1] 27  # LED2
+set_io -nowarn o_led[2] 25  # LED3
+set_io -nowarn o_led[3] 23  # LED4
+set_io -nowarn o_led[4] 21  # LED5
+set_io -nowarn i_btn    20  # BTN1 (break-off section, pressed = 1)
+set_io -nowarn i_rx     6   # RX: the FTDI serial port into the FPGA
+set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
+`;
+
+/** the first program for the board: main.py, else the first .py / .c / .sh */
+const firstProgram = () => file('main.py') ? 'main.py' : proj.files.map(f => f.name).find(n => !!boardCmd(n));
+function fixName(f: Fix): string {
+  return f === 'flashAnyway' ? tr('仍要燒錄（預設腳位）', 'Flash anyway (default pins)')
+    : f === 'addPcf' ? tr(`新增 ${PCF}`, `Add ${PCF}`)
+    : f === 'openProgram' ? tr(`打開 ${firstProgram() ?? ''}`, `Open ${firstProgram() ?? ''}`)
+    : f === 'emu' ? tr('🖥 開機', '🖥 Boot')
+    : tr('開啟範例「RV64 開發板」', 'Open the "RV64 board" example');
+}
+function doFix(f: Fix): void {
+  if (f === 'flashAnyway') flashBoard();
+  else if (f === 'addPcf') { if (!file(PCF)) proj.files.push({ name: PCF, src: PCF_TEMPLATE }); openFile(PCF); changed(); }
+  else if (f === 'openProgram') { const n = firstProgram(); if (n) openFile(n); }
+  else if (f === 'emu') openEmu();
+  else { const ex = examples().find(e => e.id === 'rv64_linux'); if (ex) openExample(ex); }
+}
+
+function showWhy(a: Act, anchor: HTMLElement): void {
+  const c = projCaps()[a];
+  const pop = $('capPop');
+  pop.innerHTML = `<b>${esc(actName(a))} ${tr('不能直接用', 'is not available')}</b><p>${esc(c.why ?? '')}</p>`
+    + (c.fix?.length ? `<div class="fixes">${c.fix.map(f => `<button class="tb-btn" data-fix="${f}">${esc(fixName(f))}</button>`).join('')}</div>` : '');
+  pop.classList.remove('hidden');
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${r.bottom + 6}px`;
+  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+  pop.onclick = e => { const f = (e.target as HTMLElement).dataset.fix as Fix | undefined; if (f) { hideWhy(); doFix(f); } };
+}
+function hideWhy(): void { $('capPop').classList.add('hidden'); }
+
+/** the suggested steps above the editor (closed with ×, back from the command palette) */
+function renderGuide(): void {
+  const g = $('guide');
+  const show = !!core && !proj.guideOff;
+  g.classList.toggle('hidden', !show);
+  if (!show) return;
+  const ci = capIn();
+  g.innerHTML = `<span class="lbl">${tr('建議步驟', 'Suggested steps')}</span>`
+    + steps(ci).map((a, i) => `<button class="step${i ? '' : ' first'}" data-step="${a}"><b>${'①②③'[i]} ${esc(actName(a))}</b><span>${esc(actHint(a, ci))}</span></button>`).join('<span class="arr">→</span>')
+    + `<button class="close" title="${attr(tr('關閉（命令選單的「顯示建議步驟」可以再打開）', 'Close (the command palette\'s "Show the suggested steps" brings it back)'))}">×</button>`;
 }
 
 function openEmu(): void {
@@ -1271,6 +1392,7 @@ function commands(): Cmd[] {
     { label: tr('顯示：輸出', 'View: Output'), run: () => panel('output') },
     { label: tr('顯示：波形', 'View: Waveform'), run: () => panel('wave') },
     { label: tr('歡迎頁', 'Welcome page'), run: () => openFile(WELCOME) },
+    { label: tr('顯示建議步驟', 'Show the suggested steps'), run: () => { proj.guideOff = false; persist(); renderGuide(); } },
     ...LANGS.map(([l, name]) => ({ label: `${tr('介面語言：', 'Language: ')}${name}`, run: () => switchLang(l) })),
     ...projects.filter(p => p !== proj).map(p => ({ label: `${tr('切換專案：', 'Switch project: ')}${projName(p)}`, run: () => switchProject(p.id) })),
     ...examples().map(e => ({ label: `${tr('開啟範例：', 'Open example: ')}${exTitle(e)}`, run: () => openExample(e) })),
@@ -1359,9 +1481,15 @@ function wire(): void {
   $('palIn').addEventListener('blur', () => setTimeout(closePal, 100));
   $('cmdPalette').onclick = () => palette(false);
   $('cmdRun').onclick = () => runKey();
-  $('cmdVerify').onclick = verifyAll;
-  $('cmdBoard').onclick = () => flashBoard();
-  $('cmdEmu').onclick = () => openEmu();
+  $('cmdVerify').onclick = () => act('verify', $('cmdVerify'));
+  $('cmdBoard').onclick = () => act('board', $('cmdBoard'));
+  $('cmdEmu').onclick = () => act('emu', $('cmdEmu'));
+  $('guide').onclick = e => {
+    const t = (e.target as HTMLElement).closest<HTMLElement>('[data-step]');
+    if (t) act(t.dataset.step as Act, t);
+    else if ((e.target as HTMLElement).closest('.close')) { proj.guideOff = true; persist(); renderGuide(); }
+  };
+  document.addEventListener('mousedown', e => { if (!(e.target as HTMLElement).closest('#capPop, .off, [data-step]')) hideWhy(); });
   $('testsRun').onclick = () => runTests();
   $('testsVerify').onclick = verifyAll;
   $<HTMLSelectElement>('synthTop').onchange = () => {
@@ -1482,6 +1610,7 @@ async function boot(): Promise<void> {
     core = await startCore(fromBase64(VERYL_WASM_B64));
     $('sbCore').textContent = `✓ WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr('（背景執行緒）', ' (worker thread)') : ''}`;
     for (const id of ['cmdRun', 'cmdVerify', 'cmdBoard', 'cmdEmu', 'flowTarget', 'flowStage']) $<HTMLButtonElement>(id).disabled = false;
+    applyCaps();
     synth = new SynthOverlay(core, {
       embedded: true,
       onStage: k => {
