@@ -121,6 +121,8 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
     let mut in_tree = vec![u32::MAX; ne];
     let mut order: Vec<usize> = (0..terms.len()).collect();
     order.sort_by_key(|i| terms[*i].1.len());
+    let profile = std::env::var("VERYL_EDA_PROFILE").is_ok();
+    let t0 = std::time::Instant::now();
     for it in 0..max_iters {
         for &ni in &order {
             let t = &terms[ni].1;
@@ -184,6 +186,7 @@ pub fn route_with(nl: &Netlist, pl: &RowPlacement, max_iters: usize) -> Routing 
             if use_v[e] > cap_v { over += (use_v[e] - cap_v) as u32; hist_v[e] += 0.5; }
         }
         iters.push(over);
+        if profile { eprintln!("  global route {}x{} iteration {}: overflow {} ({:.1}s)", gx, gy, it + 1, over, t0.elapsed().as_secs_f64()); }
         if over == 0 { break; }
         pres *= 1.6;
     }

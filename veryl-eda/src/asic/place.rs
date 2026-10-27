@@ -42,6 +42,111 @@ pub struct RowPlacement {
 /// µm of wirelength one site of bin overflow costs
 pub const DENSITY_WEIGHT: f64 = 1.0;
 
+/// designs with at least this many cells (and no macros) get a global placement
+/// before the annealing (`global_place`); smaller ones anneal from the netlist order
+pub const GLOBAL_MIN: usize = 10000;
+
+/// Global placement of the standard cells for a large design: quadratic wirelength
+/// (star model: every cell moves to the weighted average of its nets' centres, the IO
+/// pins fixed) solved by Gauss-Seidel sweeps, alternating with spreading by recursive
+/// bisection (cells sorted along the longer side of a region, split where half of
+/// their width lies, until a region holds a few cells, spaced evenly in it); the spread
+/// positions pull the next solution with a growing weight. The last spread is
+/// legalized into rows: cells by y fill the rows in turn, each row in x order.
+#[allow(clippy::too_many_arguments)]
+fn global_place(movable: &[usize], widths: &[u32], pnets: &[PNet], pins: &[Pin], rows: u32, sites: u32, site_w: f64, row_h: f64, seed: u64) -> Vec<(u32, u32)> {
+    let n = widths.len();
+    let (w, h) = (sites as f64 * site_w, rows as f64 * row_h);
+    let mut rng = Rng::new(seed ^ 0x9e37_79b9);
+    let mut x: Vec<f64> = (0..n).map(|_| w * (0.45 + 0.1 * rng.unit())).collect();
+    let mut y: Vec<f64> = (0..n).map(|_| h * (0.45 + 0.1 * rng.unit())).collect();
+    // nets with up to 100 terminals; star weight 1 / (terminals - 1)
+    let gnets: Vec<&PNet> = pnets.iter().filter(|p| p.cells.len() + p.pins.len() <= 100).collect();
+    let mut cell_nets: Vec<Vec<usize>> = vec![vec![]; n];
+    for (k, p) in gnets.iter().enumerate() { for &c in &p.cells { cell_nets[c].push(k); } }
+    let wt: Vec<f64> = gnets.iter().map(|p| 1.0 / (p.cells.len() + p.pins.len() - 1).max(1) as f64).collect();
+    let (mut ax, mut ay) = (x.clone(), y.clone());
+    let mut cx = vec![0.0; gnets.len()];
+    let mut cy = vec![0.0; gnets.len()];
+    let rounds = 24;
+    for round in 0..=rounds {
+        let anchor = if round == 0 { 0.0 } else { 0.02 * (round * round) as f64 };
+        for _ in 0..if round == 0 { 60 } else { 20 } {
+            for (k, p) in gnets.iter().enumerate() {
+                let m = (p.cells.len() + p.pins.len()) as f64;
+                cx[k] = (p.cells.iter().map(|&c| x[c]).sum::<f64>() + p.pins.iter().map(|&q| pins[q].x).sum::<f64>()) / m;
+                cy[k] = (p.cells.iter().map(|&c| y[c]).sum::<f64>() + p.pins.iter().map(|&q| pins[q].y).sum::<f64>()) / m;
+            }
+            for &c in movable {
+                let (mut sx, mut sy, mut sw) = (anchor * ax[c], anchor * ay[c], anchor);
+                for &k in &cell_nets[c] { sx += wt[k] * cx[k]; sy += wt[k] * cy[k]; sw += wt[k]; }
+                if sw > 0.0 { x[c] = (sx / sw).clamp(0.0, w); y[c] = (sy / sw).clamp(0.0, h); }
+            }
+        }
+        // spread: recursive bisection over the die
+        let mut cells: Vec<usize> = movable.to_vec();
+        let mut stack = vec![(0usize, cells.len(), 0.0, 0.0, w, h)];
+        while let Some((lo, hi, x0, y0, x1, y1)) = stack.pop() {
+            let part = &mut cells[lo..hi];
+            let horiz = x1 - x0 >= y1 - y0;
+            if part.len() <= 4 || (x1 - x0 < 2.0 * site_w && y1 - y0 < row_h) {
+                let k = part.len();
+                part.sort_by(|a, b| if horiz { x[*a].total_cmp(&x[*b]) } else { y[*a].total_cmp(&y[*b]) });
+                for (i, &c) in part.iter().enumerate() {
+                    let f = (i as f64 + 0.5) / k as f64;
+                    if horiz { ax[c] = x0 + f * (x1 - x0); ay[c] = (y0 + y1) / 2.0; } else { ax[c] = (x0 + x1) / 2.0; ay[c] = y0 + f * (y1 - y0); }
+                }
+                continue;
+            }
+            part.sort_by(|a, b| if horiz { x[*a].total_cmp(&x[*b]) } else { y[*a].total_cmp(&y[*b]) });
+            let total: f64 = part.iter().map(|&c| widths[c] as f64).sum();
+            let mut acc = 0.0;
+            let mut cut = part.len() / 2;
+            for (i, &c) in part.iter().enumerate() { acc += widths[c] as f64; if acc >= total / 2.0 { cut = i + 1; break; } }
+            let cut = cut.clamp(1, part.len() - 1);
+            if horiz {
+                let xm = (x0 + x1) / 2.0;
+                stack.push((lo, lo + cut, x0, y0, xm, y1));
+                stack.push((lo + cut, hi, xm, y0, x1, y1));
+            } else {
+                let ym = (y0 + y1) / 2.0;
+                stack.push((lo, lo + cut, x0, y0, x1, ym));
+                stack.push((lo + cut, hi, x0, ym, x1, y1));
+            }
+        }
+    }
+    // legalize the last spread: rows in y order, each filled to its share of the width
+    let mut by_y: Vec<usize> = movable.to_vec();
+    by_y.sort_by(|a, b| ay[*a].total_cmp(&ay[*b]));
+    let total: f64 = movable.iter().map(|&c| widths[c] as f64).sum();
+    let mut pos = vec![(0u32, 0u32); n];
+    let mut next = 0;
+    let mut placed = 0.0;
+    for r in 0..rows {
+        let quota = total * (r + 1) as f64 / rows as f64;
+        let mut row: Vec<usize> = vec![];
+        let mut used = 0u32;
+        while next < by_y.len() && (placed < quota || r + 1 == rows) && used + widths[by_y[next]] <= sites {
+            row.push(by_y[next]);
+            used += widths[by_y[next]];
+            placed += widths[by_y[next]] as f64;
+            next += 1;
+        }
+        row.sort_by(|a, b| ax[*a].total_cmp(&ax[*b]));
+        let mut left = used;
+        let mut cursor = 0u32;
+        for &c in &row {
+            let want = ((ax[c] / site_w) - widths[c] as f64 / 2.0).round().max(0.0) as u32;
+            let xs = want.max(cursor).min(sites - left);
+            pos[c] = (r, xs);
+            cursor = xs + widths[c];
+            left -= widths[c];
+        }
+    }
+    assert!(next == by_y.len(), "global placement: cells left over after the last row");
+    pos
+}
+
 /// a net for wirelength: cells and pins it connects
 pub struct PNet { pub cells: Vec<usize>, pub pins: Vec<usize>, pub bit: Bit }
 
@@ -219,7 +324,12 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         }
     }
 
-    if let Some(st) = start {
+    // a large design (no macros): global placement first, then the annealing only refines it
+    let global = (start.is_none() && n >= GLOBAL_MIN && mpos.is_empty()).then(|| {
+        let movable: Vec<usize> = (0..n).filter(|c| !fixed[*c]).collect();
+        global_place(&movable, &widths, &pnets, &pins, rows, sites, site_w, row_h, seed)
+    });
+    if let Some(st) = start.or(global.as_deref()) {
         for row in occ.iter_mut() { for o in row.iter_mut() { if *o >= 0 && !fixed[*o as usize] { *o = -1; } } }
         for &c in &order {
             let (r, x) = st[c];
@@ -264,6 +374,7 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
     };
     let mut rlim = (rows.max(sites / 8)) as f64;
     if start.is_some() { temp *= 0.02; rlim = 2.0; }
+    if global.is_some() { temp *= 0.05; rlim = 4.0; }
     let moves = (n * 12).max(2000);
     let free_run = |occ: &Vec<Vec<i32>>, r: u32, x: u32, w: u32, ignore: &[i32]| -> bool {
         x + w <= sites && (x..x + w).all(|s| { let o = occ[r as usize][s as usize]; o < 0 || ignore.contains(&o) })

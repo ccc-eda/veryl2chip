@@ -93,7 +93,11 @@ fn physical(mapped: &Netlist, seed: u64, util: f64, extra_hold: f64) -> Result<(
         let t0 = now();
         // a short probe decides: a routable die needs few rounds
         let probe = route::route_with(&mapped, &placement, 8);
-        if (probe.overflow > probe.iters[0] / 50 || probe.demand > 0.5) && util > 0.35 { util *= 0.8; continue; }
+        if (probe.overflow > probe.iters[0] / 50 || probe.demand > 0.5) && util > 0.35 {
+            if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("  probe: overflow {}, demand {:.2} at utilization {:.2}: bigger die", probe.overflow, probe.demand, util); }
+            util *= 0.8;
+            continue;
+        }
         routing = if probe.overflow == 0 { probe } else { route::route(&mapped, &placement) };
         t("route", t0);
         break;
@@ -240,14 +244,16 @@ pub fn def(o: &Output) -> String {
     }
     let nets: Vec<&detail::DNet> = o.detail.nets.iter().filter(|n| !n.segs.is_empty() || !n.vias.is_empty()).collect();
     writeln!(s, "NETS {} ;", nets.len()).unwrap();
+    // the cell pins and IO pins on each net
+    let mut on_net: std::collections::HashMap<crate::netlist::Bit, Vec<String>> = Default::default();
+    for (i, c) in o.mapped.cells.iter().enumerate() {
+        let bind = tech.binding(&c.typ);
+        for (p, b) in &c.conns { on_net.entry(*b).or_default().push(format!("( c{} {} )", i, bind.map(|x| x.lib_pin(p)).unwrap_or(p))); }
+    }
+    for p in &pl.pins { on_net.entry(p.bit).or_default().push(format!("( PIN {} )", p.name)); }
     for n in nets {
         let name = match n.bit { crate::netlist::Bit::W(w) => format!("n{}", w), _ => "const".into() };
-        let mut conns = vec![];
-        for (i, c) in o.mapped.cells.iter().enumerate() {
-            let bind = tech.binding(&c.typ);
-            for (p, b) in &c.conns { if *b == n.bit { conns.push(format!("( c{} {} )", i, bind.map(|x| x.lib_pin(p)).unwrap_or(p))); } }
-        }
-        for p in &pl.pins { if p.bit == n.bit { conns.push(format!("( PIN {} )", p.name)); } }
+        let conns = on_net.get(&n.bit).cloned().unwrap_or_default();
         let mut parts = vec![];
         for &(l, x0, y0, x1, y1) in &n.segs { parts.push(format!("{} ( {} {} ) ( {} {} )", tech.layers[l as usize], ux(x0), uy(y0), ux(x1), uy(y1))); }
         for &(l, x, y) in &n.vias {

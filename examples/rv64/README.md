@@ -11,7 +11,7 @@
 | `sim/build.sh` | `veryl build` + `verilator` → `sim/obj/rv64sim` |
 | `sim/riscv_tests.sh` | 跑官方 riscv-tests |
 | `sim/spike_diff.sh` | 逐指令和 spike 比對 |
-| `sim/build_gates.sh` | veryl-eda 合成 `Rv64Core`，閘級網表（通用閘、ECP5、vlib、SKY130）放回同一個測試平台 |
+| `sim/build_gates.sh` | veryl-eda 合成 `Rv64Core`，網表（通用閘、ECP5、vlib、SKY130，以及 vlib 佈局繞線之後）放回同一個測試平台 |
 | `src/rv64fpga.veryl`、`sim/fpga.cpp`、`sim/build_fpga.sh` | `Rv64Fpga`：放得進 ECP5 的系統（block RAM、序列 UART），只用腳位的測試平台 |
 | `fpga/ecp5.sh`、`fpga/ulx3s.lpf` | `Rv64Fpga` → nextpnr-ecp5 佈局繞線 → 位元流（ULX3S 85F） |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
@@ -116,7 +116,7 @@ M 計時器、M 軟體中斷、全域中斷關閉時 `wfi` 照樣被喚醒、Sst
 在 U 模式時 M 層級的中斷照樣進來、UART 經 PLIC 的外部中斷（M、S 兩個 context，claim / complete）、
 MSI 與 MTI 同時等待時先處理 MSI。spike 也跑得過第 2–7 項（它的 UART 沒有 THRE 中斷）。
 
-## 合成：閘級網表放回 Verilator
+## 合成與 ASIC 佈局繞線：網表放回 Verilator
 
 `sim/build_gates.sh KIND` 用 veryl-eda（`v2c`）合成 `Rv64Core`，把網表換掉 SoC 裡的 RTL 處理器，
 其他（周邊、記憶體、`sim/main.cpp`）不變，所以所有測試都能拿網表來跑：
@@ -134,7 +134,16 @@ OBJ=sim/obj_ecp5 sim/riscv_tests.sh           # riscv-tests 跑在網表上
 OBJ=sim/obj_ecp5 verify/random.sh 1 100       # 隨機測試（和 spike 比）
 ```
 
-四種網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
+繞線之後（veryl-eda 自己的 ASIC 流程：佈局、時脈樹、全域與細部繞線）：
+
+| KIND | 網表 | 結果 |
+|---|---|---|
+| `vlib_routed` | `v2c asic`：66,522 個 vlib 元件（含時脈樹 1534 個緩衝器），1433 × 1436 µm，約 5 分鐘 | 0 衝突、0 斷線，Fmax 25.6 MHz；196 支 riscv-tests 通過 |
+| `sky130_routed` | `v2c asic --pdk sky130` | 細部繞線還留下衝突與斷線（暫緩） |
+
+`DEF=out.def sim/build_gates.sh vlib_routed` 另外寫出版圖（DEF）。很久的測試（Linux、xv6）只在 RTL 上跑，網表只跑 riscv-tests。
+
+四種對應後的網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
 乘除法原本是組合邏輯（64 位元的乘法器與除法器，網表 13 萬個元件），改成 64 拍的反覆式後剩 6 萬個。
 
 ## FPGA：佈局繞線之後再模擬
@@ -187,8 +196,13 @@ xv6/test.sh                                                                     
 ```
 
 開機到 `$` 約 4.5 億個指令、13 億拍（Verilator 每秒約 6–7 百萬拍，約 3 分鐘）；
-其中九成是 `kinit` 把 128 MB 的每一頁逐位元組填過一遍。`usertests -q` 一開始就用 `sbrk` 要完全部記憶體再放掉，
-在模擬裡要跑一兩個小時。
+其中九成是 `kinit` 把 128 MB 的每一頁逐位元組填過一遍。`usertests -q`（xv6 的整套使用者測試，62 項）全部通過：`ALL TESTS PASSED`，
+共 293 億個指令、686 億拍，Verilator 上 3.4 小時（一開始就用 `sbrk` 要完全部記憶體再放掉，所以很久）：
+
+```sh
+printf 'usertests -q\n' > /tmp/ut.txt
+sim/obj/rv64sim -m 0 -s /tmp/ut.txt -l 0x88000000:xv6/build/fs.img xv6/build/kernel/kernel
+```
 
 ## Linux
 
