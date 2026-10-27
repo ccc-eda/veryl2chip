@@ -17,6 +17,8 @@ export interface EmuStart {
   cfg: MachineCfg;
   images: { bytes: Uint8Array; addr?: string }[];
   stats: string;
+  /** start from this state instead of a cold boot (memory, cycle, the terminal so far; where it comes from) */
+  snap?: { data: Uint8Array; cycle: number; log: string; from: 'saved' | 'bundled' };
 }
 
 // ---- a small terminal: lines of characters, a cursor, the VT100 sequences Linux / busybox use ----
@@ -70,6 +72,9 @@ class Term {
     }
   }
 
+  /** the terminal as text (for a saved state) */
+  text(): string { return this.lines.map((l) => l.join('')).join('\r\n'); }
+
   html(cursor: boolean): string {
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
     return this.lines.map((l, i) => {
@@ -81,6 +86,12 @@ class Term {
   }
 }
 
+/** gzip with the platform's CompressionStream */
+export async function gzip(data: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 export class Emulator {
   private w: Worker | null = null;
   private term = new Term();
@@ -90,6 +101,8 @@ export class Emulator {
   private stat = { cycle: 0, rate: 0 };
   /** the IDE: compile the project and get its images */
   onStart: (() => Promise<EmuStart | null>) | null = null;
+  /** the IDE: keep a saved state (gzip of the memory, the cycle, the terminal text) */
+  onSave: (s: { data: Uint8Array; cycle: number; log: string }) => Promise<void> = async () => {};
   /** the IDE: the project's breadboard for the development board (null: the example's), and saving it */
   getParts: () => Part[] | null = () => null;
   onParts: (parts: Part[]) => void = () => {};
@@ -99,7 +112,8 @@ export class Emulator {
     host.innerHTML = `<div class="vb-bar">
         <button class="tb-btn" data-a="boot" title="${tr('用 veryl-emu 把設計編譯成 WebAssembly，載入程式後開機', 'Compile the design to WebAssembly with veryl-emu, load the programs and boot')}">${tr('🖥 開機', '🖥 Boot')}</button>
         <button class="tb-btn" data-a="pause" disabled>⏸</button>
-        <button class="tb-btn" data-a="reset" disabled title="${tr('重設（重新載入程式，從頭開機）', 'Reset (reload the programs, boot again)')}">⟲</button>
+        <button class="tb-btn" data-a="reset" disabled title="${tr('冷開機（重新載入程式，從頭開機，不用快照）', 'Cold boot (reload the programs and boot from the start, no snapshot)')}">⟲</button>
+        <button class="tb-btn ghost" data-a="save" disabled title="${tr('存下目前的狀態（存在這個瀏覽器；下次開機從這裡繼續）', 'Save the current state (in this browser; the next boot continues from here)')}">💾</button>
         <button class="tb-btn ghost" data-a="upload" title="${tr('載入自己的程式（ELF 或二進位檔，放在 RAM 的開頭）再開機', 'Load your own program (ELF or a binary at the start of the RAM), then boot')}">${tr('📂 程式', '📂 Program')}</button>
         <input type="file" class="hidden" data-a="file">
         <span class="vb-stat em-stat"></span>
@@ -109,7 +123,8 @@ export class Emulator {
     const q = <T extends HTMLElement>(a: string) => host.querySelector(`[data-a="${a}"]`) as T;
     q('boot').onclick = () => this.boot();
     q('pause').onclick = () => this.pauseResume();
-    q('reset').onclick = () => { if (this.w && this.last) { this.term = new Term(); this.dirty = true; this.w.postMessage({ type: 'reset' }); this.set('run'); this.inEl.focus(); } };
+    q('reset').onclick = () => { if (this.w && this.last) { this.term = new Term(); this.dirty = true; this.w.postMessage({ type: 'reset' }); this.note(tr('冷開機', 'Cold boot')); this.set('run'); this.inEl.focus(); } };
+    q('save').onclick = () => { if (this.w) { this.w.postMessage({ type: 'save' }); this.note(tr('存狀態中…', 'Saving the state…')); } };
     q('upload').onclick = () => q<HTMLInputElement>('file').click();
     q<HTMLInputElement>('file').onchange = async () => {
       const f = q<HTMLInputElement>('file').files?.[0];
@@ -150,6 +165,7 @@ export class Emulator {
     q('pause').disabled = s === 'off' || s === 'end';
     q('pause').textContent = s === 'pause' ? '▶' : '⏸';
     q('reset').disabled = s === 'off';
+    q('save').disabled = s === 'off' || s === 'end';
     this.dirty = true;
   }
 
@@ -179,9 +195,11 @@ export class Emulator {
     this.w.onmessage = (e) => this.msg(e.data);
     this.w.onerror = (e) => { this.note(tr('模擬機錯誤：', 'Emulator error: ') + (e.message ?? '')); this.set('end'); };
     this.term = new Term();
-    this.stat = { cycle: 0, rate: 0 };
+    this.stat = { cycle: s.snap?.cycle ?? 0, rate: 0 };
+    if (s.snap) this.term.write([...s.snap.log].map((c) => c.charCodeAt(0) & 0xff));
     const prog = this.upload ? tr(`程式：${this.uploadName}`, `program: ${this.uploadName}`) : s.cfg.load?.length ? tr(`程式：${s.cfg.load.map((l) => l.image).join('、')}`, `program: ${s.cfg.load.map((l) => l.image).join(', ')}`) : '';
-    this.note(`${s.cfg.top}: ${s.stats}${prog ? '　' + prog : ''}`);
+    const from = s.snap ? (s.snap.from === 'saved' ? tr('　從存下的狀態繼續（⟲ 冷開機）', '  continued from the saved state (⟲ cold boot)') : tr('　從快照開機（⟲ 冷開機）', '  booted from the snapshot (⟲ cold boot)')) : '';
+    this.note(`${s.cfg.top}: ${s.stats}${prog ? '　' + prog : ''}${from}`);
     // the development board (machine.json "board": "pi")
     const bh = this.host.querySelector('.em-board') as HTMLElement;
     if (s.cfg.board === 'pi') {
@@ -193,7 +211,7 @@ export class Emulator {
       this.pi.setParts(this.getParts() ?? PI_DEFAULT_BB);
       bh.classList.remove('hidden');
     } else bh.classList.add('hidden');
-    this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images });
+    this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle });
     this.set('run');
     this.inEl.focus();
   }
@@ -209,6 +227,11 @@ export class Emulator {
       this.stat.cycle = d.cycle!;
       this.term.write([...`\r\n[${d.pass ? tr('結束（正常）', 'finished (pass)') : tr('結束，代碼', 'finished, code')} 0x${d.code!.toString(16)}]\r\n`].map((c) => c.charCodeAt(0)));
       this.set('end');
+    } else if (d.type === 'saved') {
+      const data = (d as unknown as { data: Uint8Array }).data;
+      gzip(data).then((gz) => this.onSave({ data: gz, cycle: d.cycle!, log: this.term.text() }))
+        .then(() => this.note(tr(`狀態存好了（${(this.stat.cycle / 1e6).toFixed(0)} M 拍）：下次開機從這裡繼續`, `State saved (${(this.stat.cycle / 1e6).toFixed(0)} M cycles): the next boot continues from here`)))
+        .catch((e) => this.note(String((e as Error).message ?? e)));
     } else if (d.type === 'error') {
       this.note(tr('模擬機錯誤：', 'Emulator error: ') + d.msg);
       this.set('end');

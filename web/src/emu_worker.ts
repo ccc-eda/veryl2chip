@@ -1,8 +1,9 @@
 // The emulator's worker: runs a Machine (emu_machine.ts) in slices of about 50 ms,
 // sends the UART output and the speed, takes typed bytes and pause / resume / reset.
-//   in:  {type: 'start', wasm, meta, cfg, images: [{bytes, addr?}]} | {type: 'input', bytes}
-//        {type: 'pause'} | {type: 'resume'} | {type: 'reset'} | {type: 'gpio', bits}
+//   in:  {type: 'start', wasm, meta, cfg, images: [{bytes, addr?}], snapshot?, cycle?} | {type: 'input', bytes}
+//        {type: 'pause'} | {type: 'resume'} | {type: 'reset'} (a cold boot) | {type: 'gpio', bits} | {type: 'save'}
 //   out: {type: 'out', bytes, cycle, rate, duty?, oe?} | {type: 'finished', code, pass, cycle} | {type: 'error', msg}
+//        {type: 'saved', data, cycle} (the state, Machine.snapshot())
 
 import { Machine } from './emu_machine';
 
@@ -46,7 +47,8 @@ self.onmessage = async (e: MessageEvent) => {
       running = false;
       m = await Machine.create(d.wasm, d.meta, d.cfg);
       images = d.images;
-      boot();
+      // from a snapshot (the booted machine), else a cold boot
+      if (d.snapshot) { m.restore(d.snapshot, d.cycle ?? 0); m.setGpio(gpio); } else boot();
       running = true;
       loop(gen);
     } else if (d.type === 'input') {
@@ -54,6 +56,10 @@ self.onmessage = async (e: MessageEvent) => {
     } else if (d.type === 'gpio') {
       gpio = d.bits;
       m?.setGpio(gpio);
+    } else if (d.type === 'save') {
+      if (!m) return;
+      const data = m.snapshot();
+      post({ type: 'saved', data, cycle: m.cycle });
     } else if (d.type === 'pause') {
       running = false;
     } else if (d.type === 'resume') {

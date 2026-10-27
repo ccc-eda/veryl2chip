@@ -6,8 +6,10 @@
 //   ide.js       the IDE page (M11), same core
 //   img_linux.js the emulator's Linux image for the RV64 example (OpenSBI + Linux + busybox, gzip + base64),
 //                loaded by the page only when the emulator boots it
+//   img_snap_linux.js  the same machine booted to its shell (snapshot.mjs: memory, gzip + base64), so the
+//                board starts in seconds; remade only when the model or the image changed
+// Usage: node build.mjs [--skip-wasm] [--skip-snapshot]
 //   index.html (the IDE), ide.css, demo.html (the demo page), style.css, ide.html (redirects to index.html)
-// Usage: node build.mjs [--skip-wasm]
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -124,7 +126,7 @@ const EX = [
     machine: { top: 'Rv64Soc', reset: { port: 'i_rst', active: 0, cycles: 2 },
       uart: { tx_valid: 'o_tx_valid', tx_data: 'o_tx_data', rx_valid: 'i_rx_valid', rx_data: 'i_rx_data', rx_ready: 'o_rx_ready' },
       finish: { valid: 'o_finish', code: 'o_finish_code', pass: 0x5555 }, ram: { array: 'mem', base: '0x80000000' }, load: [{ image: 'linux' }],
-      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi' },
+      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi', snapshot: 'linux', prompt: 'rv64:~$ ' },
     note: '像樹莓派的開發板：Rv64Core（RV64IMAC、M / S / U、SV39）放在有 256 MB RAM 與 16 支腳 GPIO 的 Rv64Soc 裡，用模擬機（🖥）跑：veryl-emu 把它編成 WebAssembly，開 OpenSBI + Linux 6.12 + busybox；板上 ACT / USER LED（GPIO 0、1）、按鈕（GPIO 2），排針與麵包板上是 GPIO 3–15（和樹莓派同樣的 BCM 編號）。在終端機打 echo 1 > /sys/class/leds/user/brightness 點亮 LED' },
   { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
@@ -177,3 +179,6 @@ await esbuild.build({ entryPoints: [path.join(here, 'src/emu_machine.ts')], bund
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
 for (const f of ['index.html', 'ide.css', 'demo.html', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
 console.log('app.js, ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');
+
+// ---- the emulator's snapshots (needs dist/: after everything above) ----
+if (!process.argv.includes('--skip-snapshot')) execFileSync('node', [path.join(here, 'snapshot.mjs')], { cwd: here, stdio: 'inherit' });

@@ -13,7 +13,7 @@ import { WaveView } from '../wave';
 import { saveAs } from '../zip';
 import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
 import { Emulator, EmuStart } from './emu';
-import { MachineCfg, machineStops } from '../emu_machine';
+import { fingerprint, MachineCfg, machineStops } from '../emu_machine';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
 
@@ -853,6 +853,46 @@ function machineCfg(): MachineCfg | null {
   try { return JSON.parse(f.src) as MachineCfg; } catch { return null; }
 }
 
+/** the layout of the model the emulator runs now (saved states only fit it) */
+let emuFp = '';
+
+/** a small IndexedDB store for the emulator's saved states (they are megabytes: not localStorage) */
+function idb(): Promise<IDBDatabase> {
+  return new Promise((ok, fail) => {
+    const r = indexedDB.open('veryl2chip-ide', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => fail(r.error);
+  });
+}
+async function idbGet<T>(k: string): Promise<T | undefined> {
+  try {
+    const db = await idb();
+    return await new Promise<T | undefined>((ok, fail) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result as T); q.onerror = () => fail(q.error); });
+  } catch { return undefined; }
+}
+async function idbPut(k: string, v: unknown): Promise<void> {
+  const db = await idb();
+  await new Promise<void>((ok, fail) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => ok(); t.onerror = () => fail(t.error); });
+}
+
+/** a bundled snapshot (img_snap_NAME.js: memory as gzip + base64, the cycle, the boot log, the layout's fingerprint) */
+async function bundledSnap(name: string): Promise<{ fingerprint: string; cycle: number; log: string; data: Uint8Array } | null> {
+  const id = `snap_${name}`;
+  const get = () => (typeof VERYL_IMAGES !== 'undefined' ? (VERYL_IMAGES as unknown as Record<string, { fingerprint: string; cycle: number; log: string; data: string }>)[id] : undefined);
+  if (!get()) {
+    await new Promise<void>((ok) => {
+      const s = document.createElement('script');
+      s.src = `img_${id}.js`;
+      s.onload = () => ok();
+      s.onerror = () => ok();
+      document.head.appendChild(s);
+    });
+  }
+  const x = get();
+  return x ? { fingerprint: x.fingerprint, cycle: x.cycle, log: x.log, data: await gunzip(fromBase64(x.data)) } : null;
+}
+
 /** a bundled program image (img_NAME.js, loaded when first needed; gzip + base64) */
 async function image(name: string): Promise<Uint8Array> {
   const have = () => typeof VERYL_IMAGES !== 'undefined' && VERYL_IMAGES[name];
@@ -874,6 +914,7 @@ function ensureEmu(): Emulator {
     emu = new Emulator($('emuPane'));
     emu.onStart = startEmu;
     emu.getParts = () => proj.piBoard ?? null;
+    emu.onSave = async (st) => { if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st }); };
     emu.onParts = (parts) => { proj.piBoard = parts.map(p => ({ ...p })); persist(); };
   }
   return emu;
@@ -897,8 +938,17 @@ async function startEmu(): Promise<EmuStart | null> {
     const r = await core.call<{ wasm: string; meta: object; stats: string }>({ cmd: 'emu_compile', files, top: cfg.top, stops: machineStops(cfg) });
     const images: EmuStart['images'] = [];
     for (const l of cfg.load ?? []) images.push({ bytes: await image(l.image), addr: l.addr });
+    // a state saved in this browser, else the bundled snapshot: only for the same compiled layout
+    emuFp = fingerprint(r.meta as Parameters<typeof fingerprint>[0]);
+    let snap: EmuStart['snap'];
+    const saved = await idbGet<{ fingerprint: string; cycle: number; log: string; data: Uint8Array }>(`state:${proj.id}`);
+    if (saved && saved.fingerprint === emuFp) snap = { data: await gunzip(saved.data), cycle: saved.cycle, log: saved.log, from: 'saved' };
+    else if (cfg.snapshot) {
+      const b = await bundledSnap(cfg.snapshot);
+      if (b && b.fingerprint === emuFp) snap = { data: b.data, cycle: b.cycle, log: b.log, from: 'bundled' };
+    }
     $('sbTest').textContent = tr('🖥 模擬機開機', '🖥 Emulator booted');
-    return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats };
+    return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats, snap };
   } finally {
     setBusy(false);
   }

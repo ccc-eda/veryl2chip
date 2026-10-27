@@ -490,7 +490,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
 // the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine
 // (emu_machine.ts, as in the page's worker) boots its image far enough to print
 {
-  const { Machine, machineStops } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
+  const { Machine, machineStops, fingerprint } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
   // the breadboard model and the development board's default breadboard (bundled for Node)
   const esb = await import('esbuild');
   const bbPath = path.join(tmp, 'bbmodel.cjs');
@@ -529,6 +529,22 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
         const led = solve(ctx.PI_PARTS, new Map([[5, r2.duty[5]]]), new Set(), new Set()).led.get(4);
         ok = (r2.oe >> 5 & 1) === 1 && r2.duty[5] > 0.99 && led > 0.99;
         what = `shell after ${(m.cycle / 1e6).toFixed(0)} M cycles; GPIO 5 ${ok ? 'lights the breadboard LED' : `oe ${r2.oe.toString(16)} duty ${r2.duty[5]} led ${led}`}`;
+        // the bundled snapshot: the same commands give the same output as on the cold-booted machine
+        if (ok && cfg.snapshot) {
+          vm.runInContext(fs.readFileSync(path.join(dist, `img_snap_${cfg.snapshot}.js`), 'utf8'), ctx);
+          const sn = ctx.VERYL_IMAGES[`snap_${cfg.snapshot}`];
+          const cmd2 = 'uname -a; echo $((6*7)); grep isa /proc/cpuinfo; echo E$((1+1))ND\r';
+          const run = (mm) => { let o = ''; mm.input([...cmd2].map((c) => c.charCodeAt(0))); while (!o.includes('E2ND')) o += String.fromCharCode(...mm.step(2_000_000).out); return o; };
+          const cold = run(m);
+          const m2 = await Machine.create(fromBase64(r.wasm), r.meta, cfg);
+          const fpOk = sn.fingerprint === fingerprint(r.meta);
+          m2.restore(await gunzip(fromBase64(sn.data)), sn.cycle);
+          const t1 = Date.now();
+          const warm = run(m2);
+          const same = cold.trim() === warm.trim();
+          ok = fpOk && same;
+          what += `; snapshot (${(sn.data.length * 0.75 / 1e6).toFixed(1)} MB) ${fpOk ? '' : 'fingerprint differs, '}${same ? 'gives the same output' : 'differs: ' + JSON.stringify([cold, warm])} in ${Date.now() - t1} ms`;
+        }
       }
       if (!ok) bad++;
       const mhz = m.cycle / ((Date.now() - t0) / 1000) / 1e6;

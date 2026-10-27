@@ -22,9 +22,19 @@ var emu_machine_exports = {};
 __export(emu_machine_exports, {
   Machine: () => Machine,
   elfSegments: () => elfSegments,
+  fingerprint: () => fingerprint,
   machineStops: () => machineStops
 });
 module.exports = __toCommonJS(emu_machine_exports);
+function fingerprint(meta) {
+  let h = 2166136261;
+  const s = JSON.stringify(meta.signals);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0") + ":" + s.length;
+}
 function machineStops(cfg) {
   return [cfg.uart?.tx_valid, cfg.finish?.valid].filter((s) => !!s);
 }
@@ -102,6 +112,43 @@ var Machine = class _Machine {
   /** clear every signal and memory (power off) */
   clear() {
     this.u8.fill(0);
+  }
+  /** the whole state: the non-zero 4 KB pages of the model's memory ("VESN", 1, page size, count, then [index, page]...) */
+  snapshot() {
+    const P = 4096, u8 = this.u8, pages = [];
+    const w = new Uint32Array(u8.buffer, 0, u8.length / 4);
+    for (let i = 0; i < u8.length / P; i++) {
+      for (let k = i * P / 4, e = (i + 1) * P / 4; k < e; k++) if (w[k]) {
+        pages.push(i);
+        break;
+      }
+    }
+    const out = new Uint8Array(16 + pages.length * (P + 4));
+    const d = new DataView(out.buffer);
+    d.setUint32(0, 1314080086, true);
+    d.setUint32(4, 1, true);
+    d.setUint32(8, P, true);
+    d.setUint32(12, pages.length, true);
+    pages.forEach((p, k) => {
+      d.setUint32(16 + k * (P + 4), p, true);
+      out.set(u8.subarray(p * P, (p + 1) * P), 20 + k * (P + 4));
+    });
+    return out;
+  }
+  /** go back to a state made by `snapshot()` (of a model with the same layout) at `cycle` */
+  restore(data, cycle = 0) {
+    const d = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    if (d.getUint32(0, true) !== 1314080086) throw new Error("not a machine snapshot");
+    const P = d.getUint32(8, true), n = d.getUint32(12, true);
+    this.u8.fill(0);
+    for (let k = 0; k < n; k++) {
+      const at = 16 + k * (P + 4);
+      const p = d.getUint32(at, true);
+      this.u8.set(data.subarray(at + 4, at + 4 + P), p * P);
+    }
+    this.rx = [];
+    this.finished = null;
+    this.cycle = cycle;
   }
   /** bytes typed into the UART */
   input(bytes) {
@@ -190,5 +237,6 @@ function elfSegments(f) {
 0 && (module.exports = {
   Machine,
   elfSegments,
+  fingerprint,
   machineStops
 });
