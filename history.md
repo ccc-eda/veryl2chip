@@ -34,7 +34,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.11 | 2026-10-27 | `f0ce858` | 2.11.0：Linux 跑 busybox，有 shell 可以互動 | |
 | v2.12 | 2026-10-27 | `7b0b7ff` | 2.12.0：veryl-emu，把設計編譯成 WebAssembly 的模擬器 | |
 | v2.13 | 2026-10-27 | `4b63bc1` | 2.13.0：IDE 的模擬機，瀏覽器裡開 Linux | |
-| v2.14 | 2026-10-27 | （本版） | 2.14.0：veryl-emu 加速約 1.9 倍 | |
+| v2.14 | 2026-10-27 | `e4b757c` | 2.14.0：veryl-emu 加速約 1.9 倍 | |
+| v2.15 | 2026-10-27 | （本版） | 2.15.0：開發板 1：GPIO（Veryl 控制器 + Linux 驅動） | |
 
 ---
 
@@ -372,6 +373,18 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - 結果：Node 上 Linux 開到 shell 104 → 55 秒（420 萬拍 / 秒；Verilator 720 萬）；差分測試、196 支 riscv-tests、隨機程式、中斷測試、
   Linux、npm test 都通過。網頁的核心 wasm 重建：瀏覽器裡的模擬機從約 150 萬拍 / 秒變成約 370 萬，開到 `rv64:~$` 約 2.5 分鐘 → 61 秒
   （停在 shell 等輸入時，活動偵測讓它跑到 740 萬拍 / 秒）。
+
+### v2.15：開發板 1，GPIO
+
+- 開發板規劃（`web/PLAN.md`「虛擬樹莓派」）：MicroPython 為主、C 為輔、shell 一定有；v2.15–v2.21。
+- `Rv64Gpio`（`examples/rv64/src/rv64soc.veryl`）：16 支腳，暫存器和 SiFive 的 GPIO 相容，所以 Linux 現成的 `gpio-sifive` 驅動直接能用；
+  輸入先過一級暫存器，上升 / 下降緣與高 / 低準位的待處理位元黏住、寫 1 清掉，腳 k 的中斷是 PLIC 的來源 16 + k（`gpio-sifive` 的腳數
+  等於裝置樹列出的中斷數）。位址 0x1006_0000（和 QEMU sifive_u 相同）；SoC 多了 `o_gpio` / `o_gpio_oe` / `i_gpio`。
+- 裝置樹：GPIO 控制器（腳名 LED_ACT、LED_USER、BUTTON、GPIO3…）、`gpio-leds`（act 預設心跳、user）。kernel：GPIOLIB、GPIO_SIFIVE、
+  GPIO_CDEV、GPIO_SYSFS、LEDS_GPIO、心跳觸發；sparse checkout 加上 `drivers/leds/`。
+- 測試平台印出 GPIO 輸出的變化，腳本的 `!gpio N=V` 設定輸入腳。`linux/test.sh`（Verilator 與 `SIM=emu/rv64emu`）檢查：LED、匯出的輸出腳
+  （`out=0x0022`）、按鈕 0 → 1、邊緣中斷經過 PLIC（`/proc/interrupts` 計數 1）。riscv-tests 與其他回歸不變。
+- 網頁的範例與 Linux 映像在 v2.16（IDE 的開發板）一起更新。
 
 ---
 

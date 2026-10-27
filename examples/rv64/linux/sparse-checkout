@@ -34,6 +34,7 @@
 /drivers/reset/
 /drivers/pinctrl/
 /drivers/gpio/
+/drivers/leds/
 /drivers/platform/
 /drivers/regmap/
 /drivers/resctrl/

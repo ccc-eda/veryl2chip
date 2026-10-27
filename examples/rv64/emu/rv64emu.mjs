@@ -8,7 +8,9 @@
 //   - UART output goes to stdout, stdin to the UART (raw terminal)
 //   - a write of 1 to the ELF's `tohost`: pass (riscv-tests); other values: fail
 //   - the finisher (0x0010_0000): 0x5555 = pass, else fail (Linux poweroff)
-//   - -s SCRIPT: a line per "$ " prompt; the next prompt after the last line ends the run
+//   - -s SCRIPT: a line per "$ " prompt; the next prompt after the last line ends the run;
+//     a line "!gpio N=V" sets GPIO input N to V instead of being typed
+//   - GPIO: a change of the outputs (pins with output enable) prints "[gpio] out=…" on stderr
 //   - -t: a line per retired instruction, as `spike -l --log-commits` prints it
 //   - -m CYCLES: at most this many cycles (default 100 M; 0 = no limit)
 // Exit code: 0 pass, 1 fail, 2 out of cycles.
@@ -76,6 +78,8 @@ const txValid = P('o_tx_valid'), txData = P('o_tx_data'), fin = P('o_finish'), f
 const ret = P('o_ret'), retPc = P('o_ret_pc'), retInsn = P('o_ret_insn'), retWe = P('o_ret_we'), retRd = P('o_ret_rd'), retData = P('o_ret_wdata'), retPrv = P('o_ret_prv');
 emu.mute('o_ret', !trace);
 const hex = (v, n) => v.toString(16).padStart(n, '0');
+const gpioOut = P('o_gpio'), gpioOe = P('o_gpio_oe'), gpioIn = P('i_gpio');
+let gpioSeen = 0, gpioIns = 0;
 const ramInfo = emu.info('mem');
 const ramBytes = BigInt(ramInfo.arr * ramInfo.limbs * 8);
 
@@ -130,6 +134,12 @@ while (cyc < maxCycles && !done) {
       out.push(c);
       const ch = String.fromCharCode(c);
       if (scripted && last === '$' && ch === ' ') {
+        while (nextLine < script.length && script[nextLine].startsWith('!gpio ')) {
+          const [n, v] = script[nextLine++].slice(6).split('=').map(Number);
+          gpioIns = v ? gpioIns | (1 << n) : gpioIns & ~(1 << n);
+          gpioIn.set(gpioIns); emu.settle();
+          flush(); process.stderr.write(`[gpio] in=0x${gpioIns.toString(16).padStart(4, '0')}\n`);
+        }
         if (nextLine < script.length) { for (const k of script[nextLine++]) rx.push(k.charCodeAt(0)); rx.push(13); }
         else { code = 0; done = true; }
       }
@@ -144,6 +154,8 @@ while (cyc < maxCycles && !done) {
     emu.posedge(); cyc++;
     if (rxValid.get()) { rxValid.set(0); emu.settle(); }
   }
+  // GPIO outputs (looked at between run slices)
+  { const g = gpioOut.get() & gpioOe.get(); if (g !== gpioSeen) { gpioSeen = g; flush(); process.stderr.write(`[gpio] out=0x${g.toString(16).padStart(4, '0')}\n`); } }
   if (tohostAt >= 0) {
     const v = emu.u64[tohostAt / 8];
     if (v !== 0n) {

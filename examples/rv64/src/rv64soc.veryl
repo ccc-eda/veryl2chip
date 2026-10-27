@@ -7,6 +7,7 @@
 //                       致能（context 0 = M：+0x2000，context 1 = S：+0x2080）、
 //                       門檻 / claim（context 0：+0x200000 / +0x200004，context 1：+0x201000 / +0x201004）
 //   0x1000_0000  UART ：16550 的暫存器（位元組），中斷是 PLIC 的來源 10
+//   0x1006_0000  GPIO ：16 支腳（SiFive GPIO 相容，Rv64Gpio），腳 k 的中斷是 PLIC 的來源 16 + k
 //   0x8000_0000  RAM  ：2^MEM_BITS 位元組（256 MB）
 // 其他位址：access fault。
 //
@@ -33,6 +34,10 @@ module Rv64Soc #(
     i_rx_valid: input  logic    ,
     i_rx_data : input  logic<8> ,
     o_rx_ready: output logic    ,
+    // GPIO 的腳：輸出值、輸出致能（1 = 這支腳由 SoC 驅動）、外面送進來的值
+    o_gpio    : output logic<16>,
+    o_gpio_oe : output logic<16>,
+    i_gpio    : input  logic<16>,
     // 除錯
     o_dbg_wr   : output logic    ,
     o_dbg_addr : output logic<64>,
@@ -98,6 +103,7 @@ module Rv64Soc #(
     let sel_plic : logic = addr[63:26] == 38'h00_0000_0003; // 0x0C00_0000 .. 0x0FFF_FFFF
     let sel_uart : logic = addr[63:8] == 56'h00_0000_0010_0000;
     let sel_test : logic = addr[63:12] == 52'h0_0000_0000_0100;
+    let sel_gpio : logic = addr[63:12] == 52'h0_0000_0001_0060;
 
     // RAM 在請求的同一拍回應（組合讀取）；周邊與錯誤在下一拍回應：
     // go = 周邊存取的那一拍（還沒 ack）
@@ -271,6 +277,22 @@ module Rv64Soc #(
         }
     }
 
+    // ---------------------------------------------------------------- GPIO
+    var gpio_rd : logic<32>;
+    var gpio_irq: logic<16>;
+    inst u_gpio: Rv64Gpio (
+        i_clk                         ,
+        i_rst                         ,
+        i_wr   : go && sel_gpio && we ,
+        i_addr : addr[7:0]            ,
+        i_wdata: wdata[31:0]          ,
+        o_rdata: gpio_rd              ,
+        i_pins : i_gpio               ,
+        o_out  : o_gpio               ,
+        o_oe   : o_gpio_oe            ,
+        o_irq  : gpio_irq             ,
+    );
+
     // ---------------------------------------------------------------- PLIC（來源 1..31，兩個 context）
     // 準位觸發：來源是 1 且沒有被 claim 就是 pending；claim 讀出優先權最高的
     // （同樣優先權取編號小的），complete 寫回編號之後才能再 pending
@@ -280,7 +302,7 @@ module Rv64Soc #(
     var thr0    : logic<3> ;
     var thr1    : logic<3> ;
     var claimed : logic<32>;
-    let src     : logic<32> = {21'd0, uart_irq, 10'd0};
+    let src     : logic<32> = {gpio_irq, 5'd0, uart_irq, 10'd0};
     let pending : logic<32> = src & ~claimed;
     let p_off   : logic<26> = addr[25:0];
 
@@ -377,8 +399,8 @@ module Rv64Soc #(
             dev_r = 64'd0;
         } else {
             ack_r = go;
-            err_r = go && !(sel_clint || sel_plic || sel_uart || sel_test);
-            dev_r = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : 64'd0;
+            err_r = go && !(sel_clint || sel_plic || sel_uart || sel_test || sel_gpio);
+            dev_r = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : if sel_gpio ? {32'd0, gpio_rd} : 64'd0;
         }
     }
     assign ack   = ram_go || ack_r;
@@ -392,4 +414,130 @@ module Rv64Soc #(
     assign o_finish_code = wdata[31:0];
     assign o_dbg_addr  = addr;
     assign o_dbg_wdata = wdata;
+}
+
+// ==========================================
+// Rv64Gpio：16 支腳的 GPIO，暫存器和 SiFive 的 GPIO 相容（Linux 的 gpio-sifive 驅動）
+// ==========================================
+//   0x00 input_val（唯讀）  0x04 input_en  0x08 output_en  0x0C output_val
+//   0x10 pue  0x14 ds（只存起來）
+//   0x18 rise_ie  0x1C rise_ip  0x20 fall_ie  0x24 fall_ip  0x28 high_ie  0x2C high_ip  0x30 low_ie  0x34 low_ip
+//   0x38 iof_en  0x3C iof_sel（只存起來）  0x40 out_xor
+// 腳的值：輸出致能時是自己的輸出，否則是外面送進來的；input_val = 腳的值 & input_en（先過一級暫存器）。
+// *_ip 是黏住的待處理位元：上升緣、下降緣、高準位、低準位時設成 1，寫 1 清掉（同一拍又發生時保留）。
+// 腳 k 的中斷 = 四種 (ip & ie) 的 OR，接到 PLIC。
+
+module Rv64Gpio #(
+    param N: u32 = 16, // 腳數（暫存器讀出時補 0 到 32 位元，所以這裡固定 16）
+) (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    i_wr   : input  logic    ,
+    i_addr : input  logic<8> ,
+    i_wdata: input  logic<32>,
+    o_rdata: output logic<32>,
+    i_pins : input  logic<N> ,
+    o_out  : output logic<N> ,
+    o_oe   : output logic<N> ,
+    o_irq  : output logic<N> ,
+) {
+    var input_en : logic<N>;
+    var output_en: logic<N>;
+    var out_val  : logic<N>;
+    var pue      : logic<N>;
+    var ds       : logic<N>;
+    var rise_ie  : logic<N>;
+    var rise_ip  : logic<N>;
+    var fall_ie  : logic<N>;
+    var fall_ip  : logic<N>;
+    var high_ie  : logic<N>;
+    var high_ip  : logic<N>;
+    var low_ie   : logic<N>;
+    var low_ip   : logic<N>;
+    var iof_en   : logic<N>;
+    var iof_sel  : logic<N>;
+    var out_xor  : logic<N>;
+    var in_val   : logic<N>; // 腳的值經過一級暫存器（同步）
+    var in_prev  : logic<N>; // 上一拍的 in_val（抓邊緣）
+
+    let out : logic<N> = out_val ^ out_xor;
+    let pins: logic<N> = (output_en & out) | (~output_en & i_pins);
+    let iv  : logic<N> = in_val & input_en;
+    let ivp : logic<N> = in_prev & input_en;
+
+    assign o_out = out;
+    assign o_oe  = output_en;
+    assign o_irq = (rise_ip & rise_ie) | (fall_ip & fall_ie) | (high_ip & high_ie) | (low_ip & low_ie);
+
+    always_comb {
+        case i_addr[7:2] {
+            6'h00  : o_rdata = {16'd0, iv};
+            6'h01  : o_rdata = {16'd0, input_en};
+            6'h02  : o_rdata = {16'd0, output_en};
+            6'h03  : o_rdata = {16'd0, out_val};
+            6'h04  : o_rdata = {16'd0, pue};
+            6'h05  : o_rdata = {16'd0, ds};
+            6'h06  : o_rdata = {16'd0, rise_ie};
+            6'h07  : o_rdata = {16'd0, rise_ip};
+            6'h08  : o_rdata = {16'd0, fall_ie};
+            6'h09  : o_rdata = {16'd0, fall_ip};
+            6'h0a  : o_rdata = {16'd0, high_ie};
+            6'h0b  : o_rdata = {16'd0, high_ip};
+            6'h0c  : o_rdata = {16'd0, low_ie};
+            6'h0d  : o_rdata = {16'd0, low_ip};
+            6'h0e  : o_rdata = {16'd0, iof_en};
+            6'h0f  : o_rdata = {16'd0, iof_sel};
+            6'h10  : o_rdata = {16'd0, out_xor};
+            default: o_rdata = 32'd0;
+        }
+    }
+
+    let wv: logic<N> = i_wdata[N - 1:0];
+    always_ff {
+        if_reset {
+            input_en  = 0;
+            output_en = 0;
+            out_val   = 0;
+            pue       = 0;
+            ds        = 0;
+            rise_ie   = 0;
+            rise_ip   = 0;
+            fall_ie   = 0;
+            fall_ip   = 0;
+            high_ie   = 0;
+            high_ip   = 0;
+            low_ie    = 0;
+            low_ip    = 0;
+            iof_en    = 0;
+            iof_sel   = 0;
+            out_xor   = 0;
+            in_val    = 0;
+            in_prev   = 0;
+        } else {
+            in_val  = pins;
+            in_prev = in_val;
+            // 待處理位元：寫 1 清掉，同一拍發生的事件保留
+            rise_ip = (rise_ip & ~(if i_wr && i_addr[7:2] == 6'h07 ? wv : 0)) | (iv & ~ivp);
+            fall_ip = (fall_ip & ~(if i_wr && i_addr[7:2] == 6'h09 ? wv : 0)) | (~iv & ivp);
+            high_ip = (high_ip & ~(if i_wr && i_addr[7:2] == 6'h0b ? wv : 0)) | iv;
+            low_ip  = (low_ip  & ~(if i_wr && i_addr[7:2] == 6'h0d ? wv : 0)) | (~iv & input_en);
+            if i_wr {
+                case i_addr[7:2] {
+                    6'h01  : input_en  = wv;
+                    6'h02  : output_en = wv;
+                    6'h03  : out_val   = wv;
+                    6'h04  : pue       = wv;
+                    6'h05  : ds        = wv;
+                    6'h06  : rise_ie   = wv;
+                    6'h08  : fall_ie   = wv;
+                    6'h0a  : high_ie   = wv;
+                    6'h0c  : low_ie    = wv;
+                    6'h0e  : iof_en    = wv;
+                    6'h0f  : iof_sel   = wv;
+                    6'h10  : out_xor   = wv;
+                    default: {}
+                }
+            }
+        }
+    }
 }

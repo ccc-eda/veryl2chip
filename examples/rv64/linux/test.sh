@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
-# Boot Linux on Rv64Soc (Verilator): OpenSBI -> Linux -> /init (linux/init.sh) -> a busybox
-# shell; a few commands are typed at its prompt (rv64sim -s), then poweroff ends the
-# simulation. Needs sim/build.sh and linux/build.sh.
+# Boot Linux on Rv64Soc: OpenSBI -> Linux -> /init (linux/init.sh) -> a busybox shell; a few
+# commands are typed at its prompt (rv64sim -s), including the GPIO: the board's LEDs
+# (/sys/class/leds), a pin exported as an output, the button on GPIO 2 pressed by the
+# script (!gpio 2=1) and read back, an edge interrupt through the PLIC; then poweroff ends
+# the simulation. Needs sim/build.sh (or SIM=emu/rv64emu after emu/build.sh) and linux/build.sh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-OBJ=${OBJ:-sim/obj}
+SIM=${SIM:-${OBJ:-sim/obj}/rv64sim}
 OUT=$(mktemp)
 SCRIPT=$(mktemp)
-printf '%s\n' 'uname -a' 'echo $((6 * 7))' 'ls /bin | wc -l' 'cat /proc/cpuinfo | grep mmu' 'poweroff -f' > "$SCRIPT"
-"$OBJ"/rv64sim -m 2000000000 -s "$SCRIPT" linux/build/opensbi/platform/generic/firmware/fw_payload.bin < /dev/null 2>&1 | tee "$OUT"
+cat > "$SCRIPT" <<'S'
+uname -a
+echo $((6 * 7))
+cat /proc/cpuinfo | grep mmu
+echo none > /sys/class/leds/act/trigger; echo 1 > /sys/class/leds/user/brightness
+B=$(cat /sys/class/gpio/gpiochip*/base); echo $((B+5)) > /sys/class/gpio/export; echo out > /sys/class/gpio/gpio$((B+5))/direction; echo 1 > /sys/class/gpio/gpio$((B+5))/value
+echo $((B+2)) > /sys/class/gpio/export; echo both > /sys/class/gpio/gpio$((B+2))/edge; echo button $(cat /sys/class/gpio/gpio$((B+2))/value)
+!gpio 2=1
+echo button $(cat /sys/class/gpio/gpio$((B+2))/value); grep sifive-gpio /proc/interrupts
+poweroff -f
+S
+$SIM -m 3000000000 -s "$SCRIPT" linux/build/opensbi/platform/generic/firmware/fw_payload.bin < /dev/null 2>&1 | tee "$OUT"
 ok=1
 for want in "OpenSBI" "Boot HART ISA Extensions *: sstc" "Linux version 6.12" "Run /init as init process" \
-            "Hello from busybox on Rv64Core" "Linux .* riscv64 GNU/Linux" "^42" "mmu.*sv39" "reboot: Power down" "^PASS after"; do
+            "Hello from busybox on Rv64Core" "Linux .* riscv64 GNU/Linux" "^42" "mmu.*sv39" \
+            "\[gpio\] out=0x0022" "^button 0" "^button 1" " 1 *sifive-gpio *2 Edge" "reboot: Power down" "^PASS after"; do
     grep -q "$want" "$OUT" || { echo "MISSING: $want"; ok=0; }
 done
 rm -f "$OUT" "$SCRIPT"

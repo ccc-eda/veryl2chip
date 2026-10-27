@@ -59,6 +59,7 @@
 | `0x0200_0000` | CLINT：`msip`、`mtimecmp`（+0x4000）、`mtime`（+0xBFF8，每拍加一） |
 | `0x0C00_0000` | PLIC：31 個來源、M / S 兩個 context（UART 是來源 10） |
 | `0x1000_0000` | UART 16550（位元組暫存器；送出的字直接交給測試平台） |
+| `0x1006_0000` | GPIO（`Rv64Gpio`，v2.15）：16 支腳，暫存器和 SiFive 的 GPIO 相容（Linux 的 `gpio-sifive`）；腳 k 的中斷是 PLIC 的來源 16 + k；SoC 的腳位 `o_gpio` / `o_gpio_oe` / `i_gpio`。GPIO 0、1 是板上 LED（`/sys/class/leds/act`（心跳）、`user`），GPIO 2 是按鈕，其他給排針 |
 | `0x8000_0000` | RAM 256 MB；重設後從這裡開始執行（xv6 用前 128 MB，`0x8800_0000` 放檔案系統映像）；請求的同一拍回應（模擬用） |
 
 ## 建置與測試
@@ -268,7 +269,7 @@ git clone --depth 1 --branch v1.2.5 https://git.musl-libc.org/git/musl /Users/Sh
 git clone --depth 1 --branch 1_36_1 https://git.busybox.net/busybox /Users/Shared/ccc/busybox
 linux/build.sh            # → linux/build/opensbi/platform/generic/firmware/fw_payload.bin（第一次約 2 分鐘）
 sim/obj/rv64sim -m 0 linux/build/opensbi/platform/generic/firmware/fw_payload.bin    # 互動：直接打字，exit 或 poweroff -f 結束
-linux/test.sh             # 自動：開機、打幾個指令、poweroff -f，檢查輸出
+linux/test.sh             # 自動：開機、打幾個指令（含 GPIO）、poweroff -f，檢查輸出（SIM=emu/rv64emu：在 veryl-emu 上）
 ```
 
 - sparse checkout 只取每個 Kconfig / Makefile 和用得到的驅動，kernel 原始碼約 300 MB。
@@ -277,3 +278,19 @@ linux/test.sh             # 自動：開機、打幾個指令、poweroff -f，�
   `<byteswap.h>`（腳本自己寫）與 `-D_UUID_T`；`build.sh` 都處理好了。
 
 開機到出現 shell 提示：約 8000 萬個指令、2.3 億拍，Verilator 上約 30 秒。
+
+### GPIO（v2.15）
+
+```sh
+echo none > /sys/class/leds/act/trigger           # ACT LED 預設是心跳，改成手動
+echo 1 > /sys/class/leds/user/brightness          # 點亮 USER LED
+B=$(cat /sys/class/gpio/gpiochip*/base)           # GPIO 0 在 sysfs 的編號（512）
+echo $((B+5)) > /sys/class/gpio/export            # GPIO 5 當輸出
+echo out > /sys/class/gpio/gpio$((B+5))/direction
+echo 1 > /sys/class/gpio/gpio$((B+5))/value
+echo $((B+2)) > /sys/class/gpio/export            # GPIO 2 是按鈕
+cat /sys/class/gpio/gpio$((B+2))/value
+```
+
+測試平台（`sim/main.cpp`、`emu/rv64emu.mjs`）在輸出改變時印出 `[gpio] out=…`；`-s` 腳本裡的 `!gpio N=V` 是「把輸入腳 N 設成 V」
+（按下按鈕），不會送進終端機。`linux/test.sh` 用它檢查 LED、輸出腳、按鈕與邊緣中斷（`/proc/interrupts`）。

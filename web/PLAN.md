@@ -101,7 +101,30 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.13 ✓ | **IDE 的模擬機（🖥）**：第三種實體化方式（FPGA、ASIC 之外），veryl-emu 編進核心 wasm（`emu_compile`），機器在自己的 worker 跑（`emu_machine.ts`、`emu_worker.ts`），分頁裡的終端機接 UART；專案的 `machine.json` 描述腳位；範例「RV64 + Linux」，Linux 映像 `img_linux.js` 開機時才載入 | 瀏覽器裡開到 busybox 並打指令；npm test 在 Node 用同一個機器跑到 OpenSBI 的橫幅 |
 | v2.14 ✓ | **veryl-emu 加速**：剖析（VERYL_EMU_CHUNK / VERYL_EMU_COUNT、wasm name 區段）後展開常數範圍的迴圈、常數索引陣列、`repeat` 只算一次、條件直接 i32；活動偵測（髒旗標，值有變才重算讀它的程序） | Node 上 Linux 開機 104 → 55 秒（420 萬拍 / 秒，Verilator 720 萬）；差分測試、riscv-tests、隨機、中斷、Linux、npm test |
 | 之後 | veryl-emu 再加速（同一訊號只載入一次等）；xv6 映像 | |
-| v2.14 | **上板**：時序（PLL 12.5 MHz 或縮短關鍵路徑）、UART 載入器取代載入埠，ULX3S 實機 | 實機跑 riscv-tests 與小程式 |
+| 之後 | **上板**：時序（PLL 12.5 MHz 或縮短關鍵路徑）、UART 載入器取代載入埠，ULX3S 實機 | 實機跑 riscv-tests 與小程式 |
 | 之後 | 回到 v2c（veryl-sim 跑得動 Rv64：記憶體、事件驅動，修補檔已存）；F / D 與 busybox；ULX3S 實機 | |
+
+### 虛擬樹莓派：RV64 Linux 開發板（v2.15 起）
+
+目標：IDE 裡有一塊像樹莓派的開發板。CPU 是我們用 Veryl 寫的 Rv64Core（在 🖥 模擬機上跑），上面跑 Linux；
+板子有 40 針排針、LED、按鈕、麵包板，之後還有螢幕。程式語言以 **MicroPython 為主、C 為輔，shell 一定有**。
+和實體樹莓派最大的不同：SoC 本身也是專案的一部分，學生可以打開 Veryl 原始碼看（甚至改）GPIO 控制器，再看 Linux 驅動怎麼用它。
+
+預期的限制（先講清楚）：瀏覽器裡約 370 萬拍 / 秒，約 180 萬個指令 / 秒（比 1990 年代初的電腦還慢）。點 LED、讀按鈕、
+小腳本、MicroPython 的小程式都夠用；圖形介面、大量運算不切實際。RAM 256 MB 在手機上可能配置不到。
+
+| 版本 | 內容 | 驗證 |
+|---|---|---|
+| v2.15 ✓ | **GPIO（硬體 + Linux）**：Rv64Soc 加 32 腳的 GPIO 控制器（Veryl，暫存器相容 SiFive GPIO，Linux 已有 `gpio-sifive` 驅動；輸入、輸出、方向、上升 / 下降緣中斷接 PLIC）與腳位 `o_gpio` / `o_gpio_oe` / `i_gpio`；裝置樹加 `gpio-leds`（板上 LED，`/sys/class/leds`）與按鈕；kernel 開 GPIOLIB、GPIO_SIFIVE、GPIO_CDEV、GPIO_SYSFS、LEDS_GPIO；Verilator 與 `rv64emu` 的測試平台印出 GPIO 的變化 | Verilator：開機後用 shell `echo 1 > /sys/class/leds/led0/brightness`、`/sys/class/gpio` 讀寫腳位，測試平台看到腳位改變、送進按鈕；veryl-emu 同樣的腳本；riscv-tests、Linux 回歸不變 |
+| v2.16 | **IDE 的虛擬開發板**：`machine.json` 加上 `gpio`；模擬機的 worker 每片回報 GPIO 輸出（亮度用佔空比）、接受輸入；畫面是樹莓派風格的板子（40 針排針與腳位名稱、電源 / ACT LED、板上 LED 與按鈕），沿用 FPGA 虛擬板的麵包板（`bbmodel.ts`）接 LED、電阻、按鈕；範例「RV64 開發板」 | npm test：Node 上開機、用 shell 點亮腳位，`bbmodel` 算出 LED 亮；瀏覽器實測 |
+| v2.17 | **快照開機**：機器狀態全部在 wasm 的線性記憶體，開到 shell 時存成快照（256 MB 幾乎都是 0：只存非零的頁，壓縮後預估幾 MB），內附在 `img_board.js`；按電源從快照繼續，幾秒內有 shell；IDE 也可以「存目前狀態」（IndexedDB） | 從快照繼續後的指令與從頭開機的結果相同；Node 上比對兩種方式的 UART 輸出 |
+| v2.18 | **檔案進出板子**：專案檔案在開機時放進 `/root`（測試平台把一個 tar 寫進 RAM 最後 16 MB 的保留區，裝置樹排除這塊，`/init` 用 `/dev/mem` 解開）；`sync` 指令把 `/root` 寫回保留區，IDE 讀回專案。shell 腳本在 IDE 改完就能在板子上執行 | Node：專案檔進板子、在板子上改、寫回後內容相同 |
+| v2.19 | **MicroPython**：官方 MicroPython 的 Unix 版本，用 musl 靜態編成 RV64 執行檔（`git clone` + `make`，MIT 授權）放進映像；`pi` 模組（`LED`、`Button`、`Pin`，像 `gpiozero`，底下用 `/sys/class/gpio` 或 GPIO 的字元裝置）；終端機的 REPL、`micropython /root/main.py`；IDE 有「▶ 在板子上執行」；範例：閃爍、按鈕計數、紅綠燈 | Verilator 與 veryl-emu：`main.py` 讓腳位依序變化、讀到按鈕；MicroPython 自己的基本測試 |
+| v2.20 | **C 程式**：veryl-eda 的 C 編譯器（`src/rv/`，目前是 RV32 裸機）加上 RV64 Linux 目標：64 位元暫存器與指標、系統呼叫（`ecall`）、小小的 libc（`printf`、`open` / `read` / `write`、`usleep`）、輸出靜態 ELF；IDE 在瀏覽器裡編譯，經 v2.18 的機制放進 `/root` 執行；`gpio.h`；範例對應 MicroPython 的那幾個 | 編譯器測試（`.c` 對照 `.out`，和現有 RV32 測試同樣的做法）；板子上跑 C 範例 |
+| v2.21 | **螢幕**：`simple-framebuffer`（320 × 240、RGB565，放在保留的 RAM），kernel 開 fbcon；worker 每幀把那塊記憶體畫到 canvas；MicroPython 的 `framebuf` 與 C 的畫圖函式；範例：時鐘、圖形 | Node：寫入 framebuffer 的內容和畫出的影像相同；瀏覽器實測 |
+| 之後 | I2C / SPI 的虛擬元件（溫度感測器、OLED）、PWM 蜂鳴器、儲存狀態到檔案；也可以在板子上放 TinyCC（在 Linux 裡自己編 C） | |
+
+原則：每一版先在 Verilator（RTL）上驗證硬體與 Linux，再在 veryl-emu（Node）上跑同樣的腳本；很久的測試只在 RTL 上跑。
+v2.16 起要重建網頁（IDE 的部分）。
 
 每版 commit，版本號照 v2.3、v2.4… 遞增。

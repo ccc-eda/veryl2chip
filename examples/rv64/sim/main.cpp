@@ -10,7 +10,8 @@
 //   - -l ADDR:FILE：另外把一個二進位檔載入 ADDR（例如 xv6 的檔案系統映像）
 //   - -m CYCLES：最多跑幾拍（預設 1 億；0 = 不限）
 //   - -s SCRIPT：每次程式印出 shell 的提示「$ 」就送出腳本的下一行（xv6 自動測試）；
-//     腳本送完之後再看到提示就結束（結束碼 0）
+//     腳本送完之後再看到提示就結束（結束碼 0）。以「!gpio N=V」開頭的行不送出，而是把 GPIO 腳 N 的輸入設成 V
+//   - GPIO：輸出（有輸出致能的腳）改變時在 stderr 印出「[gpio] out=…」
 // 結束碼：0 通過，1 失敗，2 超過時脈數。
 #include "Vrv64_Rv64Soc.h"
 #include "verilated.h"
@@ -174,6 +175,8 @@ int main(int argc, char **argv) {
     top->i_ld_we = 0;
     tick();
     top->i_rst = 1;
+    uint32_t gpio_in = 0, gpio_seen = 0;
+    top->i_gpio = 0;
 
     if (!scripted) set_raw_tty();
     std::deque<uint8_t> rx;
@@ -218,6 +221,15 @@ int main(int argc, char **argv) {
             fflush(stdout);
             // 腳本：看到提示「$ 」送出下一行；送完之後再看到提示就結束
             if (scripted && last == '$' && c == ' ') {
+                // lines "!gpio N=V" set a GPIO input instead of being typed
+                while (next_line < script.size() && script[next_line].rfind("!gpio ", 0) == 0) {
+                    unsigned n = 0, v = 0;
+                    sscanf(script[next_line].c_str() + 6, "%u=%u", &n, &v);
+                    gpio_in = v ? gpio_in | (1u << n) : gpio_in & ~(1u << n);
+                    top->i_gpio = gpio_in;
+                    fprintf(stderr, "[gpio] in=0x%04x\n", gpio_in);
+                    next_line++;
+                }
                 if (next_line < script.size()) {
                     for (char k : script[next_line++]) rx.push_back((uint8_t)k);
                     rx.push_back('\r');
@@ -241,6 +253,8 @@ int main(int argc, char **argv) {
             else { code = 1; fprintf(stderr, "FAIL: test %llu (tohost = 0x%llx)\n", (unsigned long long)(v >> 1), (unsigned long long)v); }
             done = true;
         }
+        uint32_t gpio_out = top->o_gpio & top->o_gpio_oe;
+        if (gpio_out != gpio_seen) { gpio_seen = gpio_out; fprintf(stderr, "[gpio] out=0x%04x\n", gpio_out); }
         top->i_clk = 1;
         top->eval();
         if (rx_taken) rx.pop_front();
