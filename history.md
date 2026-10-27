@@ -38,7 +38,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.15 | 2026-10-27 | `2283ee7` | 2.15.0：開發板 1：GPIO（Veryl 控制器 + Linux 驅動） | |
 | v2.16 | 2026-10-27 | `9bb24bb` | 2.16.0：開發板 2：IDE 裡的虛擬開發板 | |
 | v2.17 | 2026-10-27 | `ac29810` | 2.17.0：開發板 3：快照開機、存狀態 | |
-| v2.18 | 2026-10-27 | （本版） | 2.18.0：開發板 4：檔案進出板子 | |
+| v2.18 | 2026-10-27 | `b428cc3` | 2.18.0：開發板 4：檔案進出板子 | |
+| v2.19 | 2026-10-27 | （本版） | 2.19.0：開發板 5：MicroPython | |
 
 ---
 
@@ -420,6 +421,20 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   從快照開機時自動打 `getfiles`，⇅ 隨時再送）；worker 在輸出裡看到通知就讀回交換區，IDE 把檔案寫進專案（隱藏檔不要）。終端機不顯示 OSC 序列。
 - 範例加上 `board/blink.sh`、`button.sh`。瀏覽器實測：開機後 `/root` 有兩個腳本、`sh blink.sh` 閃 5 次，板子上建的 `notes.txt` 經 `savefiles` 出現在專案。
   `linux/test.sh`（Verilator 與 veryl-emu）用 `-l` 放一個檔案進去檢查 `getfiles`；npm test 在從快照還原的機器上做一次來回。
+
+### v2.19：開發板 5，MicroPython
+
+- 官方 MicroPython v1.24.1 的 Unix 版本（`git clone` + `make`），用 `linux/musl-cc` 交叉編譯成靜態 RV64 執行檔（約 400 KB）。
+  主機上先編 mpy-cross（`/usr/bin/clang`：Homebrew 的 clang 找不到 macOS SDK）；`UNAME_S=Linux` 讓 Makefile 用 lld 的連結參數；
+  沒有子模組，所以關掉 ffi / btree / ssl / FAT / littlefs，`MPY_LIB_DIR` 指向一個只有 README 的目錄（manifest 不用 micropython-lib）。
+  新版 clang 的 `-Wunterminated-string-initialization` 要關掉。
+- GC：`gchelper_generic.c` 的 RISC-V 版用 `register ... asm("x8")` 讀 s0–s11，clang 不保證這樣讀到暫存器（還警告「未初始化」），
+  GC 會漏掃根；改用 `MICROPY_GCREGS_SETJMP`。
+- `pi` 模組（frozen 進執行檔）：`LED`、`Button`、`Pin`、`sleep`，像 gpiozero；GPIO 0 / 1 走 `/sys/class/leds`（先把 trigger 設成 none），其餘走 sysfs GPIO。
+- IDE：打開 `.py` / `.sh` 時 ▶ 變成「▶ 執行」；worker 送 Ctrl-C（在 REPL 裡再 Ctrl-D），等到 shell 提示符（`$ ` 結尾）才寫交換區、打
+  `cd /root && getfiles > /dev/null && micropython 檔名`。板子沒開就先開機（從快照開機時也先送 Ctrl-C 叫出提示符）。編輯器加上 Python 與 shell 的語法顏色。
+- 範例：`main.py`、`button.py`、`traffic.py`；麵包板預設多了 GPIO 12（黃）與 13（綠）兩顆 LED。
+- 驗證：`linux/test.sh`（Verilator 與 veryl-emu）用 `micropython -c` 點亮 GPIO 13、讀按鈕、算 `2 ** 70`；npm test 在快照還原的機器上跑 MicroPython 點亮 GPIO 13。
 
 ---
 

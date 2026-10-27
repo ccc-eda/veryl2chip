@@ -11,6 +11,7 @@
 #   cd /Users/Shared/ccc/linux && git sparse-checkout init --no-cone && cp <repo>/examples/rv64/linux/sparse-checkout .git/info/ && git checkout v6.12
 #   git clone --depth 1 --branch v1.2.5 https://git.musl-libc.org/git/musl /Users/Shared/ccc/musl
 #   git clone --depth 1 --branch 1_36_1 https://git.busybox.net/busybox /Users/Shared/ccc/busybox
+#   git clone --depth 1 --branch v1.24.1 https://github.com/micropython/micropython /Users/Shared/ccc/micropython
 # musl is built with make only (linux/musl.mak instead of its configure), busybox with
 # linux/musl-cc (clang + musl + the rv64imac/lp64 libgcc).
 # (the sparse checkout keeps the kernel at ~300 MB: every Kconfig / Makefile, but only the drivers used here)
@@ -26,6 +27,7 @@ LINUX=${LINUX:-/Users/Shared/ccc/linux}
 OPENSBI=${OPENSBI:-/Users/Shared/ccc/opensbi}
 MUSL=${MUSL:-/Users/Shared/ccc/musl}
 BUSYBOX=${BUSYBOX:-/Users/Shared/ccc/busybox}
+MICROPYTHON=${MICROPYTHON:-/Users/Shared/ccc/micropython}
 B=$HERE/build
 mkdir -p "$B/kernel" "$B/hostinc"
 for d in /opt/homebrew/opt/llvm/bin /opt/homebrew/opt/lld/bin /opt/homebrew/opt/coreutils/libexec/gnubin \
@@ -80,7 +82,21 @@ fi
 "${BB[@]}" -s busybox.links > /dev/null
 echo "busybox: $(wc -c < "$B/busybox/busybox") bytes, $(wc -l < "$B/busybox/busybox.links") applets"
 
-# the initramfs: busybox and its links, /init
+# MicroPython: the Unix port (standard variant) built with musl-cc, static; frozen in: asyncio
+# and the board's pi module (micropython/manifest.py). Without the submodules (no ffi, btree,
+# ssl, FAT / littlefs); the GC reads the registers with setjmp (clang ignores the register-asm
+# reads of gchelper_generic.c, which would leave roots unscanned). mpy-cross runs on the host.
+M=$B/micropython
+mkdir -p "$M/nolib" && touch "$M/nolib/README.md"
+make -C "$MICROPYTHON/mpy-cross" CC=/usr/bin/clang BUILD="$M/mpy-cross" -j8 > "$M/mpy-cross.log" 2>&1 || { grep -E "error" "$M/mpy-cross.log" | head; exit 1; }
+make -C "$MICROPYTHON/ports/unix" -j8 UNAME_S=Linux CC="$HERE/musl-cc" LD=ld.lld STRIP=llvm-strip SIZE=llvm-size \
+    BUILD="$M/unix" FROZEN_MANIFEST="$HERE/micropython/manifest.py" MPY_LIB_DIR="$M/nolib" \
+    MICROPY_MPYCROSS="$M/mpy-cross/mpy-cross" MICROPY_MPYCROSS_DEPENDENCY= \
+    MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 MICROPY_PY_SSL=0 MICROPY_PY_THREAD=0 MICROPY_VFS_FAT=0 MICROPY_VFS_LFS1=0 MICROPY_VFS_LFS2=0 \
+    "CFLAGS_EXTRA=-Wno-unterminated-string-initialization -DMICROPY_GCREGS_SETJMP=1" > "$M/unix.log" 2>&1 || { grep -E "error" "$M/unix.log" | head; exit 1; }
+echo "micropython: $(wc -c < "$M/unix/micropython") bytes"
+
+# the initramfs: busybox and its links, /init, micropython
 {
     printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\n'
     for d in /proc /sys /tmp /root /etc /bin /sbin /usr /usr/bin /usr/sbin; do echo "dir $d 0755 0 0"; done
@@ -89,6 +105,8 @@ echo "busybox: $(wc -c < "$B/busybox/busybox") bytes, $(wc -l < "$B/busybox/busy
     echo "file /init $HERE/init.sh 0755 0 0"
     echo "file /bin/getfiles $HERE/getfiles 0755 0 0"
     echo "file /bin/savefiles $HERE/savefiles 0755 0 0"
+    echo "file /bin/micropython $M/unix/micropython 0755 0 0"
+    echo "slink /bin/python /bin/micropython 0777 0 0"
 } > "$B/initramfs.list"
 "${K[@]}" -s -j8 Image > "$B/kernel.log" 2>&1 || { grep -E "error|Error" "$B/kernel.log" | head -20; exit 1; }
 echo "kernel: $(wc -c < "$B/kernel/arch/riscv/boot/Image") bytes"

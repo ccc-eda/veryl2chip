@@ -131,6 +131,13 @@ UART 接到分頁裡的終端機。
   `.pcf` 以外）開機時放進板子的 `/root`（冷開機時 `/init` 執行 `getfiles`；從快照開機時 IDE 自動打 `getfiles`）；⇅ 檔案隨時再送一次。
   板子上打 `savefiles` 把 `/root`（隱藏檔以外）送回專案：檔案總管裡就出現在板子上建立或改過的檔案。
   RV64 範例附 `blink.sh`（閃 GPIO 5 的 LED）與 `button.sh`（數按鈕次數）：在板子上 `sh blink.sh`。
+- **MicroPython**（v2.19）：板子上有 MicroPython 1.24（`micropython`，也叫 `python`；打 `micropython` 進 REPL，Ctrl-D 離開）與 `pi` 模組：
+  `LED(n)`（`on()`、`off()`、`toggle()`、`value`、`blink()`；n = 0 / 1 是板上的 ACT / USER）、`Button(n)`（`is_pressed`、
+  `wait_for_press()`、`wait_for_release()`；板上的按鈕是 2）、`Pin(n, Pin.OUT)`、`sleep`。打開 `.py` 或 `.sh` 檔時，標題列的 ▶ 變成
+  「▶ 執行」（Ctrl/⌘+Enter）：先停掉板子上正在跑的程式（Ctrl-C，在 REPL 裡再 Ctrl-D），把專案的檔案送進 `/root`，再執行
+  `micropython 檔名`（`.sh` 是 `sh 檔名`）；板子沒開時先開機。模擬機工具列的「▶ 執行 main.py」做同樣的事。
+  範例：`main.py`（GPIO 5 的紅燈與 USER 燈輪流亮）、`button.py`（數按鈕次數）、`traffic.py`（麵包板上的紅黃綠燈 GPIO 5 / 12 / 13，
+  GPIO 6 的按鈕讓綠燈提早結束）。
 - 範例「RV64 + Linux（模擬機）」開 OpenSBI + Linux 6.12 + busybox：瀏覽器裡每秒約 370 萬拍，開到 `rv64:~$` 約 1 分鐘，
   之後就可以在終端機打指令。Linux 映像（`img_linux.js`，約 2.4 MB）第一次開機時才載入。
 - 這種專案的頂層太大，▶ 測試與合成會改成提示用模擬機（裡面的 `Rv64Core` 仍然可以合成）。

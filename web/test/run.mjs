@@ -488,7 +488,8 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
 }
 
 // the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine
-// (emu_machine.ts, as in the page's worker) boots its image far enough to print
+// (emu_machine.ts, as in the page's worker) boots its image far enough to print; the
+// development board also: GPIO from the shell, the snapshot, files in and out, MicroPython
 {
   const { Machine, machineStops, fingerprint } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
   // the breadboard model and the development board's default breadboard (bundled for Node)
@@ -558,6 +559,18 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
             const fOk = o.includes('hi from the IDE') && o.includes('\x1b]1337;veryl-save\x07') && back.some((f) => f.name === 'new.txt' && f.src === 'made-here\n') && back.some((f) => f.name === 'hello.txt');
             ok = fOk;
             what += `; files ${fOk ? 'in and back' : 'FAILED ' + JSON.stringify(o.slice(-300))}`;
+          }
+          // MicroPython and its pi module: GPIO 13 (the breadboard's green LED) on
+          if (ok) {
+            const cmd4 = 'micropython -c "from pi import LED; LED(13).on(); print(\'MP\', sum(range(10)) * 2 ** 64)"\r';
+            let o = '';
+            m2.input([...cmd4].map((c) => c.charCodeAt(0)));
+            const t2 = Date.now();
+            while (m2.cycle < 2_000_000_000 && !/MP \d+[\s\S]*\$ $/.test(o)) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const r4 = m2.step(100_000);
+            const mOk = o.includes('MP ' + (45n * 2n ** 64n)) && (r4.oe >> 13 & 1) === 1 && r4.duty[13] > 0.99;
+            ok = mOk;
+            what += `; MicroPython ${mOk ? `lights GPIO 13 (${Date.now() - t2} ms)` : 'FAILED ' + JSON.stringify(o.slice(-300))}`;
           }
         }
       }

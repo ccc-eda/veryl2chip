@@ -20,7 +20,7 @@ export const HEADER_GPIOS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const physical = (g: number) => PI_HEADER.indexOf(`GPIO${g}`) + 1;
 const BB_HEADER: Header = { groups: [{ label: 'GPIO', pins: HEADER_GPIOS, names: HEADER_GPIOS.map(String), title: (i) => tr(`GPIO ${HEADER_GPIOS[i]}（排針第 ${physical(HEADER_GPIOS[i])} 腳）`, `GPIO ${HEADER_GPIOS[i]} (header pin ${physical(HEADER_GPIOS[i])})`) }] };
 
-/** the example's breadboard: an LED on GPIO 5 (with its resistor), a button on GPIO 6 (with a pull-down) */
+/** the example's breadboard: red, yellow and green LEDs on GPIO 5, 12, 13 (each with its resistor), a button on GPIO 6 (with a pull-down) */
 export const PI_DEFAULT_BB: Part[] = [
   { id: 1, kind: 'wire', a: 'gnd', b: 'r:top-:1', color: '#3e63dd' },
   { id: 2, kind: 'wire', a: 'vcc', b: 'r:top+:30', color: '#e5484d' },
@@ -30,6 +30,12 @@ export const PI_DEFAULT_BB: Part[] = [
   { id: 6, kind: 'btn', a: 'r:top+:12', b: 'h:12:b' },
   { id: 7, kind: 'wire', a: 'h:12:a', b: 'p:6', color: '#8e4ec6' },
   { id: 8, kind: 'res', a: 'h:12:e', b: 'r:top-:13' },
+  { id: 9, kind: 'wire', a: 'p:12', b: 'h:6:a', color: '#f76b15' },
+  { id: 10, kind: 'led', a: 'h:6:c', b: 'h:7:c', color: '#ffcc00' },
+  { id: 11, kind: 'res', a: 'h:7:e', b: 'r:top-:7' },
+  { id: 12, kind: 'wire', a: 'p:13', b: 'h:9:a', color: '#f76b15' },
+  { id: 13, kind: 'led', a: 'h:9:c', b: 'h:10:c', color: '#34c759' },
+  { id: 14, kind: 'res', a: 'h:10:e', b: 'r:top-:10' },
 ];
 
 export class PiBoard {

@@ -297,5 +297,11 @@ cat /sys/class/gpio/gpio$((B+2))/value
 通知 IDE。RISC-V 的 `/dev/mem` 只能讀寫 Linux 記憶體範圍內的位址，所以不能把這塊排除在 RAM 之外。測試平台用 `-l 0x8F000000:檔案` 放進去，
 `emu/rv64emu -d 0x8F000000:長度:檔案` 結束時存出來；`board/blink.sh`、`board/button.sh` 是開發板的範例腳本。
 
+MicroPython（v2.19）：`linux/build.sh` 用 `musl-cc` 把官方 MicroPython（v1.24.1，`MICROPYTHON`，預設 `/Users/Shared/ccc/micropython`）的
+Unix 版本編成靜態執行檔 `/bin/micropython`（約 400 KB，`/bin/python` 是連結）：沒有子模組（關掉 ffi、btree、ssl、FAT / littlefs），
+frozen 進 asyncio 與板子的 `pi` 模組（`linux/micropython/pi.py`、`manifest.py`）；GC 用 setjmp 取暫存器（clang 不理會
+`gchelper_generic.c` 的 register-asm 讀法，會漏掃根）。`pi` 用 `/sys/class/leds`（GPIO 0、1）與 `/sys/class/gpio`（其餘）：
+`LED`、`Button`、`Pin`。範例在 `board/`：`main.py`、`button.py`、`traffic.py`；`linux/test.sh` 用 `micropython -c` 點亮 GPIO 13、讀按鈕。
+
 測試平台（`sim/main.cpp`、`emu/rv64emu.mjs`）在輸出改變時印出 `[gpio] out=…`；`-s` 腳本裡的 `!gpio N=V` 是「把輸入腳 N 設成 V」
 （按下按鈕），不會送進終端機。`linux/test.sh` 用它檢查 LED、輸出腳、按鈕與邊緣中斷（`/proc/interrupts`）。

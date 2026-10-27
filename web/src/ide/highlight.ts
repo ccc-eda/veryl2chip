@@ -1,4 +1,4 @@
-// Syntax highlighting (Veryl, C, RISC-V assembly): source text -> HTML lines (one string per line).
+// Syntax highlighting (Veryl, C, RISC-V assembly, Python, shell): source text -> HTML lines (one string per line).
 
 const KEYWORDS = new Set(('module interface package function import export inst param const var let assign always_ff always_comb '
   + 'initial final if else if_reset case switch default for in rev step return break input output inout modport struct enum union '
@@ -17,13 +17,22 @@ const C_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(0[xX][0-
 const ASM_TOKEN = /(#.*|\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(-?0[xX][0-9a-fA-F]+|-?\d+)|(\.[A-Za-z_]\w*)|([A-Za-z_.$][\w.$]*:)|([A-Za-z_]\w*)/g;
 const REGS = /^(x([12]?\d|3[01])|zero|ra|sp|gp|tp|fp|t[0-6]|s([0-9]|1[01])|a[0-7])$/;
 
-export type Lang = 'veryl' | 'c' | 'asm' | 'text';
+const PY_KEYWORDS = new Set(('and as assert async await break class continue def del elif else except finally for from global if import '
+  + 'in is lambda nonlocal not or pass raise return try while with yield').split(' '));
+const PY_CONSTS = new Set('True False None self'.split(' '));
+const PY_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b0[xXbBoO][0-9a-fA-F_]+|\b\d[\d_]*(?:\.\d*)?(?:[eE][-+]?\d+)?)|(@\w+)|([A-Za-z_]\w*)/g;
+const SH_KEYWORDS = new Set('if then else elif fi for while until do done case esac in function return break continue exit'.split(' '));
+const SH_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'[^']*')|(\b\d+\b)|(\$\{[^}]*\}|\$\(\(|\$[\w#?@*!$-])|([A-Za-z_][\w-]*)/g;
+
+export type Lang = 'veryl' | 'c' | 'asm' | 'py' | 'sh' | 'text';
 
 /** the language of a file, by its name */
 export function langOf(name: string): Lang {
   if (name.endsWith('.veryl')) return 'veryl';
   if (/\.[ch]$/.test(name)) return 'c';
   if (/\.(s|S|asm)$/.test(name)) return 'asm';
+  if (name.endsWith('.py')) return 'py';
+  if (name.endsWith('.sh')) return 'sh';
   return 'text';
 }
 
@@ -31,6 +40,7 @@ export function langOf(name: string): Lang {
 export function highlight(src: string, lang: Lang = 'veryl'): string[] {
   if (lang === 'text') return src.split('\n').map(esc);
   if (lang === 'c' || lang === 'asm') return highlightC(src, lang);
+  if (lang === 'py' || lang === 'sh') return highlightScript(src, lang);
   const out: string[] = [];
   let inBlock = false;
   for (const line of src.split('\n')) {
@@ -130,4 +140,34 @@ function highlightC(src: string, lang: 'c' | 'asm'): string[] {
     out.push(h);
   }
   return out;
+}
+
+/** Python and shell scripts (line by line: a string spanning lines is not followed) */
+function highlightScript(src: string, lang: 'py' | 'sh'): string[] {
+  const re = lang === 'py' ? PY_TOKEN : SH_TOKEN;
+  return src.split('\n').map((line) => {
+    let h = '';
+    let i = 0;
+    let prev = '';
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(line))) {
+      h += esc(line.slice(i, m.index));
+      const t = m[0];
+      if (m[1]) h += `<span class="t-com">${esc(t)}</span>`;
+      else if (m[2]) h += `<span class="t-str">${esc(t)}</span>`;
+      else if (m[3]) h += `<span class="t-num">${esc(t)}</span>`;
+      else if (m[4]) h += `<span class="${lang === 'py' ? 't-attr' : 't-sys'}">${esc(t)}</span>`;
+      else if (lang === 'py') {
+        if (PY_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
+        else if (PY_CONSTS.has(t)) h += `<span class="t-type">${t}</span>`;
+        else if (prev === 'def' || prev === 'class' || /^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
+        else h += t;
+      } else h += SH_KEYWORDS.has(t) ? `<span class="t-kw">${t}</span>` : t;
+      if (m[5]) prev = t;
+      i = re.lastIndex;
+    }
+    if (i < line.length) h += esc(line.slice(i));
+    return h;
+  });
 }

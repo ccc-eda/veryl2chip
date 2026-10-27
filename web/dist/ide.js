@@ -3905,7 +3905,13 @@ ${lines.join("\n")}
     { id: 5, kind: "res", a: "h:4:e", b: "r:top-:4" },
     { id: 6, kind: "btn", a: "r:top+:12", b: "h:12:b" },
     { id: 7, kind: "wire", a: "h:12:a", b: "p:6", color: "#8e4ec6" },
-    { id: 8, kind: "res", a: "h:12:e", b: "r:top-:13" }
+    { id: 8, kind: "res", a: "h:12:e", b: "r:top-:13" },
+    { id: 9, kind: "wire", a: "p:12", b: "h:6:a", color: "#f76b15" },
+    { id: 10, kind: "led", a: "h:6:c", b: "h:7:c", color: "#ffcc00" },
+    { id: 11, kind: "res", a: "h:7:e", b: "r:top-:7" },
+    { id: 12, kind: "wire", a: "p:13", b: "h:9:a", color: "#f76b15" },
+    { id: 13, kind: "led", a: "h:9:c", b: "h:10:c", color: "#34c759" },
+    { id: 14, kind: "res", a: "h:10:e", b: "r:top-:10" }
   ];
   var PiBoard = class {
     constructor(host) {
@@ -4167,6 +4173,8 @@ ${lines.join("\n")}
       __publicField(this, "onFilesBack", () => "");
       /** the IDE: the project's breadboard for the development board (null: the example's), and saving it */
       __publicField(this, "getParts", () => null);
+      /** the IDE: the file to run on the board and its command (null: nothing to run) */
+      __publicField(this, "getRun", () => null);
       __publicField(this, "onParts", () => {
       });
       __publicField(this, "pi", null);
@@ -4176,6 +4184,7 @@ ${lines.join("\n")}
         <button class="tb-btn" data-a="boot" title="${tr("\u7528 veryl-emu \u628A\u8A2D\u8A08\u7DE8\u8B6F\u6210 WebAssembly\uFF0C\u8F09\u5165\u7A0B\u5F0F\u5F8C\u958B\u6A5F", "Compile the design to WebAssembly with veryl-emu, load the programs and boot")}">${tr("\u{1F5A5} \u958B\u6A5F", "\u{1F5A5} Boot")}</button>
         <button class="tb-btn" data-a="pause" disabled>\u23F8</button>
         <button class="tb-btn" data-a="reset" disabled title="${tr("\u51B7\u958B\u6A5F\uFF08\u91CD\u65B0\u8F09\u5165\u7A0B\u5F0F\uFF0C\u5F9E\u982D\u958B\u6A5F\uFF0C\u4E0D\u7528\u5FEB\u7167\uFF09", "Cold boot (reload the programs and boot from the start, no snapshot)")}">\u27F2</button>
+        <button class="tb-btn hidden" data-a="run" title="${tr("\u5728\u677F\u5B50\u4E0A\u57F7\u884C\u9019\u500B\u6A94\u6848\uFF08.py \u7528 MicroPython\u3001.sh \u7528 shell\uFF09\uFF1A\u5148\u505C\u6389\u6B63\u5728\u8DD1\u7684\u7A0B\u5F0F\uFF0C\u518D\u628A\u5C08\u6848\u7684\u6A94\u6848\u9001\u9032 /root", "Run this file on the board (.py with MicroPython, .sh with the shell): stops the running program, then puts the project's files into /root")}">\u25B6</button>
         <button class="tb-btn ghost" data-a="files" disabled title="${tr("\u628A\u5C08\u6848\u7684\u6A94\u6848\uFF08Veryl \u8207 machine.json \u4EE5\u5916\uFF09\u653E\u9032\u677F\u5B50\u7684 /root\uFF08\u677F\u5B50\u4E0A\u6253 savefiles \u9001\u56DE\u5C08\u6848\uFF09", "Put the project's files (other than Veryl and machine.json) into /root on the board (savefiles on the board sends them back)")}">${tr("\u21C5 \u6A94\u6848", "\u21C5 Files")}</button>
         <button class="tb-btn ghost" data-a="save" disabled title="${tr("\u5B58\u4E0B\u76EE\u524D\u7684\u72C0\u614B\uFF08\u5B58\u5728\u9019\u500B\u700F\u89BD\u5668\uFF1B\u4E0B\u6B21\u958B\u6A5F\u5F9E\u9019\u88E1\u7E7C\u7E8C\uFF09", "Save the current state (in this browser; the next boot continues from here)")}">\u{1F4BE}</button>
         <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u81EA\u5DF1\u7684\u7A0B\u5F0F\uFF08ELF \u6216\u4E8C\u9032\u4F4D\u6A94\uFF0C\u653E\u5728 RAM \u7684\u958B\u982D\uFF09\u518D\u958B\u6A5F", "Load your own program (ELF or a binary at the start of the RAM), then boot")}">${tr("\u{1F4C2} \u7A0B\u5F0F", "\u{1F4C2} Program")}</button>
@@ -4204,6 +4213,7 @@ ${lines.join("\n")}
           this.note(tr("\u5C08\u6848\u7684\u6A94\u6848\u9001\u9032\u677F\u5B50\u7684 /root", "The project's files went to /root on the board"));
         }
       };
+      q("run").onclick = () => this.run();
       q("save").onclick = () => {
         if (this.w) {
           this.w.postMessage({ type: "save" });
@@ -4265,6 +4275,7 @@ ${lines.join("\n")}
       q("reset").disabled = s === "off";
       q("save").disabled = s === "off" || s === "end";
       q("files").disabled = s !== "run" || !this.last?.cfg.files;
+      this.runLabel();
       this.dirty = true;
     }
     render() {
@@ -4292,7 +4303,7 @@ ${lines.join("\n")}
       if (this.upload) s.images = [{ bytes: this.upload }];
       this.last = s;
       this.w?.terminate();
-      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** write the file exchange area (machine.json "files") */\n    writeArea(bytes) {\n      if (!this.cfg.files) return;\n      if (bytes.length > this.cfg.files.size) throw new Error(`the project\'s files (${bytes.length} bytes) do not fit the exchange area`);\n      this.load(bytes, BigInt(this.cfg.files.addr));\n    }\n    /** a copy of the file exchange area */\n    readArea() {\n      const f = this.cfg.files, ram = this.cfg.ram;\n      if (!f || !ram) return null;\n      const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));\n      return this.u8.slice(off, off + f.size);\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** the whole state: the non-zero 4 KB pages of the model\'s memory ("VESN", 1, page size, count, then [index, page]...) */\n    snapshot() {\n      const P = 4096, u8 = this.u8, pages = [];\n      const w = new Uint32Array(u8.buffer, 0, u8.length / 4);\n      for (let i = 0; i < u8.length / P; i++) {\n        for (let k = i * P / 4, e = (i + 1) * P / 4; k < e; k++) if (w[k]) {\n          pages.push(i);\n          break;\n        }\n      }\n      const out = new Uint8Array(16 + pages.length * (P + 4));\n      const d = new DataView(out.buffer);\n      d.setUint32(0, 1314080086, true);\n      d.setUint32(4, 1, true);\n      d.setUint32(8, P, true);\n      d.setUint32(12, pages.length, true);\n      pages.forEach((p, k) => {\n        d.setUint32(16 + k * (P + 4), p, true);\n        out.set(u8.subarray(p * P, (p + 1) * P), 20 + k * (P + 4));\n      });\n      return out;\n    }\n    /** go back to a state made by `snapshot()` (of a model with the same layout) at `cycle` */\n    restore(data, cycle = 0) {\n      const d = new DataView(data.buffer, data.byteOffset, data.byteLength);\n      if (d.getUint32(0, true) !== 1314080086) throw new Error("not a machine snapshot");\n      const P = d.getUint32(8, true), n = d.getUint32(12, true);\n      this.u8.fill(0);\n      for (let k = 0; k < n; k++) {\n        const at = 16 + k * (P + 4);\n        const p = d.getUint32(at, true);\n        this.u8.set(data.subarray(at + 4, at + 4 + P), p * P);\n      }\n      this.rx = [];\n      this.finished = null;\n      this.cycle = cycle;\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** GPIO inputs (a bit per pin) */\n    setGpio(bits) {\n      const g = this.cfg.gpio;\n      if (!g) return;\n      this.sig(g.in).set(bits);\n      this.x.settle();\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      const g = this.cfg.gpio, n = g?.n ?? 16;\n      const go = g ? this.sig(g.out) : null, ge = g ? this.sig(g.oe) : null;\n      const high = new Array(n).fill(0);\n      let oeSeen = 0;\n      const SAMPLE = 1024;\n      const sample = (cycles) => {\n        if (!go) return;\n        const v = Number(go.get()), e = Number(ge.get());\n        oeSeen |= e;\n        for (let k = 0; k < n; k++) if ((v & e) >> k & 1) high[k] += cycles;\n      };\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : go ? Math.min(SAMPLE, max - done) : max - done;\n        const ran = single ? 0 : this.x.run(want);\n        done += ran;\n        sample(ran);\n        if (ran < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          sample(1);\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      const r = { cycles: done, out, finished: this.finished };\n      if (go) {\n        r.duty = high.map((h) => done ? h / done : 0);\n        r.oe = oeSeen;\n      }\n      return r;\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var gpio = 0;\n  var files = null;\n  var tail = "";\n  var NOTICE = "\\x1B]1337;veryl-save\\x07";\n  var typeLine = (s) => m.input([...s].map((c) => c.charCodeAt(0)));\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    if (files) m.writeArea(files);\n    m.reset();\n    m.setGpio(gpio);\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate, duty: r.duty, oe: r.oe });\n      if (r.out.length) {\n        tail = (tail + String.fromCharCode(...r.out)).slice(-200);\n        const k = tail.lastIndexOf(NOTICE);\n        if (k >= 0) {\n          tail = tail.slice(k + NOTICE.length);\n          const area = m.readArea();\n          if (area) post({ type: "files-back", area });\n        }\n      }\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        files = d.files ?? null;\n        if (d.snapshot) {\n          m.restore(d.snapshot, d.cycle ?? 0);\n          m.setGpio(gpio);\n          if (files) {\n            m.writeArea(files);\n            typeLine("getfiles\\r");\n          }\n        } else boot();\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "gpio") {\n        gpio = d.bits;\n        m?.setGpio(gpio);\n      } else if (d.type === "files") {\n        files = d.area;\n        if (m && files) {\n          m.writeArea(files);\n          typeLine("getfiles\\r");\n        }\n      } else if (d.type === "save") {\n        if (!m) return;\n        const data = m.snapshot();\n        post({ type: "saved", data, cycle: m.cycle });\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
+      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** write the file exchange area (machine.json "files") */\n    writeArea(bytes) {\n      if (!this.cfg.files) return;\n      if (bytes.length > this.cfg.files.size) throw new Error(`the project\'s files (${bytes.length} bytes) do not fit the exchange area`);\n      this.load(bytes, BigInt(this.cfg.files.addr));\n    }\n    /** a copy of the file exchange area */\n    readArea() {\n      const f = this.cfg.files, ram = this.cfg.ram;\n      if (!f || !ram) return null;\n      const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));\n      return this.u8.slice(off, off + f.size);\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** the whole state: the non-zero 4 KB pages of the model\'s memory ("VESN", 1, page size, count, then [index, page]...) */\n    snapshot() {\n      const P = 4096, u8 = this.u8, pages = [];\n      const w = new Uint32Array(u8.buffer, 0, u8.length / 4);\n      for (let i = 0; i < u8.length / P; i++) {\n        for (let k = i * P / 4, e = (i + 1) * P / 4; k < e; k++) if (w[k]) {\n          pages.push(i);\n          break;\n        }\n      }\n      const out = new Uint8Array(16 + pages.length * (P + 4));\n      const d = new DataView(out.buffer);\n      d.setUint32(0, 1314080086, true);\n      d.setUint32(4, 1, true);\n      d.setUint32(8, P, true);\n      d.setUint32(12, pages.length, true);\n      pages.forEach((p, k) => {\n        d.setUint32(16 + k * (P + 4), p, true);\n        out.set(u8.subarray(p * P, (p + 1) * P), 20 + k * (P + 4));\n      });\n      return out;\n    }\n    /** go back to a state made by `snapshot()` (of a model with the same layout) at `cycle` */\n    restore(data, cycle = 0) {\n      const d = new DataView(data.buffer, data.byteOffset, data.byteLength);\n      if (d.getUint32(0, true) !== 1314080086) throw new Error("not a machine snapshot");\n      const P = d.getUint32(8, true), n = d.getUint32(12, true);\n      this.u8.fill(0);\n      for (let k = 0; k < n; k++) {\n        const at = 16 + k * (P + 4);\n        const p = d.getUint32(at, true);\n        this.u8.set(data.subarray(at + 4, at + 4 + P), p * P);\n      }\n      this.rx = [];\n      this.finished = null;\n      this.cycle = cycle;\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** GPIO inputs (a bit per pin) */\n    setGpio(bits) {\n      const g = this.cfg.gpio;\n      if (!g) return;\n      this.sig(g.in).set(bits);\n      this.x.settle();\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      const g = this.cfg.gpio, n = g?.n ?? 16;\n      const go = g ? this.sig(g.out) : null, ge = g ? this.sig(g.oe) : null;\n      const high = new Array(n).fill(0);\n      let oeSeen = 0;\n      const SAMPLE = 1024;\n      const sample = (cycles) => {\n        if (!go) return;\n        const v = Number(go.get()), e = Number(ge.get());\n        oeSeen |= e;\n        for (let k = 0; k < n; k++) if ((v & e) >> k & 1) high[k] += cycles;\n      };\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : go ? Math.min(SAMPLE, max - done) : max - done;\n        const ran = single ? 0 : this.x.run(want);\n        done += ran;\n        sample(ran);\n        if (ran < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          sample(1);\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      const r = { cycles: done, out, finished: this.finished };\n      if (go) {\n        r.duty = high.map((h) => done ? h / done : 0);\n        r.oe = oeSeen;\n      }\n      return r;\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var gpio = 0;\n  var files = null;\n  var tail = "";\n  var NOTICE = "\\x1B]1337;veryl-save\\x07";\n  var pending = null;\n  var typeLine = (s) => m.input([...s].map((c) => c.charCodeAt(0)));\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    if (files) m.writeArea(files);\n    m.reset();\n    m.setGpio(gpio);\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate, duty: r.duty, oe: r.oe });\n      if (r.out.length) {\n        tail = (tail + String.fromCharCode(...r.out)).slice(-200);\n        const k = tail.lastIndexOf(NOTICE);\n        if (k >= 0) {\n          tail = tail.slice(k + NOTICE.length);\n          const area = m.readArea();\n          if (area) post({ type: "files-back", area });\n        }\n        if (pending && tail.endsWith(">>> ")) {\n          tail = "";\n          m.input([4]);\n        } else if (pending && /\\$ $/.test(tail)) {\n          tail = "";\n          if (pending.area) m.writeArea(pending.area);\n          typeLine(`cd /root && getfiles > /dev/null && ${pending.cmd}\\r`);\n          pending = null;\n        }\n      }\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        files = d.files ?? null;\n        tail = "";\n        if (d.snapshot) {\n          m.restore(d.snapshot, d.cycle ?? 0);\n          m.setGpio(gpio);\n          if (files) {\n            m.writeArea(files);\n            typeLine("getfiles\\r");\n          }\n        } else boot();\n        if (pending) m.input([3]);\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "gpio") {\n        gpio = d.bits;\n        m?.setGpio(gpio);\n      } else if (d.type === "files") {\n        files = d.area;\n        if (m && files) {\n          m.writeArea(files);\n          typeLine("getfiles\\r");\n        }\n      } else if (d.type === "run") {\n        pending = { area: d.area ?? null, cmd: d.cmd };\n        m?.input([3]);\n      } else if (d.type === "save") {\n        if (!m) return;\n        const data = m.snapshot();\n        post({ type: "saved", data, cycle: m.cycle });\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
       this.w = new Worker(url);
       this.w.onmessage = (e) => this.msg(e.data);
       this.w.onerror = (e) => {
@@ -4343,6 +4354,33 @@ ${lines.join("\n")}
         this.note(tr("\u6A21\u64EC\u6A5F\u932F\u8AA4\uFF1A", "Emulator error: ") + d.msg);
         this.set("end");
       }
+    }
+    /** the run button shows the file it runs (only for a machine with an exchange area) */
+    runLabel() {
+      const b = this.host.querySelector('[data-a="run"]');
+      const r = this.getRun();
+      b.classList.toggle("hidden", !r || !!this.last && !this.last.cfg.files);
+      if (r) b.textContent = tr(`\u25B6 \u57F7\u884C ${r.name}`, `\u25B6 Run ${r.name}`);
+    }
+    /** run the IDE's file on the board (booting it first when it is off) */
+    async run() {
+      const r = this.getRun();
+      if (!r) {
+        this.note(tr("\u5C08\u6848\u88E1\u6C92\u6709\u53EF\u4EE5\u5728\u677F\u5B50\u4E0A\u57F7\u884C\u7684\u6A94\u6848\uFF08.py \u6216 .sh\uFF09", "The project has no file to run on the board (.py or .sh)"));
+        return;
+      }
+      if (this.state === "off" || this.state === "end") {
+        await this.boot();
+        if (!this.w) return;
+      }
+      if (!this.last?.cfg.files) {
+        this.note(tr("\u9019\u53F0\u6A5F\u5668\u6C92\u6709\u4EA4\u63DB\u5340\uFF08machine.json \u7684 files\uFF09\uFF0C\u4E0D\u80FD\u628A\u6A94\u6848\u653E\u9032\u53BB", 'This machine has no exchange area (machine.json "files"): files cannot go in'));
+        return;
+      }
+      if (this.state === "pause") this.pauseResume();
+      this.w.postMessage({ type: "run", area: this.getFiles(), cmd: r.cmd });
+      this.note(tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${r.name}\uFF1A${r.cmd}\uFF08Ctrl-C \u505C\u6B62\uFF09`, `Running ${r.name} on the board: ${r.cmd} (Ctrl-C stops it)`));
+      this.inEl.focus();
     }
     pauseResume() {
       if (!this.w) return;
@@ -4473,15 +4511,23 @@ ${lines.join("\n")}
   var C_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)|(^\s*#\s*\w+)|([A-Za-z_]\w*)/g;
   var ASM_TOKEN = /(#.*|\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(-?0[xX][0-9a-fA-F]+|-?\d+)|(\.[A-Za-z_]\w*)|([A-Za-z_.$][\w.$]*:)|([A-Za-z_]\w*)/g;
   var REGS = /^(x([12]?\d|3[01])|zero|ra|sp|gp|tp|fp|t[0-6]|s([0-9]|1[01])|a[0-7])$/;
+  var PY_KEYWORDS = new Set("and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" "));
+  var PY_CONSTS = new Set("True False None self".split(" "));
+  var PY_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b0[xXbBoO][0-9a-fA-F_]+|\b\d[\d_]*(?:\.\d*)?(?:[eE][-+]?\d+)?)|(@\w+)|([A-Za-z_]\w*)/g;
+  var SH_KEYWORDS = new Set("if then else elif fi for while until do done case esac in function return break continue exit".split(" "));
+  var SH_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'[^']*')|(\b\d+\b)|(\$\{[^}]*\}|\$\(\(|\$[\w#?@*!$-])|([A-Za-z_][\w-]*)/g;
   function langOf(name) {
     if (name.endsWith(".veryl")) return "veryl";
     if (/\.[ch]$/.test(name)) return "c";
     if (/\.(s|S|asm)$/.test(name)) return "asm";
+    if (name.endsWith(".py")) return "py";
+    if (name.endsWith(".sh")) return "sh";
     return "text";
   }
   function highlight(src, lang = "veryl") {
     if (lang === "text") return src.split("\n").map(esc3);
     if (lang === "c" || lang === "asm") return highlightC(src, lang);
+    if (lang === "py" || lang === "sh") return highlightScript(src, lang);
     const out = [];
     let inBlock = false;
     for (const line of src.split("\n")) {
@@ -4584,6 +4630,34 @@ ${lines.join("\n")}
       out.push(h);
     }
     return out;
+  }
+  function highlightScript(src, lang) {
+    const re = lang === "py" ? PY_TOKEN : SH_TOKEN;
+    return src.split("\n").map((line) => {
+      let h = "";
+      let i = 0;
+      let prev = "";
+      re.lastIndex = 0;
+      let m;
+      while (m = re.exec(line)) {
+        h += esc3(line.slice(i, m.index));
+        const t = m[0];
+        if (m[1]) h += `<span class="t-com">${esc3(t)}</span>`;
+        else if (m[2]) h += `<span class="t-str">${esc3(t)}</span>`;
+        else if (m[3]) h += `<span class="t-num">${esc3(t)}</span>`;
+        else if (m[4]) h += `<span class="${lang === "py" ? "t-attr" : "t-sys"}">${esc3(t)}</span>`;
+        else if (lang === "py") {
+          if (PY_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
+          else if (PY_CONSTS.has(t)) h += `<span class="t-type">${t}</span>`;
+          else if (prev === "def" || prev === "class" || /^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
+          else h += t;
+        } else h += SH_KEYWORDS.has(t) ? `<span class="t-kw">${t}</span>` : t;
+        if (m[5]) prev = t;
+        i = re.lastIndex;
+      }
+      if (i < line.length) h += esc3(line.slice(i));
+      return h;
+    });
   }
 
   // src/ide/editor.ts
@@ -4902,7 +4976,11 @@ ${lines.join("\n")}
     syncStage();
     $2("boardPane").classList.toggle("hidden", a !== BOARD_TAB);
     $2("emuPane").classList.toggle("hidden", a !== EMU_TAB);
-    if (a === EMU_TAB) ensureEmu();
+    if (boardCmd(a) && file(a)) boardFile = a;
+    const onBoard = !!(machineCfg()?.files && boardCmd(a));
+    $2("cmdRun").textContent = onBoard ? tr("\u25B6 \u57F7\u884C", "\u25B6 Run") : tr("\u25B6 \u6E2C\u8A66", "\u25B6 Test");
+    $2("cmdRun").title = onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${a}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${a} on the board (Ctrl/\u2318+Enter)`) : tr("\u57F7\u884C\u6E2C\u8A66\uFF08Ctrl/\u2318+Enter\uFF09", "Run tests (Ctrl/\u2318+Enter)");
+    if (a === EMU_TAB) ensureEmu().runLabel();
     if (board) {
       if (a === BOARD_TAB) {
         if (boardWasRunning) {
@@ -5675,6 +5753,7 @@ int main(void) {
       emu = new Emulator($2("emuPane"));
       emu.onStart = startEmu;
       emu.getParts = () => proj.piBoard ?? null;
+      emu.getRun = boardRun;
       emu.getFiles = projectArea;
       emu.onFilesBack = filesBack;
       emu.onSave = async (st) => {
@@ -5686,6 +5765,25 @@ int main(void) {
       };
     }
     return emu;
+  }
+  var boardCmd = (n) => n.endsWith(".py") ? `micropython ${n}` : n.endsWith(".sh") ? `sh ${n}` : null;
+  var boardFile = "";
+  function boardRun() {
+    if (!machineCfg()?.files) return null;
+    const ok = (n2) => !!file(n2) && !!boardCmd(n2);
+    const n = [proj.active ?? "", boardFile, "main.py"].find(ok) ?? proj.files.map((f) => f.name).find(ok);
+    return n ? { name: n, cmd: boardCmd(n) } : null;
+  }
+  function runOnBoard() {
+    const e = ensureEmu();
+    const r = boardRun();
+    if (r) boardFile = r.name;
+    openFile(EMU_TAB);
+    e.run();
+  }
+  function runKey() {
+    if (machineCfg()?.files && boardCmd(proj.active ?? "")) runOnBoard();
+    else runTests();
   }
   function openEmu() {
     const e = ensureEmu();
@@ -5868,6 +5966,7 @@ int main(void) {
       { label: tr("\u6D41\u7A0B\uFF1A\u21C4 FPGA vs ASIC \u6BD4\u8F03", "Flow: \u21C4 FPGA vs ASIC"), run: () => runSynth("cmp") },
       { label: tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F", "\u26A1 Flash to the virtual board"), run: flashBoard },
       { label: tr("C\uFF1A\u6AA2\u8996\u7D44\u5408\u8A9E\u8A00", "C: view the assembly"), run: () => openFile(ASM_TAB) },
+      { label: tr("\u{1F5A5} \u5728\u677F\u5B50\u4E0A\u57F7\u884C\uFF08.py\u3001.sh\uFF09", "\u{1F5A5} Run on the board (.py, .sh)"), run: runOnBoard },
       { label: tr("C\uFF1A\u5728\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\u4E0A\u57F7\u884C\uFF08\u8F38\u51FA\u5230\u300C\u8F38\u51FA\u300D\u9762\u677F\uFF09", "C: run on the instruction-set simulator (Output panel)"), run: runC },
       { label: tr("\u65B0\u589E\u6A94\u6848", "New file"), run: newFile },
       { label: tr("\u65B0\u5C08\u6848", "New project"), run: newProject },
@@ -5931,7 +6030,7 @@ int main(void) {
   }
   function globalKey(e) {
     if (mod(e) && e.key === "Enter") {
-      runTests();
+      runKey();
       return true;
     }
     if (mod(e) && e.shiftKey && (e.key === "B" || e.key === "b")) {
@@ -5997,7 +6096,7 @@ int main(void) {
     $2("palIn").addEventListener("input", palFilter);
     $2("palIn").addEventListener("blur", () => setTimeout(closePal, 100));
     $2("cmdPalette").onclick = () => palette(false);
-    $2("cmdRun").onclick = () => runTests();
+    $2("cmdRun").onclick = () => runKey();
     $2("cmdVerify").onclick = verifyAll;
     $2("cmdBoard").onclick = () => flashBoard();
     $2("cmdEmu").onclick = () => openEmu();

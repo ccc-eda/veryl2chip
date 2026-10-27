@@ -3,7 +3,8 @@
 # commands are typed at its prompt (rv64sim -s), including the GPIO: the board's LEDs
 # (/sys/class/leds), a pin exported as an output, the button on GPIO 2 pressed by the
 # script (!gpio 2=1) and read back, an edge interrupt through the PLIC, a file put in the
-# exchange area (0x8F00_0000) read into /root by getfiles at boot; then poweroff ends
+# exchange area (0x8F00_0000) read into /root by getfiles at boot, MicroPython with the
+# pi module (an LED on GPIO 13, the button, a big integer); then poweroff ends
 # the simulation. Needs sim/build.sh (or SIM=emu/rv64emu after emu/build.sh) and linux/build.sh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -31,13 +32,14 @@ echo $((B+2)) > /sys/class/gpio/export; echo both > /sys/class/gpio/gpio$((B+2))
 !gpio 2=1
 echo button $(cat /sys/class/gpio/gpio$((B+2))/value); grep sifive-gpio /proc/interrupts
 cat /root/hello.txt
+micropython -c "from pi import LED, Button; LED(13).on(); print('mp', Button(2).is_pressed, 2 ** 70)"
 poweroff -f
 S
 $SIM -m 3000000000 -s "$SCRIPT" -l 0x8F000000:"$AREA" linux/build/opensbi/platform/generic/firmware/fw_payload.bin < /dev/null 2>&1 | tee "$OUT"
 ok=1
 for want in "OpenSBI" "Boot HART ISA Extensions *: sstc" "Linux version 6.12" "Run /init as init process" \
             "Hello from busybox on Rv64Core" "Linux .* riscv64 GNU/Linux" "^42" "mmu.*sv39" \
-            "\[gpio\] out=0x0022" "^button 0" "^button 1" " 1 *sifive-gpio *2 Edge" "^hello from the test bench" "reboot: Power down" "^PASS after"; do
+            "\[gpio\] out=0x0022" "^button 0" "^button 1" " 1 *sifive-gpio *2 Edge" "^hello from the test bench" "^mp True 1180591620717411303424" "\[gpio\] out=0x2022" "reboot: Power down" "^PASS after"; do
     grep -q "$want" "$OUT" || { echo "MISSING: $want"; ok=0; }
 done
 rm -f "$OUT" "$SCRIPT" "$AREA"

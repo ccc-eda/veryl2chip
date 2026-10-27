@@ -159,7 +159,12 @@ function showActive(): void {
   syncStage();
   $('boardPane').classList.toggle('hidden', a !== BOARD_TAB);
   $('emuPane').classList.toggle('hidden', a !== EMU_TAB);
-  if (a === EMU_TAB) ensureEmu();
+  if (boardCmd(a) && file(a)) boardFile = a;
+  // ▶ runs a script open in a board project on the board
+  const onBoard = !!(machineCfg()?.files && boardCmd(a));
+  $('cmdRun').textContent = onBoard ? tr('▶ 執行', '▶ Run') : tr('▶ 測試', '▶ Test');
+  $('cmdRun').title = onBoard ? tr(`在板子上執行 ${a}（Ctrl/⌘+Enter）`, `Run ${a} on the board (Ctrl/⌘+Enter)`) : tr('執行測試（Ctrl/⌘+Enter）', 'Run tests (Ctrl/⌘+Enter)');
+  if (a === EMU_TAB) ensureEmu().runLabel();
   // the board simulates only while it is visible
   if (board) {
     if (a === BOARD_TAB) { if (boardWasRunning) { boardWasRunning = false; board.resume(); } }
@@ -935,12 +940,39 @@ function ensureEmu(): Emulator {
     emu = new Emulator($('emuPane'));
     emu.onStart = startEmu;
     emu.getParts = () => proj.piBoard ?? null;
+    emu.getRun = boardRun;
     emu.getFiles = projectArea;
     emu.onFilesBack = filesBack;
     emu.onSave = async (st) => { if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st }); };
     emu.onParts = (parts) => { proj.piBoard = parts.map(p => ({ ...p })); persist(); };
   }
   return emu;
+}
+
+/** how the board runs a file (.py with MicroPython, .sh with the shell; null: it does not) */
+const boardCmd = (n: string): string | null => n.endsWith('.py') ? `micropython ${n}` : n.endsWith('.sh') ? `sh ${n}` : null;
+/** the last file opened that the board can run */
+let boardFile = '';
+
+/** what "▶ run on the board" runs: the open file, else the last one, else main.py, else the first one */
+function boardRun(): { name: string; cmd: string } | null {
+  if (!machineCfg()?.files) return null;
+  const ok = (n: string) => !!file(n) && !!boardCmd(n);
+  const n = [proj.active ?? '', boardFile, 'main.py'].find(ok) ?? proj.files.map(f => f.name).find(ok);
+  return n ? { name: n, cmd: boardCmd(n)! } : null;
+}
+
+function runOnBoard(): void {
+  const e = ensureEmu();
+  const r = boardRun();
+  if (r) boardFile = r.name;
+  openFile(EMU_TAB);
+  e.run();
+}
+
+/** ▶ / Ctrl+Enter: a script open in a board project runs on the board, else the tests */
+function runKey(): void {
+  if (machineCfg()?.files && boardCmd(proj.active ?? '')) runOnBoard(); else runTests();
 }
 
 function openEmu(): void {
@@ -1135,6 +1167,7 @@ function commands(): Cmd[] {
     { label: tr('流程：⇄ FPGA vs ASIC 比較', 'Flow: ⇄ FPGA vs ASIC'), run: () => runSynth('cmp') },
     { label: tr('⚡ 燒錄到虛擬板', '⚡ Flash to the virtual board'), run: flashBoard },
     { label: tr('C：檢視組合語言', 'C: view the assembly'), run: () => openFile(ASM_TAB) },
+    { label: tr('🖥 在板子上執行（.py、.sh）', '🖥 Run on the board (.py, .sh)'), run: runOnBoard },
     { label: tr('C：在指令集模擬器上執行（輸出到「輸出」面板）', 'C: run on the instruction-set simulator (Output panel)'), run: runC },
     { label: tr('新增檔案', 'New file'), run: newFile },
     { label: tr('新專案', 'New project'), run: newProject },
@@ -1198,7 +1231,7 @@ function closePal(): void { $('palette').classList.add('hidden'); }
 // ---------------------------------------------------------------- keys
 
 function globalKey(e: KeyboardEvent): boolean {
-  if (mod(e) && e.key === 'Enter') { runTests(); return true; }
+  if (mod(e) && e.key === 'Enter') { runKey(); return true; }
   if (mod(e) && e.shiftKey && (e.key === 'B' || e.key === 'b')) { runSynth(); return true; }
   if (mod(e) && e.shiftKey && (e.key === 'P' || e.key === 'p')) { palette(false); return true; }
   if (mod(e) && !e.shiftKey && (e.key === 'p' || e.key === 'P')) { palette(true); return true; }
@@ -1235,7 +1268,7 @@ function wire(): void {
   $('palIn').addEventListener('input', palFilter);
   $('palIn').addEventListener('blur', () => setTimeout(closePal, 100));
   $('cmdPalette').onclick = () => palette(false);
-  $('cmdRun').onclick = () => runTests();
+  $('cmdRun').onclick = () => runKey();
   $('cmdVerify').onclick = verifyAll;
   $('cmdBoard').onclick = () => flashBoard();
   $('cmdEmu').onclick = () => openEmu();
