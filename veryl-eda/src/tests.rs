@@ -24,7 +24,7 @@ fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     assert!(mapped.cells.iter().all(|c| c.typ.starts_with("SB_")));
     check(&mut NetSim::new(&mapped));
     let ecp5 = crate::ecp5::map(&nl).unwrap();
-    assert!(ecp5.cells.iter().all(|c| matches!(c.typ.as_str(), "LUT4" | "CCU2C" | "TRELLIS_FF")));
+    assert!(ecp5.cells.iter().all(|c| matches!(c.typ.as_str(), "LUT4" | "CCU2C" | "TRELLIS_FF" | "DP16KD")));
     check(&mut NetSim::new(&ecp5));
     let cells = crate::asic::map::map(&nl).unwrap();
     assert!(cells.cells.iter().all(|c| c.typ == "SRAM" || crate::asic::lib::LIB.iter().any(|l| l.name == c.typ)));

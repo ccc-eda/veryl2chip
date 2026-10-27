@@ -69,12 +69,13 @@ v2.2 起可以把同一份网表映射到 Lattice **ECP5**（LFE5U-12F / 25F / 4
 | `LUT4` | 和 iCE40 相同的 cut-based 4-LUT 覆盖（深度优先、area flow 回收）；`INIT` 的第 `{D,C,B,A}` 位是输出 |
 | `CCU2C` | 全加器的进位链。一个 CCU2C 有两半：两个相邻位的进位只接到下一位时放在同一颗（前半 bit i、后半 bit i+1，`INIT = 0x96AA`，和 yosys 一样），否则后半只把进位往下传（`INIT1 = 0xFFFF`），让进位可以离开进位链。和（`S0` / `S1`）也由 CCU2C 直接产生；一个 COUT 只接一个 CIN，其他的经过一个缓冲 LUT（nextpnr 再自动加 feed-in / feed-out） |
 | `TRELLIS_FF` | 时钟极性（`CLKMUX`）、reset 极性（`LSRMUX`）、同步 / 异步（`SRMODE`）、reset 值（`REGSET`）都是 slice 里的多路选择器，不需要额外的反相 LUT |
+| `DP16KD` | 同步读取的存储器（v2.9，和 iCE40 的 block RAM 同一套识别）：2048 × 9 的形状，A 端口写、B 端口读（`CEB` = 读取使能）；字宽超过 9 位并排几颗，深度超过 2048 时分成几行，写入使能由高位地址译码、读出数据由（跟着读取一起寄存的）高位地址选择 |
 
 - `--device` 默认 `85k`、`--package` 默认 `CABGA381`（ULX3S）；`--lpf` 是引脚档（`LOCATE COMP "埠" SITE "腳";`、`IOBUF PORT ... IO_TYPE=LVCMOS33;`），
   没有时 nextpnr 自己放 IO（`--lpf-allow-unconstrained`）。`--config` 是布好的 Trellis 文本设置，`--bit` 是比特流（`openFPGALoader` / `ecpprog` 可烧）。
 - 打印 nextpnr 最后的用量（`TRELLIS_COMB` = LUT 与进位、`TRELLIS_FF`、`TRELLIS_IO`）与每个时钟的 Fmax（`-v` 加上关键路径）。
 - **上电值**：ECP5 的触发器上电时等于 `REGSET`，所以 reset 值是 1 的触发器上电是 1（iCE40 全部是 0）；只有在第一次 reset 之前读它才会不同。
-- 还没有：block RAM（`DP16KD`，存储器目前是触发器）、乘法器（`MULT18X18D`）、`PFUMX` / `L6MUX21`（5、6 输入函数）、自己的 ECP5 布局布线。
+- 还没有：乘法器（`MULT18X18D`）、`PFUMX` / `L6MUX21`（5、6 输入函数）、自己的 ECP5 布局布线。
 
 验证：`cargo test` 在 ECP5 网表上跑所有示例的 testbench 情境（netsim 依 yosys 的 `cells_sim.v` 仿真 `CCU2C` 与 `TRELLIS_FF`）；
 `test.sh` 对每个设计做 `--gatesim ecp5`、nextpnr-ecp5 + ecppack，并用 yosys 的 ECP5 单元模型证明 ECP5 网表与 `veryl build` 等价；
@@ -252,7 +253,7 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 | `elab.rs`    | 遍历语法树 → 名称式语句 IR → **符号执行**成门：if 变 mux 链、常数标签的 case 变并行 one-hot、for 展开、function inline、always_ff 对应 DFF/reset、层次摊平 |
 | `netlist.rs` | 位级 Builder（常数折叠、structural hashing、`x & !x` 等化简、平衡的化简树）、加减乘/比较/桶形移位/动态索引；`optimize` 解析别名、检测组合环路、重建、清除无用逻辑，并反复做：**证明常数节点**（随机仿真找候选、对 ≤16 个输入的支撑集穷举证明）与**移除卡在 0 的寄存器** |
 | `ice40.rs`   | iCE40 映射：全加器进位 → `SB_CARRY` 链；其余以 cut-based 4-LUT 覆盖（深度优先、再看 area flow）；DFF → `SB_DFF[N][S]{R,S}`，低有效 reset 加反相 LUT |
-| `ecp5.rs`    | ECP5 映射：同样的 LUT 覆盖 → `LUT4`；进位与和 → `CCU2C`（两位一颗）；DFF → `TRELLIS_FF` |
+| `ecp5.rs`    | ECP5 映射：同样的 LUT 覆盖 → `LUT4`；进位与和 → `CCU2C`（两位一颗）；DFF → `TRELLIS_FF`；存储器 → `DP16KD` |
 | `output.rs`  | yosys JSON、结构化 Verilog（含 iCE40 primitive 实例） |
 | `netsim.rs`  | 2 态门级仿真器（给测试用，支持通用门、iCE40、ECP5 与标准单元） |
 

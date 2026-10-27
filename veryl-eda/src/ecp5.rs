@@ -2,8 +2,8 @@
 //! `techlibs/ecp5/cells_sim.v` are the models): `LUT4` (the same cut-based
 //! covering as iCE40), `CCU2C` for full-adder carry chains (two bits per cell
 //! when the carry between them goes nowhere else; otherwise the second half only
-//! passes the carry on, so the carry can leave the chain) and `TRELLIS_FF`.
-//! Memories stay flip-flops for now.
+//! passes the carry on, so the carry can leave the chain), `TRELLIS_FF` and `DP16KD`
+//! block RAMs for memories with synchronous reads (see `brams`).
 
 use crate::ice40::{find_carries, lut_cover, truth, PAT};
 use crate::netlist::*;
@@ -17,6 +17,8 @@ pub const ADD_INIT: u16 = 0x96AA;
 pub const PASS_INIT: u16 = 0xFFFF;
 
 pub fn map(nl: &Netlist) -> R<Netlist> {
+    let (nl_owned, rams) = brams(nl);
+    let nl = &nl_owned;
     let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
     let mut node: HashMap<u32, usize> = HashMap::new();
     for (i, c) in gates.iter().enumerate() {
@@ -52,7 +54,7 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
 
     // roots: everything sequential logic and output ports look at
     let mut roots: Vec<Bit> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
-    for c in nl.cells.iter().filter(|c| c.is_ff()) {
+    for c in nl.cells.iter().filter(|c| c.is_ff()).chain(&rams) {
         for (p, b) in &c.conns { if !is_out(p) { roots.push(*b); } }
     }
     let (best, used, used_fixed) = lut_cover(&gates, &node, &fixed, &roots)?;
@@ -145,6 +147,8 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
         cells.push(Cell { typ: "TRELLIS_FF".into(), conns, params });
     }
 
+    cells.extend(rams);
+
     // keep only net names whose bits still exist
     let mut live: std::collections::HashSet<Bit> = cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| is_out(p)).map(|x| x.1)).collect();
     for p in &nl.ports { live.extend(p.bits.iter().copied()); }
@@ -153,9 +157,119 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
     Ok(Netlist { name: nl.name.clone(), ports, nets, cells })
 }
 
+pub const ADA: [&str; 14] = ["ADA0", "ADA1", "ADA2", "ADA3", "ADA4", "ADA5", "ADA6", "ADA7", "ADA8", "ADA9", "ADA10", "ADA11", "ADA12", "ADA13"];
+pub const ADB: [&str; 14] = ["ADB0", "ADB1", "ADB2", "ADB3", "ADB4", "ADB5", "ADB6", "ADB7", "ADB8", "ADB9", "ADB10", "ADB11", "ADB12", "ADB13"];
+pub const DIA: [&str; 9] = ["DIA0", "DIA1", "DIA2", "DIA3", "DIA4", "DIA5", "DIA6", "DIA7", "DIA8"];
+pub const DOB: [&str; 9] = ["DOB0", "DOB1", "DOB2", "DOB3", "DOB4", "DOB5", "DOB6", "DOB7", "DOB8"];
+
+/// Memories with synchronous reads (`bram::find_mems`) as `DP16KD` blocks in the
+/// 2048 × 9 shape: port A writes (ADA13..3 = address), port B reads (CEB = read
+/// enable, DOB8..0 registered, NOREG). Wider words use blocks side by side; a deeper
+/// memory is several rows of blocks, the write enable decoded from the address bits
+/// above 11 and the read data chosen by those bits, registered with the read.
+/// Returns the netlist without the memories (the decoders and multiplexers added as
+/// generic gates, mapped with the rest) and the blocks.
+pub fn brams(nl: &Netlist) -> (Netlist, Vec<Cell>) {
+    let (mut out, mems) = crate::bram::find_mems(nl);
+    let mut next = out.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)))
+        .chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied())).chain(nl.nets.iter().flat_map(|n| n.1.iter().copied()))
+        .filter_map(|b| if let Bit::W(w) = b { Some(w) } else { None }).max().unwrap_or(1) + 1;
+    let mut wire = || { next += 1; Bit::W(next - 1) };
+    let mut rams = vec![];
+    for m in &mems {
+        let abits = bits_for(m.depth);
+        let hi = abits.saturating_sub(11);
+        let cols = m.width.div_ceil(9);
+        let get = |v: &[Bit], i: usize| v.get(i).copied().unwrap_or(Bit::C0);
+        // write enable of row r: we & (waddr[11..] == r)
+        let gate = |cells: &mut Vec<Cell>, typ: &str, a: Bit, b: Option<Bit>, y: Bit| {
+            let mut conns = vec![("A", a)];
+            if let Some(b) = b { conns.push(("B", b)); }
+            conns.push(("Y", y));
+            cells.push(Cell { typ: typ.into(), conns, params: vec![] });
+        };
+        let mut row_we = vec![];
+        for r in 0..1usize << hi {
+            let mut e = m.we;
+            for k in 0..hi {
+                let mut a = get(&m.waddr, 11 + k);
+                if (r >> k) & 1 == 0 { let n = wire(); gate(&mut out.cells, "$_NOT_", a, None, n); a = n; }
+                let y = wire();
+                gate(&mut out.cells, "$_AND_", e, Some(a), y);
+                e = y;
+            }
+            row_we.push(e);
+        }
+        for (pi, rp) in m.reads.iter().enumerate() {
+            // the read row, registered like the data (D = en ? raddr : Q)
+            let mut sel = vec![];
+            for k in 0..hi {
+                let q = wire();
+                let d = if rp.en == Bit::C1 { get(&rp.addr, 11 + k) } else {
+                    let y = wire();
+                    out.cells.push(Cell { typ: "$_MUX_".into(), conns: vec![("A", q), ("B", get(&rp.addr, 11 + k)), ("S", rp.en), ("Y", y)], params: vec![] });
+                    y
+                };
+                out.cells.push(Cell { typ: "$_DFF_P_".into(), conns: vec![("C", m.clk), ("D", d), ("Q", q)], params: vec![] });
+                sel.push(q);
+            }
+            for c in 0..cols {
+                // data bit j of every row, then a multiplexer tree over the rows
+                let mut rows: Vec<Vec<Option<Bit>>> = vec![];
+                for r in 0..1usize << hi {
+                    let mut conns: Vec<(&'static str, Bit)> = vec![("CLKA", m.clk), ("CEA", Bit::C1), ("OCEA", Bit::C1), ("WEA", row_we[r]), ("RSTA", Bit::C0),
+                        ("CLKB", m.clk), ("CEB", rp.en), ("OCEB", Bit::C1), ("WEB", Bit::C0), ("RSTB", Bit::C0),
+                        ("CSA0", Bit::C0), ("CSA1", Bit::C0), ("CSA2", Bit::C0), ("CSB0", Bit::C0), ("CSB1", Bit::C0), ("CSB2", Bit::C0)];
+                    for i in 0..14 {
+                        conns.push((ADA[i], if i >= 3 { get(&m.waddr, i - 3) } else { Bit::C0 }));
+                        conns.push((ADB[i], if i >= 3 { get(&rp.addr, i - 3) } else { Bit::C0 }));
+                    }
+                    let mut outs = vec![];
+                    for d in 0..9 {
+                        let j = c * 9 + d;
+                        conns.push((DIA[d], get(&m.wdata, j)));
+                        let used = j < m.width && rp.data[j].is_some();
+                        let o = if !used { None } else if hi == 0 { rp.data[j] } else { Some(wire()) };
+                        if let Some(o) = o { conns.push((DOB[d], o)); }
+                        outs.push(o);
+                    }
+                    rows.push(outs);
+                    rams.push(Cell { typ: "DP16KD".into(), conns, params: vec![
+                        ("DATA_WIDTH_A", format!("{:032b}", 9)), ("DATA_WIDTH_B", format!("{:032b}", 9)),
+                        ("REGMODE_A", "NOREG".into()), ("REGMODE_B", "NOREG".into()), ("RESETMODE", "SYNC".into()),
+                        ("CSDECODE_A", "0b000".into()), ("CSDECODE_B", "0b000".into()),
+                        ("WRITEMODE_A", "NORMAL".into()), ("WRITEMODE_B", "NORMAL".into()), ("GSR", "DISABLED".into()),
+                        (crate::bram::SLOT, format!("{}:{}:{}:{}", m.name, pi, r, c))] });
+                }
+                if hi == 0 { continue; }
+                for d in 0..9 {
+                    let j = c * 9 + d;
+                    let Some(Some(y)) = (j < m.width).then(|| rp.data[j]) else { continue };
+                    let mut level: Vec<Bit> = rows.iter().map(|o| o[d].unwrap()).collect();
+                    for k in 0..hi {
+                        let last = k + 1 == hi;
+                        level = level.chunks(2).map(|p| {
+                            let o = if last { y } else { wire() };
+                            out.cells.push(Cell { typ: "$_MUX_".into(), conns: vec![("A", p[0]), ("B", p[1]), ("S", sel[k]), ("Y", o)], params: vec![] });
+                            o
+                        }).collect();
+                    }
+                }
+            }
+        }
+    }
+    (out, rams)
+}
+
+/// DP16KD in the shape `brams` makes: (write address, write data, read address, read enable, write enable)
+pub fn dp16kd_ports(get: impl Fn(&str) -> bool) -> (usize, u16, usize, bool, bool) {
+    let bus = |names: &[&str]| names.iter().enumerate().fold(0usize, |a, (k, p)| a | ((get(p) as usize) << k));
+    (bus(&ADA[3..]), bus(&DIA) as u16, bus(&ADB[3..]), get("CEB"), get("WEA") && get("CEA"))
+}
+
 /// parameters that are strings, not bit vectors (yosys JSON marks a string of 0 / 1 with a trailing space)
 pub fn is_string_param(cell: &str, k: &str) -> bool {
-    matches!(cell, "TRELLIS_FF" | "CCU2C") && !matches!(k, "INIT0" | "INIT1")
+    matches!(cell, "TRELLIS_FF" | "CCU2C" | "DP16KD") && !matches!(k, "INIT0" | "INIT1" | "DATA_WIDTH_A" | "DATA_WIDTH_B")
 }
 
 /// CCU2C outputs (S0, S1, COUT) from its inputs, as yosys' model computes them

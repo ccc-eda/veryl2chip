@@ -12,6 +12,8 @@
 | `sim/riscv_tests.sh` | 跑官方 riscv-tests |
 | `sim/spike_diff.sh` | 逐指令和 spike 比對 |
 | `sim/build_gates.sh` | veryl-eda 合成 `Rv64Core`，閘級網表（通用閘、ECP5、vlib、SKY130）放回同一個測試平台 |
+| `src/rv64fpga.veryl`、`sim/fpga.cpp`、`sim/build_fpga.sh` | `Rv64Fpga`：放得進 ECP5 的系統（block RAM、序列 UART），只用腳位的測試平台 |
+| `fpga/ecp5.sh`、`fpga/ulx3s.lpf` | `Rv64Fpga` → nextpnr-ecp5 佈局繞線 → 位元流（ULX3S 85F） |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
 | `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.c` | OpenSBI + Linux 6.12 + 只有一個程式的 initramfs |
@@ -134,6 +136,38 @@ OBJ=sim/obj_ecp5 verify/random.sh 1 100       # 隨機測試（和 spike 比）
 
 四種網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
 乘除法原本是組合邏輯（64 位元的乘法器與除法器，網表 13 萬個元件），改成 64 拍的反覆式後剩 6 萬個。
+
+## FPGA：佈局繞線之後再模擬
+
+`Rv64Soc` 的 256 MB RAM 放不進 FPGA，所以另外有 `Rv64Fpga`（`src/rv64fpga.veryl`）：
+
+- RAM 128 KB：8 個位元組通道的同步讀取記憶體（下一拍回應），合成成 64 顆 ECP5 的 `DP16KD` block RAM。
+- UART 是真的序列腳位（8N1，每位元 `CPB` 拍，預設 25 MHz / 115200）；CLINT、8 顆 LED、關機裝置；沒有 PLIC。
+- 程式從載入埠送進來：`i_ld = 1` 時核心停在重設，每拍一個位元組（先 4 個位元組的 tohost 位址，再從 0x8000_0000 開始的程式）。
+  程式寫 tohost 或關機裝置時 `o_halt = 1`、`o_code` 是寫入的值。
+
+同一個只用腳位的測試平台（`sim/fpga.cpp`）跑三種版本：
+
+```sh
+sim/build_fpga.sh rtl                                   # RTL
+sim/build_fpga.sh ecp5                                  # veryl-eda 的 ECP5 網表（LUT4、CCU2C、TRELLIS_FF、DP16KD）
+fpga/ecp5.sh                                            # v2c → nextpnr-ecp5（LFE5U-85F、ULX3S 腳位）→ ecppack
+sim/build_fpga.sh routed                                # nextpnr 繞線後的網表（TRELLIS_COMB、TRELLIS_FF、DP16KD）
+SIM=sim/obj_fpga_routed/rv64fpga sim/riscv_tests.sh 'rv64*-p-*'
+```
+
+| 版本 | 用量 | riscv-tests `-p` |
+|---|---|---|
+| RTL | | 110 / 110 |
+| ECP5 網表 | 31,399 LUT4、487 CCU2C、6,653 FF、64 DP16KD | 110 / 110 |
+| 繞線後 | 32,469 TRELLIS_COMB（85F 的 38 %）、6,653 FF、64 DP16KD（30 %） | 110 / 110 |
+
+- `-v` 的測試要 512 KB 的記憶體（測試環境的頁面散在前 512 KB），比 85F 全部的 block RAM 還多，所以只跑 `-p`。
+- 繞線後的網表：nextpnr 的 `--write` 輸出經過 `veryl-eda/fpga/ecp5_unio.py`（IO 與時脈緩衝器變成導線、沒接的 LUT 輸入讀 1、
+  DP16KD 被 nextpnr 改成參數的常數腳位接回來），yosys 寫成 Verilog，用 yosys 的 ECP5 元件模型模擬
+  （DP16KD 在 yosys 裡只有宣告，模型是 `veryl-eda/fpga/ecp5_dp16kd.v`）。
+- 時序：nextpnr 的 Fmax 約 12.7 MHz（ULX3S 的 25 MHz 不夠；關鍵路徑是 64 位元加法器的進位鏈加上繞線），
+  上板要用 PLL 降到 12.5 MHz，或改善時序；載入埠在板子上也還沒有接（之後換成 UART 載入器）。
 
 ## xv6
 

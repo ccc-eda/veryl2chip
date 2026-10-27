@@ -6,7 +6,7 @@
 //!
 //! Cells: yosys internal gates ($_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_, $_DFF_*,
 //! $_SDFF_*), iCE40 (SB_LUT4 SB_CARRY SB_DFF* SB_RAM40_4K), ECP5 (LUT4 CCU2C
-//! TRELLIS_FF) and the vlib standard cells of veryl-eda (INV ... DFFNS, SRAM macros).
+//! TRELLIS_FF DP16KD) and the vlib standard cells of veryl-eda (INV ... DFFNS, SRAM macros).
 
 use crate::elab::{Dir, Elab, Scope};
 use crate::expr::{Expr, LValue, Sel};
@@ -195,7 +195,7 @@ impl<'a> Elab<'a> {
                 continue;
             }
             match t {
-                "SB_RAM40_4K" | "SRAM" => self.gate_ram(c, prefix, &mut wires)?,
+                "SB_RAM40_4K" | "SRAM" | "DP16KD" => self.gate_ram(c, prefix, &mut wires)?,
                 _ => return Err(format!("gate-level simulation: unknown cell '{}'", t)),
             }
         }
@@ -228,11 +228,13 @@ impl<'a> Elab<'a> {
         let pin = |p: &str| c.conns.iter().find(|x| x.0 == p).map(|x| x.1).unwrap_or(Pin::C0);
         let param = |k: &str| c.params.iter().find(|x| x.0 == k).map(|x| usize::from_str_radix(&x.1, 2).unwrap_or(0)).unwrap_or(0);
         let ram = c.typ == "SB_RAM40_4K";
-        let (depth, width, abits) = if ram { let m = param("READ_MODE"); (256 << m, 16 >> m, 8 + m) } else { (param("DEPTH"), param("WIDTH"), param("ABITS")) };
+        // ECP5 DP16KD as veryl-eda uses it: 2048 × 9, port A writes (ADA13..3), port B reads (ADB13..3)
+        let dp = c.typ == "DP16KD";
+        let (depth, width, abits) = if ram { let m = param("READ_MODE"); (256 << m, 16 >> m, 8 + m) } else if dp { (2048, 9, 11) } else { (param("DEPTH"), param("WIDTH"), param("ABITS")) };
         let mode = param("READ_MODE");
         let data_pin = |d: usize| -> usize { match mode { 0 => d, 1 => 2 * d, 2 => 4 * d + 1, _ => 8 * d + 3 } };
-        let name = |p: &str, k: usize| if ram { format!("{}[{}]", p, k) } else { format!("{}[{}]", p, k) };
-        let (wd, rd, wa, ra) = if ram { ("WDATA", "RDATA", "WADDR", "RADDR") } else { ("WD", "RDATA", "WA", "RA") };
+        let name = |p: &str, k: usize| if !dp { format!("{}[{}]", p, k) } else if p.starts_with("AD") { format!("{}{}", p, k + 3) } else { format!("{}{}", p, k) };
+        let (wd, rd, wa, ra) = if ram { ("WDATA", "RDATA", "WADDR", "RADDR") } else if dp { ("DIA", "DOB", "ADA", "ADB") } else { ("WD", "RDATA", "WA", "RA") };
         let bus = |e: &mut Elab, wires: &mut HashMap<u32, usize>, p: &str, n: usize, map: &dyn Fn(usize) -> usize| -> Expr {
             Expr::Concat((0..n).rev().map(|k| (Expr::Num(Val::new(32, 1)), e.gw(wires, prefix, pin(&name(p, map(k)))))).collect())
         };
@@ -251,8 +253,11 @@ impl<'a> Elab<'a> {
             let (we, wce) = (g(self, wires, "WE"), g(self, wires, "WCLKE"));
             let (re, rce) = (g(self, wires, "RE"), g(self, wires, "RCLKE"));
             (bin("&", we, wce), bin("&", re, rce))
+        } else if dp {
+            let (we, ce) = (g(self, wires, "WEA"), g(self, wires, "CEA"));
+            (bin("&", we, ce), g(self, wires, "CEB"))
         } else { (g(self, wires, "WE"), g(self, wires, "RE")) };
-        let clk_pin = if ram { "RCLK" } else { "CK" };
+        let clk_pin = if ram { "RCLK" } else if dp { "CLKB" } else { "CK" };
         let clk = match g(self, wires, clk_pin) { Expr::Sig(s) => s, _ => return Ok(()) };
         // read register: one signal per data bit, then copied to the RDATA wires
         let rreg = self.sim.sigs.len();

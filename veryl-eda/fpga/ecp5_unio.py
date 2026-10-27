@@ -2,7 +2,8 @@
 """nextpnr-ecp5 --write output -> a netlist yosys' ECP5 models can read: the IO buffers
 (TRELLIS_IO, whose routed parameters the models do not know) and global clock buffers
 (DCCA) become wires and the unconnected LUT inputs of TRELLIS_COMB read 1 as in the
-slice, so the packed logic (TRELLIS_COMB / TRELLIS_FF / CCU2 halves) can be proven
+slice (and DP16KD's constant pins, which nextpnr turns into <PIN>MUX parameters, are
+connected again), so the packed logic (TRELLIS_COMB / TRELLIS_FF / CCU2 halves) can be proven
 equivalent to the mapped netlist. Every flip-flop's output gets the net name `ff<cell>`
 (nextpnr keeps the cell names), so yosys' equiv_make pairs the states of both netlists.
 usage: ecp5_unio.py routed.json out.json      (the routed netlist)
@@ -58,6 +59,24 @@ for name, c in cells.items():
         if not c['connections'].get('FCI'):
             c['connections']['FCI'] = ['0']
             c['port_directions']['FCI'] = 'input'
+    # DP16KD: nextpnr drops constant pins and sets <PIN>MUX instead ("0" / "1" constants,
+    # "INV" an inverted pin); an unconnected pin reads 1 in the block
+    if c['type'] == 'DP16KD':
+        for k in [k for k in c['parameters'] if k.endswith('MUX')]:
+            pin, v = k[:-3], c['parameters'].pop(k).strip()
+            conn = c['connections'].get(pin) or []
+            if v in ('0', '1'):
+                c['connections'][pin] = [v]
+            elif v == 'INV':
+                if conn:
+                    raise SystemExit('DP16KD %s: inverted connected pin %s not supported' % (name, pin))
+                c['connections'][pin] = ['0']
+            elif not conn:
+                c['connections'][pin] = ['1']
+            c['port_directions'][pin] = 'input'
+        for pin, d in list(c['port_directions'].items()):
+            if d == 'input' and not c['connections'].get(pin):
+                c['connections'][pin] = ['1']
     if c['type'] == 'TRELLIS_FF':
         mod['netnames']['ff' + name.replace('$', '_')] = {'hide_name': 0, 'bits': c['connections']['Q'], 'attributes': {}}
 for p in mod['ports'].values():

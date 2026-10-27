@@ -118,7 +118,8 @@ wrote counter.bit
 - `--config` 是繞好的文字設定（Project Trellis 格式），`--bit` 是位元流，用 `openFPGALoader -b ulx3s counter.bit` 燒錄。
 - `v2c gatesim ecp5` 用原本的 testbench 跑 ECP5 網表（第 8 章）。
 - 和 iCE40 不同：reset 值是 1 的正反器，上電時就是 1（iCE40 全部上電為 0）。
-- 目前還沒有：block RAM（記憶體會變成正反器，所以 RvBoard 的 8 KB 記憶體還放不進去）、乘法器、自己的 ECP5 佈局繞線、虛擬板。
+- 同步讀取的記憶體（例如 `SyncRam`）變成 block RAM `DP16KD`（v2.9；每顆 2048 × 9 位元，85F 有 208 顆）。
+- 目前還沒有：乘法器、自己的 ECP5 佈局繞線、虛擬板。
 
 ## 限制
 

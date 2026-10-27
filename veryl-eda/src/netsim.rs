@@ -9,7 +9,7 @@ pub struct NetSim<'n> {
     v: HashMap<u32, bool>,
     /// SB_RAM40_4K contents (256 × 16 bits), by cell index
     ram: HashMap<usize, Vec<u16>>,
-    /// SRAM macro contents, by cell index
+    /// SRAM macro (and ECP5 DP16KD) contents, by cell index
     sram: HashMap<usize, Vec<u128>>,
 }
 
@@ -89,7 +89,7 @@ impl<'n> NetSim<'n> {
     pub fn settle(&mut self) {
         for _ in 0..4 {
             for c in &self.nl.cells {
-                if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" { continue; }
+                if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" || c.typ == "DP16KD" { continue; }
                 if c.typ == "CCU2C" {
                     let (s0, s1, co) = crate::ecp5::ccu2c(c, |p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
                     for (p, v) in [("S0", s0), ("S1", s1), ("COUT", co)] {
@@ -158,15 +158,15 @@ impl<'n> NetSim<'n> {
     /// clock pin and active edge (true = rising) of a sequential cell
     fn clock_of(c: &Cell) -> Option<(Bit, bool)> {
         let t = c.typ.as_str();
-        let pin = ["C", "CK", "RCLK", "CLK"].iter().find_map(|p| c.port(p))?;
+        let pin = ["C", "CK", "RCLK", "CLK", "CLKB"].iter().find_map(|p| c.port(p))?;
         let rising = match t {
             "TRELLIS_FF" => c.params.iter().all(|x| !(x.0 == "CLKMUX" && x.1 == "INV")),
-            "SB_RAM40_4K" | "SRAM" => true,
+            "SB_RAM40_4K" | "SRAM" | "DP16KD" => true,
             _ if t.starts_with("SB_DFFN") || t.starts_with("DFFN") => false,
             _ if t.starts_with("$_DFF_N") || t.starts_with("$_SDFF_N") => false,
             _ => true,
         };
-        (c.is_ff() || t == "SB_RAM40_4K" || t == "SRAM").then_some((pin, rising))
+        (c.is_ff() || t == "SB_RAM40_4K" || t == "SRAM" || t == "DP16KD").then_some((pin, rising))
     }
 
     /// one full cycle (rise, then fall) of the input clock `clk`: only the
@@ -248,6 +248,17 @@ impl<'n> NetSim<'n> {
                 }
             }
             if we { mem[wa] = wd; }
+        }
+        // ECP5 DP16KD as ecp5::brams uses it (2048 × 9, port A writes, port B reads)
+        for (i, c) in self.nl.cells.iter().enumerate().filter(|(i, c)| c.typ == "DP16KD" && sel[*i]) {
+            let (wa, wd, ra, re, we) = crate::ecp5::dp16kd_ports(|p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
+            let mem = self.sram.entry(i).or_insert_with(|| vec![0; 2048]);
+            if re {
+                for (k, p) in crate::ecp5::DOB.iter().enumerate() {
+                    if let Some(Bit::W(w)) = c.port(p) { next_ram.push((w, (mem[ra] >> k) & 1 == 1)); }
+                }
+            }
+            if we { mem[wa] = wd as u128; }
         }
         for (w, d) in next { self.v.insert(w, d); }
         for (w, d) in next_ram { self.v.insert(w, d); }

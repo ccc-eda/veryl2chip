@@ -1,0 +1,28 @@
+# Rv64Fpga on a ULX3S (LFE5U-85F, CABGA381): 25 MHz clock, PWRON button as reset
+# (pressed = 0 = reset), the 8 LEDs, the FTDI UART. The loader pins (i_ld*) and
+# o_halt / o_code have no pins on the board and are left to the placer.
+LOCATE COMP "i_clk" SITE "G2";
+IOBUF PORT "i_clk" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "i_clk" 25 MHZ;
+LOCATE COMP "i_rst" SITE "D6";
+IOBUF PORT "i_rst" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "o_tx" SITE "L4";
+IOBUF PORT "o_tx" IO_TYPE=LVCMOS33;
+LOCATE COMP "i_rx" SITE "M1";
+IOBUF PORT "i_rx" IO_TYPE=LVCMOS33;
+LOCATE COMP "o_led[0]" SITE "B2";
+LOCATE COMP "o_led[1]" SITE "C2";
+LOCATE COMP "o_led[2]" SITE "C1";
+LOCATE COMP "o_led[3]" SITE "D2";
+LOCATE COMP "o_led[4]" SITE "D1";
+LOCATE COMP "o_led[5]" SITE "E2";
+LOCATE COMP "o_led[6]" SITE "E1";
+LOCATE COMP "o_led[7]" SITE "H3";
+IOBUF PORT "o_led[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[2]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[3]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[4]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[5]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[6]" IO_TYPE=LVCMOS33;
+IOBUF PORT "o_led[7]" IO_TYPE=LVCMOS33;

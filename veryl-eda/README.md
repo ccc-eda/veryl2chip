@@ -72,12 +72,13 @@ The output is yosys JSON for nextpnr-ecp5; placement, routing and the bitstream 
 | `LUT4` | the same cut-based 4-LUT covering as for iCE40 (depth first, area-flow recovery); bit `{D,C,B,A}` of `INIT` is the output |
 | `CCU2C` | full-adder carry chains. A CCU2C has two halves: two neighbouring bits whose carry only goes to the next bit share one (bit i in the first half, bit i+1 in the second, `INIT = 0x96AA` as yosys uses); otherwise the second half only passes the carry on (`INIT1 = 0xFFFF`) so the carry can leave the chain. The sums (`S0` / `S1`) come from the CCU2C too; a COUT feeds at most one CIN, others get it through a buffer LUT (nextpnr adds the feed-in / feed-out) |
 | `TRELLIS_FF` | clock polarity (`CLKMUX`), reset polarity (`LSRMUX`), synchronous / asynchronous (`SRMODE`) and the reset value (`REGSET`) are muxes in the slice: no inverting LUTs |
+| `DP16KD` | memories with synchronous reads (v2.9, found the same way as iCE40 block RAM): 2048 × 9 blocks, port A writes, port B reads (`CEB` = read enable); wider words use blocks side by side, deeper memories several rows with the write enable decoded from the upper address bits and the read data chosen by them (registered with the read) |
 
 - `--device` defaults to `85k` and `--package` to `CABGA381` (ULX3S); `--lpf` is the pin file (`LOCATE COMP "port" SITE "pin";`, `IOBUF PORT ... IO_TYPE=LVCMOS33;`);
   without one nextpnr places the IOs itself (`--lpf-allow-unconstrained`). `--config` is the routed Trellis text configuration, `--bit` the bitstream (for `openFPGALoader` / `ecpprog`).
 - The final utilisation from nextpnr (`TRELLIS_COMB` = LUTs and carries, `TRELLIS_FF`, `TRELLIS_IO`) and each clock's Fmax are printed (`-v` adds the critical path).
 - **Power-up**: ECP5 flip-flops power up at their `REGSET` value, so a flip-flop with reset value 1 starts at 1 (on iCE40 everything starts at 0); this only differs before the first reset.
-- Not yet: block RAM (`DP16KD`; memories are flip-flops for now), multipliers (`MULT18X18D`), `PFUMX` / `L6MUX21` (5- and 6-input functions), an own ECP5 place & route.
+- Not yet: multipliers (`MULT18X18D`), `PFUMX` / `L6MUX21` (5- and 6-input functions), an own ECP5 place & route.
 
 Verification: `cargo test` runs every example's testbench scenarios on the ECP5 netlists (netsim models `CCU2C` and `TRELLIS_FF` after yosys's `cells_sim.v`);
 `test.sh` runs `--gatesim ecp5` and nextpnr-ecp5 + ecppack on every design, and proves the ECP5 netlist equivalent to `veryl build` with yosys's ECP5 cell models;
@@ -262,7 +263,7 @@ Tests: `bin → asc → bin` is identity; the decoded bitstreams of 11 designs (
 | `elab.rs`    | syntax tree → name-based statement IR → **symbolic execution** into gates: if becomes a mux chain, case with constant labels a parallel one-hot, for loops unrolled, functions inlined, always_ff to DFF/reset, hierarchy flattened |
 | `netlist.rs` | bit-level builder (constant folding, structural hashing, simplifications like `x & !x`, balanced reduction trees), add/sub/mul, compare, barrel shifts, dynamic indexing; `optimize` resolves aliases, detects combinational loops, rebuilds, sweeps dead logic, and repeats: **proving constant nodes** (candidates from random simulation, exhaustive proof over supports of ≤ 16 inputs) and **removing registers stuck at 0** |
 | `ice40.rs`   | iCE40 mapping: full-adder carries → `SB_CARRY` chains; the rest covered by cut-based 4-LUTs (depth first, then area flow); DFF → `SB_DFF[N][S]{R,S}`, active-low resets get an inverting LUT |
-| `ecp5.rs`    | ECP5 mapping: the same LUT covering → `LUT4`; carries and sums → `CCU2C` (two bits per cell); DFF → `TRELLIS_FF` |
+| `ecp5.rs`    | ECP5 mapping: the same LUT covering → `LUT4`; carries and sums → `CCU2C` (two bits per cell); DFF → `TRELLIS_FF`; memories → `DP16KD` |
 | `output.rs`  | yosys JSON, structural Verilog (with iCE40 primitive instances) |
 | `netsim.rs`  | a 2-state gate-level simulator (for the tests; generic gates, iCE40, ECP5 and standard cells) |
 

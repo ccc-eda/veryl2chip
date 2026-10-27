@@ -29,8 +29,10 @@ pub struct Cell {
     pub params: Vec<(&'static str, String)>,
 }
 
-/// output pins (generic, iCE40, vlib cells; SKY130 X / LO / HI in exported netlists; ECP5 Z, S0, S1, COUT)
-pub fn is_out(p: &str) -> bool { matches!(p, "Y" | "Q" | "O" | "CO" | "X" | "LO" | "HI" | "Z" | "S0" | "S1" | "COUT") || p.starts_with("RDATA") }
+/// output pins (generic, iCE40, vlib cells; SKY130 X / LO / HI in exported netlists; ECP5 Z, S0, S1, COUT, DOA*, DOB*)
+pub fn is_out(p: &str) -> bool {
+    matches!(p, "Y" | "Q" | "O" | "CO" | "X" | "LO" | "HI" | "Z" | "S0" | "S1" | "COUT") || p.starts_with("RDATA") || p.starts_with("DOA") || p.starts_with("DOB")
+}
 
 impl Cell {
     pub fn out(&self) -> Bit {

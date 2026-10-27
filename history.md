@@ -28,7 +28,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.5 | 2026-10-27 | `02a22ef` | 2.5.0：C 擴充（壓縮指令）、每個指令 2 拍 | |
 | v2.6 | 2026-10-27 | `c5a1723` | 2.6.0：Linux 在 `Rv64Core` 上開機 | |
 | v2.7 | 2026-10-27 | `6149049` | 2.7.0：隨機指令測試與中斷測試 | |
-| v2.8 | 2026-10-27 | （本版） | 2.8.0：veryl-eda 合成 `Rv64Core`，閘級網表在 Verilator 上通過測試 | |
+| v2.8 | 2026-10-27 | `70cf899` | 2.8.0：veryl-eda 合成 `Rv64Core`，閘級網表在 Verilator 上通過測試 | |
+| v2.9 | 2026-10-27 | （本版） | 2.9.0：ECP5 block RAM，`Rv64Fpga` 經 nextpnr-ecp5 佈局繞線，繞線後的網表通過測試 | |
 
 ---
 
@@ -283,6 +284,21 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   用 yosys 的 ECP5 元件模型）、`vlib`（64,988 個標準元件）、`sky130`（59,243 個 sky130_fd_sc_hd 元件）。
 - 結果：四種網表都通過 196 支 riscv-tests；通用閘網表另外跑 300 支隨機程式（和 spike 相同）、中斷測試 10 項、Linux 開機（1.2 億拍和 RTL 完全相同，Verilator 上 23 分鐘，RTL 是 50 秒）。
   RTL 版的整套回歸（含 xv6）也重跑通過。
+
+### v2.9：Rv64 在 FPGA 上佈局繞線
+
+- `examples/rv64/src/rv64fpga.veryl`：`Rv64Fpga`，放得進 LFE5U-85F 的系統。RAM 128 KB（8 個位元組通道的同步讀取記憶體，
+  下一拍回應）、序列 UART、CLINT、LED、關機裝置；程式與 tohost 位址從載入埠一拍一個位元組送進來。
+  `sim/fpga.cpp` 是只用腳位的測試平台（解 UART 的序列資料、看 `o_halt` / `o_code`）。
+- veryl-eda 的 ECP5 對應加上 block RAM：同步讀取的記憶體（和 iCE40 同一套 `bram::find_mems`）變成 `DP16KD`
+  （2048 × 9，A 埠寫、B 埠讀；更深的記憶體分列，寫入致能由高位址解碼、讀出由暫存的高位址選擇）。netsim 與 veryl-sim 的
+  `gates.rs` 都有它的模型；yosys 的 `cells_sim.v` 只宣告 DP16KD，Verilator 用 `veryl-eda/fpga/ecp5_dp16kd.v`。
+- `fpga/ecp5.sh`：v2c → nextpnr-ecp5（ULX3S 腳位 `fpga/ulx3s.lpf`）→ ecppack。用量 32,469 TRELLIS_COMB（38 %）、6,653 FF、
+  64 DP16KD（30 %）；Fmax 12.7 MHz（板子的 25 MHz 不夠，關鍵路徑是 64 位元加法的進位鏈加上繞線）。
+- 繞線後的網表：nextpnr 把 DP16KD 的常數腳位拿掉改成 `*MUX` 參數，`ecp5_unio.py` 把它們接回來（沒接的腳讀 1、`INV` 反相），
+  yosys 寫成 Verilog 給 Verilator。RTL、ECP5 網表、繞線後的網表都通過 110 支 `-p` riscv-tests
+  （`-v` 的測試要 512 KB，比 85F 的 block RAM 還多）。
+- ASIC（veryl-eda 自己的佈局繞線）跑 `Rv64Core` 時全域繞線太慢，移到 v2.10。
 
 ---
 

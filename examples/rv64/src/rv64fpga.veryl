@@ -1,0 +1,386 @@
+// ==========================================
+// Rv64Fpga：放得進 FPGA 的 Rv64Core 系統（佈局繞線用）
+// ==========================================
+// 和 Rv64Soc 的差別：RAM 是同步讀取的 block RAM（8 個位元組通道，下一拍回應）、UART 是真的序列腳位、
+// 沒有 PLIC；程式從載入埠一個位元組一個位元組送進來（板子上換成 SPI flash 或 UART 的載入器）。
+//   0x0010_0000  關機 ：寫非 0 的值 → o_halt = 1、o_code = 值的低 16 位元（0x5555 = 通過）
+//   0x0200_0000  CLINT：msip、mtimecmp、mtime（和 Rv64Soc 相同）
+//   0x1000_0000  UART ：16550 的子集（THR / RBR、IER、LSR；沒有中斷），每位元 CPB 拍、8N1
+//   0x1000_1000  LED  ：寫入低 8 位元
+//   0x8000_0000  RAM  ：2^(MEM_AW + 3) 位元組（預設 128 KB）
+// tohost（riscv-tests 的慣例）：寫入載入時給的 tohost 位址（非 0 的值）也停下來，o_code = 值的低 16 位元（1 = 通過）。
+//
+// 載入：i_ld = 1 時核心停在重設，每一拍 i_ld_valid = 1 收一個位元組：前 4 個是 tohost 位址（小端序，0 = 沒有），
+// 接著是從 0x8000_0000 開始的程式。i_ld 放掉後核心從 0x8000_0000 開始跑。
+
+module Rv64Fpga #(
+    param MEM_AW: u32 = 14 , // RAM 的 64 位元字數 = 2^MEM_AW（14 = 128 KB）
+    param CPB   : u32 = 217, // UART 每位元幾拍（25 MHz / 115200）
+) (
+    i_clk     : input  clock   ,
+    i_rst     : input  reset   ,
+    i_ld      : input  logic   ,
+    i_ld_valid: input  logic   ,
+    i_ld_data : input  logic<8>,
+    i_rx      : input  logic   ,
+    o_tx      : output logic   ,
+    o_led     : output logic<8>,
+    o_halt    : output logic   ,
+    o_code    : output logic<16>,
+) {
+    var req  : logic    ;
+    var we   : logic    ;
+    var addr : logic<64>;
+    var size : logic<2> ;
+    var wdata: logic<64>;
+    var ack  : logic    ;
+    var err  : logic    ;
+    var rdata: logic<64>;
+    var mtip : logic    ;
+    var msip : logic    ;
+    var mtime: logic<64>;
+
+    // 核心在 i_rst 或載入時重設（重設是低態有效）
+    var core_rst: reset;
+    assign core_rst = i_rst && !i_ld;
+
+    inst u_core: Rv64Core (
+        i_clk                 ,
+        i_rst       : core_rst,
+        o_req       : req     ,
+        o_we        : we      ,
+        o_addr      : addr    ,
+        o_size      : size    ,
+        o_wdata     : wdata   ,
+        i_ack       : ack     ,
+        i_err       : err     ,
+        i_rdata     : rdata   ,
+        i_mtip      : mtip    ,
+        i_msip      : msip    ,
+        i_meip      : 1'b0    ,
+        i_seip      : 1'b0    ,
+        i_mtime     : mtime   ,
+        o_ret       : _       ,
+        o_ret_pc    : _       ,
+        o_ret_insn  : _       ,
+        o_ret_we    : _       ,
+        o_ret_rd    : _       ,
+        o_ret_wdata : _       ,
+        o_ret_prv   : _       ,
+        o_trap      : _       ,
+        o_trap_cause: _       ,
+    );
+
+    // 位址解碼；所有的存取都在下一拍回應（go = 請求的第一拍）
+    let sel_ram  : logic = addr[63:31] == 33'd1 && addr[30:MEM_AW + 3] == '0;
+    let sel_clint: logic = addr[63:16] == 48'h0000_0000_0200;
+    let sel_uart : logic = addr[63:8] == 56'h00_0000_0010_0000;
+    let sel_led  : logic = addr[63:8] == 56'h00_0000_0010_0010;
+    let sel_test : logic = addr[63:12] == 52'h0_0000_0000_0100;
+    var ack_r    : logic;
+    let go       : logic = req && !ack_r;
+
+    var bmask: logic<64>;
+    always_comb {
+        case size {
+            2'd0   : bmask = 64'h0000_0000_0000_00ff;
+            2'd1   : bmask = 64'h0000_0000_0000_ffff;
+            2'd2   : bmask = 64'h0000_0000_ffff_ffff;
+            default: bmask = 64'hffff_ffff_ffff_ffff;
+        }
+    }
+    var bytes: logic<8>; // 存取寬度涵蓋的位元組
+    always_comb {
+        case size {
+            2'd0   : bytes = 8'h01;
+            2'd1   : bytes = 8'h03;
+            2'd2   : bytes = 8'h0f;
+            default: bytes = 8'hff;
+        }
+    }
+    let lane: logic<6> = {addr[2:0], 3'b000};
+    let hi  : logic    = addr[2];
+
+    // ---------------------------------------------------------------- 載入
+    var ld_cnt : logic<MEM_AW + 5>; // 收到的位元組數
+    var tohost : logic<32>;
+    let ld_prog: logic = i_ld && i_ld_valid && ld_cnt >= 4;
+    let ld_pos : logic<MEM_AW + 3> = ld_cnt[MEM_AW + 2:0] - 4;
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            ld_cnt = 0;
+            tohost = 32'd0;
+        } else if i_ld && i_ld_valid {
+            ld_cnt = ld_cnt + 1;
+            if ld_cnt <: 4 {
+                tohost = {i_ld_data, tohost[31:8]};
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- RAM（8 個位元組通道）
+    var ram_we   : logic<8>;
+    var ram_waddr: logic<MEM_AW>;
+    var ram_wdata: logic<64>;
+    var ram_rdata: logic<64>;
+    let ram_go   : logic = go && sel_ram;
+    always_comb {
+        if i_ld {
+            ram_we    = if ld_prog ? 8'd1 << ld_pos[2:0] : 8'd0;
+            ram_waddr = ld_pos[MEM_AW + 2:3];
+            ram_wdata = {i_ld_data, i_ld_data, i_ld_data, i_ld_data, i_ld_data, i_ld_data, i_ld_data, i_ld_data};
+        } else {
+            ram_we    = if ram_go && we ? bytes << addr[2:0] : 8'd0;
+            ram_waddr = addr[MEM_AW + 2:3];
+            ram_wdata = wdata << lane;
+        }
+    }
+    for i in 0..8 :lanes {
+        inst u_ram: Rv64Ram #(AW: MEM_AW) (
+            i_clk                             ,
+            i_we   : ram_we[i]                ,
+            i_waddr: ram_waddr                ,
+            i_wdata: ram_wdata[i * 8+:8]      ,
+            i_raddr: addr[MEM_AW + 2:3]       ,
+            o_rdata: ram_rdata[i * 8+:8]      ,
+        );
+    }
+
+    // ---------------------------------------------------------------- CLINT
+    var mtimecmp : logic<64>;
+    var msip_r   : logic    ;
+    let clint_off: logic<16> = addr[15:0];
+    var clint_rd : logic<64>;
+    always_comb {
+        if clint_off[15:3] == 13'h17ff {
+            clint_rd = if size == 2'd3 ? mtime : if hi ? {32'd0, mtime[63:32]} : {32'd0, mtime[31:0]};
+        } else if clint_off[15:3] == 13'h0800 {
+            clint_rd = if size == 2'd3 ? mtimecmp : if hi ? {32'd0, mtimecmp[63:32]} : {32'd0, mtimecmp[31:0]};
+        } else if clint_off == 16'h0000 {
+            clint_rd = {63'd0, msip_r};
+        } else {
+            clint_rd = 64'd0;
+        }
+    }
+    assign mtip = mtime >= mtimecmp;
+    assign msip = msip_r;
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            mtime    = 64'd0;
+            mtimecmp = 64'hffff_ffff_ffff_ffff;
+            msip_r   = 1'b0;
+        } else {
+            mtime = mtime + 64'd1;
+            if go && sel_clint && we {
+                if clint_off[15:3] == 13'h0800 {
+                    if size == 2'd3 {
+                        mtimecmp = wdata;
+                    } else if hi {
+                        mtimecmp[63:32] = wdata[31:0];
+                    } else {
+                        mtimecmp[31:0] = wdata[31:0];
+                    }
+                } else if clint_off[15:3] == 13'h17ff {
+                    if size == 2'd3 {
+                        mtime = wdata;
+                    } else if hi {
+                        mtime[63:32] = wdata[31:0];
+                    } else {
+                        mtime[31:0] = wdata[31:0];
+                    }
+                } else if clint_off == 16'h0000 {
+                    msip_r = wdata[0];
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- UART（序列埠，8N1）
+    let u_off  : logic<3> = addr[2:0];
+    let u_wr   : logic    = go && sel_uart && we;
+    let u_rd   : logic    = go && sel_uart && !we;
+    var uart_ier: logic<4>;
+    var uart_lcr: logic<8>;
+    var uart_scr: logic<8>;
+    var uart_dll: logic<8>;
+    var uart_dlm: logic<8>;
+    let dlab   : logic = uart_lcr[7];
+    // 送出
+    var tx_busy: logic    ;
+    var tx_sh  : logic<9> ; // {資料, 起始位元}，最低位元先送
+    var tx_n   : logic<4> ; // 還要送的位元數（含停止位元）
+    var tx_cnt : logic<16>;
+    // 收到
+    var rx_s   : logic<2> ; // 同步器
+    var rx_busy: logic    ;
+    var rx_n   : logic<4> ;
+    var rx_cnt : logic<16>;
+    var rx_sh  : logic<8> ;
+    var rx_full: logic    ;
+    var rx_byte: logic<8> ;
+
+    var uart_rd: logic<8>;
+    always_comb {
+        case u_off {
+            3'd0   : uart_rd = if dlab ? uart_dll : rx_byte;
+            3'd1   : uart_rd = if dlab ? uart_dlm : {4'd0, uart_ier};
+            3'd2   : uart_rd = 8'h01; // 沒有中斷
+            3'd3   : uart_rd = uart_lcr;
+            3'd5   : uart_rd = {1'b0, !tx_busy, !tx_busy, 4'd0, rx_full}; // TEMT、THRE、DR
+            3'd7   : uart_rd = uart_scr;
+            default: uart_rd = 8'h00;
+        }
+    }
+    const BIT_LAST: logic<16> = CPB - 1;           // 一個位元的最後一拍
+    const RX_FIRST: logic<16> = CPB + CPB / 2 - 2; // 起始位元之後到第一個資料位元的中間
+    let tx_start: logic = u_wr && u_off == 3'd0 && !dlab && !tx_busy;
+
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            uart_ier = 4'd0;
+            uart_lcr = 8'd0;
+            uart_scr = 8'd0;
+            uart_dll = 8'd0;
+            uart_dlm = 8'd0;
+            tx_busy  = 1'b0;
+            tx_sh    = 9'h1ff;
+            tx_n     = 4'd0;
+            tx_cnt   = 16'd0;
+            rx_s     = 2'b11;
+            rx_busy  = 1'b0;
+            rx_n     = 4'd0;
+            rx_cnt   = 16'd0;
+            rx_sh    = 8'd0;
+            rx_full  = 1'b0;
+            rx_byte  = 8'd0;
+        } else {
+            if u_wr {
+                case u_off {
+                    3'd0   : if dlab {
+                        uart_dll = wdata[7:0];
+                    }
+                    3'd1   : if dlab {
+                        uart_dlm = wdata[7:0];
+                    } else {
+                        uart_ier = wdata[3:0];
+                    }
+                    3'd3   : uart_lcr = wdata[7:0];
+                    3'd7   : uart_scr = wdata[7:0];
+                    default: {}
+                }
+            }
+            // 送出：起始位元、8 個資料位元、停止位元
+            if tx_start {
+                tx_busy = 1'b1;
+                tx_sh   = {wdata[7:0], 1'b0};
+                tx_n    = 4'd10;
+                tx_cnt  = BIT_LAST;
+            } else if tx_busy {
+                if tx_cnt == 16'd0 {
+                    tx_cnt = BIT_LAST;
+                    tx_sh  = {1'b1, tx_sh[8:1]};
+                    tx_n   = tx_n - 4'd1;
+                    if tx_n == 4'd1 {
+                        tx_busy = 1'b0;
+                    }
+                } else {
+                    tx_cnt = tx_cnt - 16'd1;
+                }
+            }
+            // 收到：起始位元的下降緣之後半個位元取樣，再每 CPB 拍取一個位元
+            rx_s = {rx_s[0], i_rx};
+            if !rx_busy {
+                if !rx_s[1] {
+                    rx_busy = 1'b1;
+                    rx_n    = 4'd9;
+                    rx_cnt  = RX_FIRST;
+                }
+            } else if rx_cnt == 16'd0 {
+                rx_cnt = BIT_LAST;
+                rx_n   = rx_n - 4'd1;
+                if rx_n == 4'd1 {
+                    rx_busy = 1'b0; // 停止位元
+                    rx_full = 1'b1;
+                    rx_byte = rx_sh;
+                } else {
+                    rx_sh = {rx_s[1], rx_sh[7:1]};
+                }
+            } else {
+                rx_cnt = rx_cnt - 16'd1;
+            }
+            if u_rd && u_off == 3'd0 && !dlab {
+                rx_full = 1'b0;
+            }
+        }
+    }
+    assign o_tx = tx_sh[0];
+
+    // ---------------------------------------------------------------- LED、關機、tohost
+    var led : logic<8> ;
+    var halt: logic    ;
+    var code: logic<16>;
+    let tohost_hit: logic = go && we && sel_ram && tohost != 32'd0 && addr[31:0] == tohost && wdata != 64'd0;
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            led  = 8'd0;
+            halt = 1'b0;
+            code = 16'd0;
+        } else {
+            if go && sel_led && we {
+                led = wdata[7:0];
+            }
+            if !halt && (go && sel_test && we && addr[11:0] == 12'h000 && wdata[15:0] != 16'h0000 || tohost_hit) {
+                halt = 1'b1;
+                code = wdata[15:0];
+            }
+        }
+    }
+    assign o_led  = led;
+    assign o_halt = halt;
+    assign o_code = code;
+
+    // ---------------------------------------------------------------- 回應
+    var err_r : logic    ;
+    var dev_r : logic<64>;
+    var ram_r : logic    ;
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            ack_r = 1'b0;
+            err_r = 1'b0;
+            ram_r = 1'b0;
+            dev_r = 64'd0;
+        } else {
+            ack_r = go;
+            err_r = go && !(sel_ram || sel_clint || sel_uart || sel_led || sel_test);
+            ram_r = sel_ram;
+            dev_r = if sel_clint ? clint_rd : if sel_uart ? {56'd0, uart_rd} : 64'd0;
+        }
+    }
+    assign ack   = ack_r;
+    assign err   = err_r;
+    // 核心在 ack 之前不改位址：RAM 的讀出值依現在的位址移位
+    assign rdata = if ram_r ? (ram_rdata >> lane) & bmask : dev_r;
+}
+
+// 一個位元組通道：同步讀取（下一拍出來），合成到 FPGA 時是 block RAM
+module Rv64Ram #(
+    param AW: u32 = 14,
+) (
+    i_clk  : input  clock    ,
+    i_we   : input  logic    ,
+    i_waddr: input  logic<AW>,
+    i_wdata: input  logic<8> ,
+    i_raddr: input  logic<AW>,
+    o_rdata: output logic<8> ,
+) {
+    var mem: logic<8> [1 << AW];
+
+    #[allow(missing_reset_statement)]
+    always_ff (i_clk) {
+        if i_we {
+            mem[i_waddr] = i_wdata;
+        }
+        o_rdata = mem[i_raddr];
+    }
+}

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Rv64Core regression on Verilator: riscv-tests, random tests vs spike, the interrupt tests,
-# Linux (when linux/build exists) and, with --xv6, xv6 (a few minutes more).
-#   ./test.sh [--xv6] [--seeds N]
+# Linux (when linux/build exists), the FPGA system Rv64Fpga (RTL; with --fpga also its ECP5 netlist and,
+# after nextpnr-ecp5, the routed netlist: about 20 minutes more) and, with --xv6, xv6 (a few minutes more).
+#   ./test.sh [--xv6] [--fpga] [--seeds N]
 set -uo pipefail
 cd "$(dirname "$0")"
 [ -d /Users/Shared/ccc/oss-cad-suite/bin ] && export PATH=/Users/Shared/ccc/oss-cad-suite/bin:$PATH
-XV6=false; SEEDS=30
+XV6=false; FPGA=false; SEEDS=30
 while [ $# -gt 0 ]; do
-    case $1 in --xv6) XV6=true ;; --seeds) SEEDS=$2; shift ;; *) echo "usage: $0 [--xv6] [--seeds N]"; exit 2 ;; esac
+    case $1 in --xv6) XV6=true ;; --fpga) FPGA=true ;; --seeds) SEEDS=$2; shift ;; *) echo "usage: $0 [--xv6] [--fpga] [--seeds N]"; exit 2 ;; esac
     shift
 done
 fail=0
@@ -21,10 +22,15 @@ irq() {
 }
 step "interrupt tests" irq
 if [ -f linux/build/opensbi/platform/generic/firmware/fw_payload.bin ]; then
-    step "Linux" bash -c './linux/test.sh | tail -2'
+    step "Linux" bash -c 'set -o pipefail; ./linux/test.sh | tail -2'
 else
     echo "== Linux: skipped (linux/build.sh first)"
 fi
-if $XV6; then step "xv6" bash -c './xv6/test.sh | tail -2'; fi
+step "Rv64Fpga (RTL)" bash -c 'set -o pipefail; ./sim/build_fpga.sh rtl > /dev/null && SIM=sim/obj_fpga_rtl/rv64fpga ./sim/riscv_tests.sh "rv64*-p-*" | tail -1'
+if $FPGA; then
+    step "Rv64Fpga (ECP5 netlist)" bash -c 'set -o pipefail; ./sim/build_fpga.sh ecp5 > /dev/null && SIM=sim/obj_fpga_ecp5/rv64fpga ./sim/riscv_tests.sh "rv64*-p-*" | tail -1'
+    step "Rv64Fpga (nextpnr-ecp5, routed netlist)" bash -c 'set -o pipefail; ./fpga/ecp5.sh && ./sim/build_fpga.sh routed > /dev/null && SIM=sim/obj_fpga_routed/rv64fpga ./sim/riscv_tests.sh "rv64*-p-*" | tail -1'
+fi
+if $XV6; then step "xv6" bash -c 'set -o pipefail; ./xv6/test.sh | tail -2'; fi
 [ $fail = 0 ] && echo "== all passed" || echo "== FAILED"
 exit $fail
