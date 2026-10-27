@@ -59,3 +59,57 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 | v2.0 | M28 | 文件、全面回歸、發布 2.0.0 | npm test、cargo test、test.sh |
 
 每個 M 完成就 commit。
+
+### 往 v3.0：RV64 + SV39 與 ECP5（規劃中）
+
+目標：一顆用 Veryl 寫的 **RV64IMA + Zicsr、M / S / U 三種模式、SV39 虛擬記憶體**的 CPU，
+放進 Lattice **ECP5** FPGA，跑 **xv6-riscv**（有分頁、行程、檔案系統的教學作業系統）。
+iCE40UP5K 放不下（現在 RV32IMA 的 `RvCore` 已經用掉 3817 / 5280 個 LUT4，RV64 + SV39 估計要 1–1.5 萬），也沒有外部 RAM。
+
+**板子：ULX3S**（LFE5U-85F，另有 12F / 25F / 45F；32 MB SDR SDRAM、25 MHz 時脈、8 顆 LED、7 個按鈕、
+FTDI USB 序列埠、SD 卡、HDMI 接頭；開源硬體）。核心的目標是 25F 也放得下（≤ 2.4 萬 LUT4）。
+
+**工具**（OSS CAD Suite 都已經有）：
+
+| 工具 | 用途 |
+|---|---|
+| `nextpnr-ecp5`、`ecppack` | 佈局繞線與位元流（Project Trellis） |
+| `ecpunpack` | 位元流 → 文字設定，用來檢查 |
+| `openFPGALoader` | 燒錄 |
+| yosys `share/ecp5/cells_sim.v` | 元件模型：閘級模擬與形式等價的標準答案 |
+| `spike` | 參考模擬器，`--isa=rv64imac_zicsr -p1`，含 SV39 |
+| `qemu-system-riscv64` | 原版 xv6 的參考執行 |
+| `riscv64-unknown-elf-gcc` | 編譯 xv6、測試程式 |
+
+**策略**：
+- 和 iCE40 一樣，**先串外部工具（nextpnr-ecp5），自己的佈局繞線之後再說**。ECP5 的 Trellis 資料庫很大（85F 數百 MB），
+  不適合放進網頁。
+- CPU 先在**指令集模擬器**與 RTL 模擬上做對（跟 spike 逐指令比對），再上 FPGA。
+- 虛擬板的 CPU 模式用 RV64 ISS，所以 **xv6 可以在瀏覽器裡跑**，不需要板子。
+
+| 版本 | M | 內容 | 驗證 |
+|---|---|---|---|
+| v2.2 | M29 | **ECP5 對應**（`veryl-eda/src/ecp5.rs`）：`LUT4`（沿用 iCE40 的切割式 LUT 對應）、`PFUMX` / `L6MUX21`（5、6 輸入）、`CCU2C`（進位鏈，兩位元一組）、`TRELLIS_FF`（同步 / 非同步 reset、致能）、`TRELLIS_IO`；輸出 nextpnr-ecp5 讀得懂的 JSON；CLI `v2c fpga --arch ecp5 [--device 25k\|45k\|85k] [--lpf PINS.lpf] [--bit OUT.bit]`（呼叫 nextpnr-ecp5 + ecppack）；`v2c gatesim ecp5`；netsim 加 ECP5 元件 | 所有範例：ECP5 網表跑原本的 testbench；yosys 用 `cells_sim.v` 證明與 `veryl build` 等價；nextpnr-ecp5 繞得完、`ecppack` 產生 `.bit`；nextpnr 繞好的網表（`--write`）再模擬一次 |
+| v2.3 | M30 | **ECP5 資源與板子**：同步讀取的記憶體 → `DP16KD`（18 Kbit block RAM，含程式初值 `--program`）、乘法 → `MULT18X18D`；ULX3S 腳位檔 `examples/ulx3s.lpf`（25 MHz、LED、按鈕、序列埠）；Blinky、跑馬燈與 `RvBoard`（RV32 SoC + C 程式）移植到 ULX3S（`RvUlx3s`，25 MHz）；nextpnr 的時序報告（Fmax）接到 `v2c` 的輸出 | 記憶體設計的 ECP5 網表與 yosys 模型等價；RvUlx3s 在 ECP5 網表上跑完 rv32ima_test 與 C 程式；`.bit` 實際燒進 ULX3S（有板子時） |
+| v2.4 | M31 | **RV64 參考模型**（`veryl-eda/src/rv/iss64.rs`）：RV64IMA + Zicsr、M / S / U 模式、陷阱委派（medeleg / mideleg）、`mret` / `sret`、`wfi`、**SV39**（三層分頁表、A / D 位元由硬體設定、page fault、`sfence.vma`、SUM / MXR）、**Sstc**（`stimecmp`，新版 xv6 用它做計時器）；組譯器支援 RV64（`ld` / `sd`、`*w` 指令）；SoC 記憶體映射：開機 ROM、SDRAM、UART（16550 相容的子集，xv6 的驅動可以直接用）、CLINT、PLIC（只接 UART） | spike 的 commit log 逐指令比對：自己寫的測試（每類指令、例外、委派、各種分頁表與 page fault）；有網路時再加官方 riscv-tests（rv64ui / um / ua / si / mi） |
+| v2.5 | M32 | **`Rv64Core`**（`examples/src/rv64.veryl`）：多週期 RV64IMA + Zicsr + M / S / U，暫存器檔在 block RAM，還沒有 MMU；指令與 ISS 逐週期相同的時序模型；`TestRv64Core` | 同一組測試在 veryl-sim、官方 veryl test、ECP5 閘級模擬上與 ISS 相同；ECP5 上的 LUT 數與 Fmax 記錄在案 |
+| v2.6 | M33 | **SV39 MMU**：分頁表走訪器（三層、A / D 寫回）、指令與資料各一個小 TLB（例如 8 筆全關聯）、`satp` 切換與 `sfence.vma` 清 TLB、page fault 的 `stval`；`Rv64Core` 經過 MMU 存取記憶體 | 分頁測試（恆等對應、使用者頁、權限錯誤、超級頁 2 MB / 1 GB、A / D）RTL 與 ISS / spike 相同；形式檢查 TLB 命中與走訪結果一致（小型 bmc） |
+| v2.7 | M34 | **`Rv64Soc` 與 ULX3S**：SDRAM 控制器（32 MB SDR，含模擬用的 SDRAM 模型）、指令與資料快取（直接對應、block RAM）、開機 ROM、UART、CLINT、PLIC、按鈕 / LED；`Rv64Ulx3s` 頂層 | 帶 SDRAM 模型的 testbench 跑測試程式；ECP5 網表在 25 MHz 下時序過；ULX3S 實機跑 UART 測試程式（有板子時） |
+| v2.8 | M35 | **xv6-riscv**：`examples/xv6/`（上游 MIT 授權，加上我們的移植：記憶體映射、UART、ramdisk 取代 virtio 磁碟、開機流程）；`tools/xv6.sh` 用 riscv64-unknown-elf-gcc 編出 kernel 與檔案系統映像；`v2c` 的 ISS 也能跑 RV64 映像（`v2c run64 kernel.bin fs.img`） | xv6 在 ISS 上開到 `$` 提示，跑完 `usertests` 的快速版；同一映像在 QEMU（virtio 版）結果一致；RTL / 閘級（虛擬板引擎）開到 shell；ULX3S 實機開機（有板子時） |
+| v2.9 | M36 | **虛擬 ULX3S 與 IDE**：IDE 的後端加「FPGA · ECP5（ULX3S）」——階段到 ④ 對應與統計（網頁裡沒有 nextpnr，佈局繞線用 CLI）；虛擬板可切換 iCEBreaker / ULX3S（LED、按鈕、USB 終端機）；ULX3S 的**網表模式**（跑對應後的 ECP5 網表）與 **CPU 模式**（RV64 ISS，在瀏覽器裡開 xv6，檔案系統映像放在 `dist/`）；範例 `RV64 + xv6` | npm test：ECP5 範例的對應與 CLI 相同；CPU 模式開 xv6 到 shell、在終端機執行 `ls`、`echo`；瀏覽器實測 |
+| v3.0 | M37 | 文件：手冊加「ECP5」與「RV64 與 xv6」兩章、history.md；選做：`Rv64Core` 走 SKY130 ASIC 流程（對應 + 形式等價，完整佈局繞線視時間而定）；全面回歸、發布 3.0.0 | `./test.sh --full`、npm test |
+
+**還不做**：自己的 ECP5 佈局繞線與位元流（v3.x 以後）、ECP5 的位元流模擬（虛擬板的「位元流模式」只有 iCE40）、
+HDMI 影像輸出、C 編譯器產生 RV64（xv6 用 gcc；需要時再做）、Linux（要 RV64GC：浮點與壓縮指令，另立計畫）。
+
+**風險與對策**：
+
+| 風險 | 對策 |
+|---|---|
+| veryl-sim 跑 xv6 開機（數千萬個時脈）太慢 | RTL 只跑測試程式；開機用 ISS 與虛擬板引擎（網表的逐週期模擬比 RTL 快很多） |
+| xv6 依賴硬體設定 A / D 位元 | MMU 走訪時寫回 A / D（和 QEMU、spike 一樣） |
+| 新版 xv6 用 Sstc（`stimecmp`） | 實作 Sstc；或者用舊版 xv6 的 M 模式計時器轉送 |
+| 沒有 ULX3S 板子 | 每一版都以模擬（ECP5 網表 + SDRAM 模型）和 nextpnr 的時序為準；實機測試列為「有板子時」 |
+| 核心太大或太慢，放不進 25F 或跑不到 25 MHz | 多週期設計、暫存器檔與 CSR 放 block RAM；先以 85F 為準，再縮減 |
+
+每個 M 完成就 commit，版本號照 v2.2 → v3.0 遞增。
