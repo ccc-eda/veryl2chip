@@ -7,6 +7,7 @@
 //   out: {type: 'out', bytes, cycle, rate, duty?, oe?} | {type: 'finished', code, pass, cycle} | {type: 'error', msg}
 //        {type: 'saved', data, cycle} (the state, Machine.snapshot())
 //        {type: 'files-back', area} (savefiles on the board: ESC ] 1337 ; veryl-save BEL seen)
+//        {type: 'fb', data} (the screen's pixels, RGB565, when they changed; at most 10 times a second)
 
 import { Machine } from './emu_machine';
 
@@ -23,6 +24,18 @@ let tail = '';
 const NOTICE = '\x1b]1337;veryl-save\x07';
 /** a program to start at the next shell prompt */
 let pending: { area: Uint8Array | null; cmd: string } | null = null;
+/** the screen: a hash of the pixels last sent, when they were looked at */
+let fbHash = -1, fbTime = 0;
+
+/** send the screen when it changed (FNV over 32-bit words) */
+function screen(force = false): void {
+  const px = m?.screen();
+  if (!px) return;
+  const w = new Uint32Array(px.buffer, px.byteOffset, px.length >> 2);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < w.length; i++) h = Math.imul(h ^ w[i], 0x01000193);
+  if (h !== fbHash || force) { fbHash = h; post({ type: 'fb', data: px.slice() }); }
+}
 const typeLine = (s: string) => m!.input([...s].map((c) => c.charCodeAt(0)));
 const post = (msg: object) => (self as unknown as Worker).postMessage(msg);
 
@@ -58,6 +71,7 @@ async function loop(my: number): Promise<void> {
         pending = null;
       }
     }
+    if (now - fbTime > 100) { fbTime = now; screen(); }
     if (r.finished) { running = false; post({ type: 'finished', ...r.finished, cycle: m!.cycle }); break; }
     await new Promise((ok) => setTimeout(ok, 0));
   }
@@ -73,6 +87,7 @@ self.onmessage = async (e: MessageEvent) => {
       images = d.images;
       files = d.files ?? null;
       tail = '';
+      fbHash = -1;
       // from a snapshot (the booted machine: getfiles is typed), else a cold boot (/init runs getfiles)
       if (d.snapshot) {
         m.restore(d.snapshot, d.cycle ?? 0);

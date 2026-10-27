@@ -2,7 +2,8 @@
 // board drawn next to the emulator's terminal. The SoC's GPIO 0 and 1 are the
 // board's ACT and USER LEDs, GPIO 2 its button; GPIO 3-15 are on the 40-pin
 // header where the Pi has the same BCM numbers, and on a breadboard below
-// (the FPGA board's breadboard and electrical model).
+// (the FPGA board's breadboard and electrical model). A machine with a screen
+// (machine.json "fb") gets an LCD between the board and the breadboard.
 
 import { tr } from '../i18n';
 import { Part, solve } from './bbmodel';
@@ -52,8 +53,10 @@ export class PiBoard {
   onLayout: (parts: Part[]) => void = () => {};
 
   constructor(host: HTMLElement) {
-    host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg><div class="pi-bb"></div>`;
+    host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg>`
+      + `<div class="pi-lcd hidden"><canvas width="320" height="240"></canvas><div class="pi-t2">${tr('螢幕 320 × 240（/dev/fb0）', 'Screen 320 × 240 (/dev/fb0)')}</div></div><div class="pi-bb"></div>`;
     this.svg = host.querySelector('.pi-svg')!;
+    this.lcd = host.querySelector('.pi-lcd canvas')!;
     this.bb = new Breadboard(host.querySelector('.pi-bb')!, BB_HEADER);
     this.bb.onChange = (layout) => { if (layout) this.onLayout(this.bb.parts); this.solve(); };
     this.draw();
@@ -62,6 +65,36 @@ export class PiBoard {
     this.svg.addEventListener('touchstart', (e) => { if ((e.target as Element).closest('[data-a="btn"]')) { e.preventDefault(); press(true); } });
     window.addEventListener('mouseup', () => press(false));
     window.addEventListener('touchend', () => press(false));
+  }
+
+  private lcd: HTMLCanvasElement;
+  private img: ImageData | null = null;
+
+  /** show the screen (its size in pixels), or hide it (null) */
+  setScreenSize(size: { width: number; height: number } | null): void {
+    (this.lcd.parentElement as HTMLElement).classList.toggle('hidden', !size);
+    if (!size) return;
+    this.lcd.width = size.width;
+    this.lcd.height = size.height;
+    this.img = this.lcd.getContext('2d')!.createImageData(size.width, size.height);
+    this.img.data.fill(255);
+    for (let i = 0; i < size.width * size.height; i++) { this.img.data[i * 4] = this.img.data[i * 4 + 1] = this.img.data[i * 4 + 2] = 0; }
+    this.lcd.getContext('2d')!.putImageData(this.img, 0, 0);
+  }
+
+  /** the screen's pixels (RGB565, little-endian) */
+  setScreen(px: Uint8Array): void {
+    const img = this.img;
+    if (!img) return;
+    const d = img.data, n = Math.min(px.length >> 1, d.length >> 2);
+    for (let i = 0; i < n; i++) {
+      const v = px[2 * i] | px[2 * i + 1] << 8;
+      const r = v >> 11, g = v >> 5 & 63, b = v & 31;
+      d[4 * i] = r << 3 | r >> 2;
+      d[4 * i + 1] = g << 2 | g >> 4;
+      d[4 * i + 2] = b << 3 | b >> 2;
+    }
+    this.lcd.getContext('2d')!.putImageData(img, 0, 0);
   }
 
   setParts(parts: Part[]): void { this.bb.parts = parts.map((p) => ({ ...p })); this.bb.render(); this.solve(); }

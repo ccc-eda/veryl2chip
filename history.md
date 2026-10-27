@@ -40,7 +40,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.17 | 2026-10-27 | `ac29810` | 2.17.0：開發板 3：快照開機、存狀態 | |
 | v2.18 | 2026-10-27 | `b428cc3` | 2.18.0：開發板 4：檔案進出板子 | |
 | v2.19 | 2026-10-27 | `c239ae3` | 2.19.0：開發板 5：MicroPython | |
-| v2.20 | 2026-10-27 | （本版） | 2.20.0：開發板 6：C 程式 | |
+| v2.20 | 2026-10-27 | `8bd9404` | 2.20.0：開發板 6：C 程式 | |
+| v2.21 | 2026-10-27 | （本版） | 2.21.0：開發板 7：螢幕 | |
 
 ---
 
@@ -452,6 +453,19 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - IDE：開發板專案可以有好幾個 `.c`；▶ 執行時在瀏覽器裡編譯（wasm `cc` 的 `linux`，回傳 `elf`），執行檔放進交換區（tar 的模式 0755）；
   `savefiles` 不收二進位檔。範例 `blink.c`、`count.c`、`lights.c`。
 - `emu/rv64emu.mjs` 的 `[gpio] out=…` 改成等 UART 的這一行結束才印（之前會把程式印的一行切開，`linux/test.sh` 對行首的檢查失敗）。
+
+### v2.21：開發板 7，螢幕
+
+- 裝置樹：`simple-framebuffer`（320 × 240、stride 640、`r5g6b5`）在 0x8EF0_0000，reserved-memory 用 `no-map`（fbdev 自己映射）。
+  kernel：VT、FB、FB_DEVICE、FB_SIMPLE、FRAMEBUFFER_CONSOLE、8 × 8 字型；VT 會選 INPUT，所以 sparse checkout 要加 `drivers/input`
+  （第一次編譯缺它失敗）與 `drivers/video`。核心的 console 仍然只在 ttyS0，fbcon 只顯示 tty1；`vt.global_cursor_default=0` 免得游標一直閃。
+  開機的拍數幾乎不變。
+- IDE：`machine.json` 的 `fb`；`Machine.screen()` 是 RAM 裡那塊的 view，worker 每 0.1 秒算一次雜湊，有變才送；板子畫面多一個 canvas。
+- MicroPython：`pi.Screen`（`framebuf.FrameBuffer` 的子類別，`show()` 寫進 `/dev/fb0`）、`big_text`、`rgb`、顏色常數。
+- C：`fb_init` 用 `mmap(0x40000000, …, MAP_SHARED | MAP_FIXED)` 把 `/dev/fb0` 映射到 2 GB 以下（指標是 32 位元）；`fb_pixel`、`fb_rect`、
+  `fb_line`、`fb_circle`、`fb_text`（和 VGA 共用的 5 × 7 字型移到共用區）；`__syscall6`。
+- 範例 `clock.py`、`shapes.c`。驗證：`linux/test.sh`（Verilator 與 veryl-emu）MicroPython 與 C 各畫一個點再讀回；npm test 確認開機問候語在
+  螢幕上，MicroPython 畫的內容就是 `screen()` 的內容。
 
 ---
 

@@ -231,6 +231,7 @@ export class Emulator {
         this.pi.onLayout = (parts) => this.onParts(parts);
       }
       this.pi.setParts(this.getParts() ?? PI_DEFAULT_BB);
+      this.pi.setScreenSize(s.cfg.fb ?? null);
       bh.classList.remove('hidden');
     } else bh.classList.add('hidden');
     this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle, files: s.files });
@@ -249,6 +250,8 @@ export class Emulator {
       this.stat.cycle = d.cycle!;
       this.term.write([...`\r\n[${d.pass ? tr('結束（正常）', 'finished (pass)') : tr('結束，代碼', 'finished, code')} 0x${d.code!.toString(16)}]\r\n`].map((c) => c.charCodeAt(0)));
       this.set('end');
+    } else if (d.type === 'fb') {
+      this.pi?.setScreen((d as unknown as { data: Uint8Array }).data);
     } else if (d.type === 'files-back') {
       this.note(this.onFilesBack((d as unknown as { area: Uint8Array }).area));
     } else if (d.type === 'saved') {

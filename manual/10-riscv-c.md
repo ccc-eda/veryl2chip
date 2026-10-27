@@ -103,7 +103,9 @@ Hello from C on a RISC-V you built in Veryl!
 - 執行期函式庫（`prelude.c` 的 `__linux__` 部分）用系統呼叫：`open` / `read` / `write` / `close` / `lseek` / `unlink`、
   `printf`（標準輸出一行一行緩衝）、`getchar`、`read_line`、`malloc`、`exit`、`sleep` / `usleep` / `delay_ms` / `millis`；
   `write_file`、`read_int`；GPIO：`gpio_write(pin, v)`、`gpio_read(pin)`、`pin_mode(pin, INPUT|OUTPUT)`（0 / 1 是 ACT / USER LED，
-  2 是按鈕，其餘經 `/sys/class/gpio`）。`#include <gpio.h>` 之類的 `#include` 一樣會被忽略（函式庫一直都在）。
+  2 是按鈕，其餘經 `/sys/class/gpio`）；螢幕（v2.21，320 × 240 RGB565）：`fb_init`、`fb_clear`、`fb_pixel`、`fb_rect`、`fb_line`、
+  `fb_circle`、`fb_text`、`RGB(r, g, b)` 與幾個顏色名（`/dev/fb0` 用 `mmap` 固定映射在 0x40000000，因為指標只有 32 位元）。
+  `#include <gpio.h>` 之類的 `#include` 一樣會被忽略（函式庫一直都在）。
 - 測試：`cargo test cc_linux` 把 `src/rv/tests/*.c` 與 `tests/linux/*.c` 編成 Linux 執行檔，用 spike + pk（proxy kernel，
   系統呼叫號碼與 Linux 相同）執行，輸出要和主機的編譯結果（`.out`）相同；`linux/test.sh` 在 Verilator / veryl-emu 上的 Linux 跑一個。
 - IDE：開發板專案裡打開 `.c` 檔按「▶ 執行」，在瀏覽器裡編譯，執行檔（檔名去掉 `.c`）和專案檔案一起送進 `/root` 執行。

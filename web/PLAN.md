@@ -121,10 +121,26 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.18 ✓ | **檔案進出板子**：專案檔案在開機時放進 `/root`（測試平台把一個 tar 寫進 RAM 最後 16 MB 的保留區，裝置樹排除這塊，`/init` 用 `/dev/mem` 解開）；`sync` 指令把 `/root` 寫回保留區，IDE 讀回專案。shell 腳本在 IDE 改完就能在板子上執行 | Node：專案檔進板子、在板子上改、寫回後內容相同 |
 | v2.19 ✓ | **MicroPython**：官方 MicroPython 的 Unix 版本，用 musl 靜態編成 RV64 執行檔（`git clone` + `make`，MIT 授權）放進映像；`pi` 模組（`LED`、`Button`、`Pin`，像 `gpiozero`，底下用 `/sys/class/gpio` 或 GPIO 的字元裝置）；終端機的 REPL、`micropython /root/main.py`；IDE 有「▶ 在板子上執行」；範例：閃爍、按鈕計數、紅綠燈 | Verilator 與 veryl-emu：`main.py` 讓腳位依序變化、讀到按鈕；MicroPython 自己的基本測試 |
 | v2.20 ✓ | **C 程式**：veryl-eda 的 C 編譯器（`src/rv/`，目前是 RV32 裸機）加上 RV64 Linux 目標：64 位元暫存器與指標、系統呼叫（`ecall`）、小小的 libc（`printf`、`open` / `read` / `write`、`usleep`）、輸出靜態 ELF；IDE 在瀏覽器裡編譯，經 v2.18 的機制放進 `/root` 執行；`gpio.h`；範例對應 MicroPython 的那幾個 | 編譯器測試（`.c` 對照 `.out`，和現有 RV32 測試同樣的做法）；板子上跑 C 範例 |
-| v2.21 | **螢幕**：`simple-framebuffer`（320 × 240、RGB565，放在保留的 RAM），kernel 開 fbcon；worker 每幀把那塊記憶體畫到 canvas；MicroPython 的 `framebuf` 與 C 的畫圖函式；範例：時鐘、圖形 | Node：寫入 framebuffer 的內容和畫出的影像相同；瀏覽器實測 |
+| v2.21 ✓ | **螢幕**：`simple-framebuffer`（320 × 240、RGB565，放在保留的 RAM），kernel 開 fbcon；worker 每幀把那塊記憶體畫到 canvas；MicroPython 的 `framebuf` 與 C 的畫圖函式；範例：時鐘、圖形 | Node：寫入 framebuffer 的內容和畫出的影像相同；瀏覽器實測 |
 | 之後 | I2C / SPI 的虛擬元件（溫度感測器、OLED）、PWM 蜂鳴器、儲存狀態到檔案；也可以在板子上放 TinyCC（在 Linux 裡自己編 C） | |
 
 原則：每一版先在 Verilator（RTL）上驗證硬體與 Linux，再在 veryl-emu（Node）上跑同樣的腳本；很久的測試只在 RTL 上跑。
 v2.16 起要重建網頁（IDE 的部分）。
+
+### riscv-emu：指令集模擬，讓板子快幾十倍（v2.22 起）
+
+veryl-emu 模擬的是硬體：每一拍都要算整顆 Rv64Core 的訊號，瀏覽器裡約 370 萬拍 / 秒（約 120 萬個指令 / 秒），開到 shell 要 1 分鐘。
+**riscv-emu** 像 QEMU 一樣只模擬指令集：同一塊板子（Rv64Soc 的記憶體映射：RAM、CLINT、PLIC、UART 16550、GPIO、finisher、螢幕），
+同一個 `fw_payload.bin`（OpenSBI + Linux），但不看電路，只算每個指令的效果；再把常跑的基本區塊翻成 WebAssembly，讓瀏覽器的 JIT 編成
+機器碼。預估快 20–100 倍：開機幾秒、MicroPython 與 C 的程式都像真的板子一樣快。代價是它不是硬體：驗證 Veryl 設計還是用 Verilator
+與 veryl-emu；riscv-emu 的正確性用 spike 對照。IDE 的執行目標變成 **FPGA / ASIC / veryl-emu（硬體）/ riscv-emu（指令集）**，
+讓使用者依需要選：要看電路就用前三個，要跑軟體就用 riscv-emu——Arduino、樹莓派、FPGA、ASIC 在同一個平台。
+
+| 版本 | 內容 | 驗證 |
+|---|---|---|
+| v2.22 | **riscv-emu 核心**：新的 Rust crate `riscv-emu/`（不依賴其他套件）：RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu、M / S / U、SV39（含 TLB）、中斷與例外，和 Rv64Core 的行為一致（mtval、misa、PMP 只有暫存器等）；Rv64Soc 的周邊（CLINT、PLIC、UART、GPIO、finisher、交換區、螢幕）；時間：預設每個指令 1 拍，wfi 直接跳到下一個計時器中斷；CLI `rvemu`（同 `rv64sim` 的 `-s` 腳本、`!gpio`、`-l`、`-d`、`--log` commit log） | riscv-tests（同 `sim/riscv_tests.sh`）；commit log 與 spike 逐行比對（`sim/spike_diff.sh`）；`linux/test.sh SIM=…/rvemu`；xv6 `test.sh`；速度 |
+| v2.23 | **IDE 的 riscv-emu**：crate 編成 wasm（第二個 wasm，按需載入），worker 有兩種引擎；`machine.json` 的 `engine` 與工具列的選擇（veryl-emu / riscv-emu）；GPIO、檔案、螢幕、▶ 執行都一樣；瀏覽器裡的時間跟著真實時間走（`sleep(1)` 就是一秒）；冷開機就夠快，不用快照 | npm test：Node 上用 riscv-emu 開機，跑和 veryl-emu 一樣的檢查（GPIO、檔案、MicroPython、C、螢幕）；瀏覽器實測速度 |
+| v2.24 | **翻譯成 WebAssembly（像 QEMU 的 TCG）**：常跑的基本區塊（同一個實體頁、同一個權限）翻成 wasm 函式，一批一批編成模組，以後直接呼叫；寫到程式碼頁、`fence.i`、`sfence.vma`、換頁表時丟掉翻譯；中斷在區塊之間檢查；翻譯器與直譯器結果逐指令比對 | 翻譯與直譯跑同樣的程式，暫存器、記憶體、輸出相同；riscv-tests、Linux、MicroPython；量速度（目標：比直譯再快幾倍） |
+| v2.25 | **四種目標的介面**：標題列的目標選單改成 FPGA / ASIC / veryl-emu / riscv-emu，各自的說明（看電路還是跑軟體、速度）；手冊一章「選哪一種」 | 瀏覽器實測；npm test |
 
 每版 commit，版本號照 v2.3、v2.4… 遞增。

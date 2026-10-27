@@ -307,5 +307,10 @@ C（v2.20）：`v2c cc PROG.c --linux` 把 C 編成這塊板子 Linux 的靜態�
 `manual/10-riscv-c.md`），函式庫有 `gpio_write` / `gpio_read` / `pin_mode`。範例 `board/blink.c`、`count.c`、`lights.c`；
 `linux/test.sh` 編一個小程式放進交換區，在板子上 `./ctest` 點亮 GPIO 12、讀按鈕（需要 `veryl-eda/target/release/veryl-eda`）。
 
+螢幕（v2.21）：裝置樹的 `simple-framebuffer`（320 × 240、RGB565，在 0x8EF0_0000，reserved-memory 的 `no-map` 區）、kernel 開
+fbdev + fbcon（tty1，8 × 8 字型；核心訊息仍然只到序列埠，`vt.global_cursor_default=0` 不畫游標），`/init` 在 tty1 印問候語。
+sparse checkout 多了 `drivers/video`、`drivers/input`（VT 需要）。MicroPython 的 `pi.Screen`、C 的 `fb_*`；範例 `board/clock.py`、
+`board/shapes.c`。`linux/test.sh` 讓 MicroPython 與 C 各畫一點，再用 `dd if=/dev/fb0 | od` 讀回來。
+
 測試平台（`sim/main.cpp`、`emu/rv64emu.mjs`）在輸出改變時印出 `[gpio] out=…`；`-s` 腳本裡的 `!gpio N=V` 是「把輸入腳 N 設成 V」
 （按下按鈕），不會送進終端機。`linux/test.sh` 用它檢查 LED、輸出腳、按鈕與邊緣中斷（`/proc/interrupts`）。

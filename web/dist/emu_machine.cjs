@@ -122,6 +122,13 @@ var Machine = class _Machine {
     const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));
     return this.u8.slice(off, off + f.size);
   }
+  /** the screen's pixels (machine.json "fb", RGB565 little-endian: width × height × 2 bytes), a view (copy it to keep it) */
+  screen() {
+    const f = this.cfg.fb, ram = this.cfg.ram;
+    if (!f || !ram) return null;
+    const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));
+    return this.u8.subarray(off, off + f.width * f.height * 2);
+  }
   /** clear every signal and memory (power off) */
   clear() {
     this.u8.fill(0);

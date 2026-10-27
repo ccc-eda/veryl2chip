@@ -1,6 +1,6 @@
 [package]
 name = "veryl-wasm"
-version = "2.20.0"
+version = "2.21.0"
 edition = "2021"
 description = "WebAssembly build of veryl-sim + veryl-eda + veryl-emu for the browser environment"
 # only for the web build (web/dist), not published

@@ -1,7 +1,8 @@
 # pi: the RV64 development board's GPIO for MicroPython, in the style of gpiozero.
 # Frozen into /bin/micropython (linux/build.sh). GPIO 0 and 1 are the board's ACT and
 # USER LEDs (/sys/class/leds), GPIO 2 its button, GPIO 3-15 the header pins; the other
-# pins go through /sys/class/gpio.
+# pins go through /sys/class/gpio. Screen draws on the board's 320 x 240 screen (/dev/fb0)
+# with framebuf.
 #
 #   from pi import LED, Button, sleep
 #   led = LED(5)
@@ -9,6 +10,7 @@
 #       led.toggle()
 #       sleep(0.5)
 
+import framebuf
 import os
 import time
 
@@ -165,3 +167,38 @@ class Button:
 
     def __repr__(self):
         return "Button(%d)" % self.pin.n
+
+
+def rgb(r, g, b):
+    """a color for Screen (RGB565) from 0..255 red, green, blue"""
+    return (r & 0xF8) << 8 | (g & 0xFC) << 3 | b >> 3
+
+
+BLACK, WHITE, RED, GREEN, BLUE, YELLOW = 0, 0xFFFF, 0xF800, 0x07E0, 0x001F, 0xFFE0
+
+
+class Screen(framebuf.FrameBuffer):
+    """The board's screen, 320 x 240: framebuf drawing (fill, pixel, hline, vline, line,
+    rect, fill_rect, ellipse, text, blit, scroll) in memory, then show() puts it on /dev/fb0"""
+
+    WIDTH = 320
+    HEIGHT = 240
+
+    def __init__(self):
+        self.buf = bytearray(self.WIDTH * self.HEIGHT * 2)
+        super().__init__(self.buf, self.WIDTH, self.HEIGHT, framebuf.RGB565)
+
+    def show(self):
+        with open("/dev/fb0", "wb") as f:
+            f.write(self.buf)
+
+    def big_text(self, s, x, y, c, scale=2):
+        """text with letters scale times as large (8 x 8 each normally)"""
+        t = framebuf.FrameBuffer(bytearray(8 * 8 * 2), 8, 8, framebuf.RGB565)
+        for k, ch in enumerate(s):
+            t.fill(0)
+            t.text(ch, 0, 0, 1)
+            for j in range(8):
+                for i in range(8):
+                    if t.pixel(i, j):
+                        self.fill_rect(x + (k * 8 + i) * scale, y + j * scale, scale, scale, c)

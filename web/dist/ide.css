@@ -163,6 +163,9 @@ button.icon:hover { background: #3a3d41; }
 .pi-btn-cap { fill: #888; }
 .pi-btn.down .pi-btn-cap { fill: #555; }
 .pi-bb { margin-top: 6px; }
+.pi-lcd { margin: 8px auto 0; width: max-content; max-width: 100%; padding: 10px 10px 4px; background: #1b1b1b; border: 1px solid #000; border-radius: 6px; text-align: center; }
+.pi-lcd canvas { display: block; width: 320px; max-width: 100%; image-rendering: pixelated; background: #000; }
+.pi-t2 { color: #999; font: 10px ui-monospace, Menlo, monospace; margin-top: 3px; }
 @media (max-width: 1100px) { .em-main { flex-direction: column; } .em-board { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 55%; } .em-box { min-height: 200px; } }
 .em-in { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; }
 .em-term { flex: 1; margin: 0; cursor: text; padding: 8px 12px; overflow: auto; background: #0c0c0c; color: #d4d4d4; font: 13px/1.35 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; outline: none; }

@@ -142,6 +142,12 @@ UART 接到分頁裡的終端機。
   編成 RV64 Linux 執行檔，放進 `/root`（檔名去掉 `.c`）再執行 `./檔名`；編譯錯誤在「問題」面板。組合語言分頁顯示打開的那個 `.c`。
   函式庫：`printf`、`delay_ms`、`gpio_write`、`gpio_read`、`pin_mode`、檔案的 `open` / `read` / `write` 等。範例 `blink.c`、`count.c`、
   `lights.c` 對應三個 MicroPython 範例。`savefiles` 不會把編譯出來的執行檔送回專案（只收文字檔）。
+- **螢幕**（v2.21）：`machine.json` 有 `"fb": { "addr": "0x8EF00000", "width": 320, "height": 240 }` 時，板子和麵包板之間多一個
+  320 × 240 的螢幕：Linux 的 `simple-framebuffer`（`/dev/fb0`，RGB565）放在 RAM 裡，worker 每 0.1 秒看一次，有變化才畫到 canvas。
+  開機時 fbcon（tty1）顯示問候語；`echo hi > /dev/tty1` 寫字到螢幕上。MicroPython：`from pi import Screen` 是 320 × 240 的
+  `framebuf`（`fill`、`line`、`rect`、`ellipse`、`text`…，再 `show()`），`big_text` 放大字、`rgb(r, g, b)` 算顏色；
+  C：`fb_clear`、`fb_pixel`、`fb_rect`、`fb_line`、`fb_circle`、`fb_text`、`RGB()`（`/dev/fb0` 映射在 0x40000000，直接寫就看得到）。
+  範例 `clock.py`（指針時鐘）、`shapes.c`（色條、圖形、文字、彈跳的球）。
 - 範例「RV64 + Linux（模擬機）」開 OpenSBI + Linux 6.12 + busybox：瀏覽器裡每秒約 370 萬拍，開到 `rv64:~$` 約 1 分鐘，
   之後就可以在終端機打指令。Linux 映像（`img_linux.js`，約 2.4 MB）第一次開機時才載入。
 - 這種專案的頂層太大，▶ 測試與合成會改成提示用模擬機（裡面的 `Rv64Core` 仍然可以合成）。

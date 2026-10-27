@@ -35,6 +35,8 @@
 /drivers/pinctrl/
 /drivers/gpio/
 /drivers/leds/
+/drivers/video/
+/drivers/input/
 /drivers/platform/
 /drivers/regmap/
 /drivers/resctrl/

@@ -10,7 +10,7 @@
 	model = "veryl2chip Rv64Soc";
 
 	chosen {
-		bootargs = "console=ttyS0 earlycon=sbi";
+		bootargs = "console=ttyS0 earlycon=sbi vt.global_cursor_default=0";
 		stdout-path = "/soc/serial@10000000";
 	};
 
@@ -79,6 +79,20 @@
 		exchange@8f000000 {
 			reg = <0x0 0x8f000000 0x0 0x1000000>;
 		};
+		screen@8ef00000 {
+			reg = <0x0 0x8ef00000 0x0 0x40000>;
+			no-map;
+		};
+	};
+
+	// the screen (v2.21): 320 x 240 RGB565 in the RAM, drawn by the IDE (machine.json "fb")
+	framebuffer@8ef00000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0x8ef00000 0x0 0x25800>;
+		width = <320>;
+		height = <240>;
+		stride = <640>;
+		format = "r5g6b5";
 	};
 
 	soc {

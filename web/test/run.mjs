@@ -498,7 +498,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
 
 // the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine
 // (emu_machine.ts, as in the page's worker) boots its image far enough to print; the
-// development board also: GPIO from the shell, the snapshot, files in and out, MicroPython, C
+// development board also: GPIO from the shell, the snapshot, files in and out, MicroPython, C, the screen
 {
   const { Machine, machineStops, fingerprint } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
   // the breadboard model and the development board's default breadboard (bundled for Node)
@@ -594,6 +594,21 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
             const cOk = c.compiled && o.includes('C 1 1431655765') && o.includes('C exit 5') && r5.duty[12] > 0.99;
             ok = cOk;
             what += `; C (${c.elf ? Math.round(c.elf.length * 0.75) : 0} bytes) ${cOk ? 'runs and lights GPIO 12' : 'FAILED ' + JSON.stringify(c.compiled ? o.slice(-300) : c.errors)}`;
+          }
+          // the screen (machine.json fb): fbcon's greeting from the boot, then what MicroPython draws is what the IDE draws
+          if (ok && cfg.fb) {
+            const px = () => { const b = m2.screen(); return (x, y) => b[(y * cfg.fb.width + x) * 2] | b[(y * cfg.fb.width + x) * 2 + 1] << 8; };
+            const lit = (() => { const b = m2.screen(); let n = 0; for (let i = 0; i < b.length; i += 2) if (b[i] | b[i + 1]) n++; return n; })();
+            const cmd6 = 'micropython -c "from pi import Screen, RED, BLUE; s = Screen(); s.fill(RED); s.pixel(7, 9, BLUE); s.text(\'Hi\', 100, 100, 0xffff); s.show(); print(\'S\' + \'OK\')"\r';
+            let o = '';
+            m2.input([...cmd6].map((ch) => ch.charCodeAt(0)));
+            while (m2.cycle < 4_000_000_000 && !o.includes('SOK')) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const p = px();
+            let white = 0;
+            for (let y = 100; y < 108; y++) for (let x = 100; x < 116; x++) if (p(x, y) === 0xffff) white++;
+            const sOk = lit > 100 && p(0, 0) === 0xf800 && p(319, 239) === 0xf800 && p(7, 9) === 0x001f && white > 10;
+            ok = sOk;
+            what += `; screen ${sOk ? `(greeting: ${lit} pixels lit) drawn by MicroPython` : `FAILED lit ${lit} ${p(0, 0).toString(16)} ${p(7, 9).toString(16)} white ${white} ` + JSON.stringify(o.slice(-200))}`;
           }
         }
       }

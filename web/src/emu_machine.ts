@@ -25,6 +25,8 @@ export interface MachineCfg {
   prompt?: string;
   /** the file exchange area in the RAM (getfiles / savefiles on the board): address, size */
   files?: { addr: string; size: number };
+  /** a screen in the RAM (Linux's simple-framebuffer): address, size in pixels, RGB565 */
+  fb?: { addr: string; width: number; height: number };
 }
 
 /** a bundled or saved machine state: the memory (gzip of `Machine.snapshot()`), the cycle, the terminal so far */
@@ -127,6 +129,14 @@ export class Machine {
     if (!f || !ram) return null;
     const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));
     return this.u8.slice(off, off + f.size);
+  }
+
+  /** the screen's pixels (machine.json "fb", RGB565 little-endian: width × height × 2 bytes), a view (copy it to keep it) */
+  screen(): Uint8Array | null {
+    const f = this.cfg.fb, ram = this.cfg.ram;
+    if (!f || !ram) return null;
+    const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));
+    return this.u8.subarray(off, off + f.width * f.height * 2);
   }
 
   /** clear every signal and memory (power off) */
