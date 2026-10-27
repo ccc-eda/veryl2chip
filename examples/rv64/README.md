@@ -11,6 +11,7 @@
 | `sim/build.sh` | `veryl build` + `verilator` → `sim/obj/rv64sim` |
 | `sim/riscv_tests.sh` | 跑官方 riscv-tests |
 | `sim/spike_diff.sh` | 逐指令和 spike 比對 |
+| `sim/build_gates.sh` | veryl-eda 合成 `Rv64Core`，閘級網表（通用閘、ECP5、vlib、SKY130）放回同一個測試平台 |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
 | `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.c` | OpenSBI + Linux 6.12 + 只有一個程式的 initramfs |
@@ -34,9 +35,10 @@
   （Svadu，xv6 會打開；ADUE = 0 時改發 page fault，讓軟體自己設）。
 - **TLB**：16 筆全關聯，取指令與資料共用，只存走訪成功的葉節點。命中、權限夠、A / D 不用更新時直接用，
   其他情況照樣走訪（所以行為和沒有 TLB 時完全一樣）；`sfence.vma` 與寫 `satp` 時清空。
-- **Exec**：一拍完成解碼、運算、寫回、CSR、分支；乘除法是組合邏輯。
+- **Exec**：一拍完成解碼、運算、寫回、CSR、分支。
+- **MulDiv**：乘除法一次處理一個位元（移位相加 / 恢復式除法），64 拍；W 版本的指令也一樣。
 - 中斷在 Fetch（指令之間）檢查；例外可以在任何一個存取或 Exec 發生，委派（medeleg / mideleg）到 S。
-- 一般指令 2 拍（取指令 1 + Exec 1）、load / store 3 拍；跨邊界的 32 位元指令多 1 拍；開了 SV39 且 TLB 沒命中時多三次分頁表讀取。
+- 一般指令 2 拍（取指令 1 + Exec 1）、load / store 3 拍、乘除法約 66 拍；跨邊界的 32 位元指令多 1 拍；開了 SV39 且 TLB 沒命中時多三次分頁表讀取。
 
 | 有 | 還沒有 |
 |---|---|
@@ -111,6 +113,27 @@ verify/random.sh 1 300            # 種子 1..300，每個種子 M、S、U 三�
 M 計時器、M 軟體中斷、全域中斷關閉時 `wfi` 照樣被喚醒、Sstc 的 S 計時器（委派）、S 軟體中斷（委派）、
 在 U 模式時 M 層級的中斷照樣進來、UART 經 PLIC 的外部中斷（M、S 兩個 context，claim / complete）、
 MSI 與 MTI 同時等待時先處理 MSI。spike 也跑得過第 2–7 項（它的 UART 沒有 THRE 中斷）。
+
+## 合成：閘級網表放回 Verilator
+
+`sim/build_gates.sh KIND` 用 veryl-eda（`v2c`）合成 `Rv64Core`，把網表換掉 SoC 裡的 RTL 處理器，
+其他（周邊、記憶體、`sim/main.cpp`）不變，所以所有測試都能拿網表來跑：
+
+| KIND | 網表 | 元件數 |
+|---|---|---|
+| `gate` | `v2c synth`：通用閘（AND / OR / XOR / MUX / DFF…） | 60,912 |
+| `ecp5` | `v2c fpga --arch ecp5`：LUT4、CCU2C、TRELLIS_FF，用 yosys 的 ECP5 元件模型模擬 | 29,123 LUT4 + 455 CCU2C + 6,251 FF |
+| `vlib` | `v2c asic --map-only`：vlib 標準元件（網表裡附元件模型） | 64,988 |
+| `sky130` | `v2c asic --pdk sky130 --map-only`：sky130_fd_sc_hd | 59,243 |
+
+```sh
+sim/build_gates.sh ecp5                       # → sim/obj_ecp5/rv64sim
+OBJ=sim/obj_ecp5 sim/riscv_tests.sh           # riscv-tests 跑在網表上
+OBJ=sim/obj_ecp5 verify/random.sh 1 100       # 隨機測試（和 spike 比）
+```
+
+四種網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
+乘除法原本是組合邏輯（64 位元的乘法器與除法器，網表 13 萬個元件），改成 64 拍的反覆式後剩 6 萬個。
 
 ## xv6
 

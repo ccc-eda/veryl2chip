@@ -60,7 +60,7 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 
 每個 M 完成就 commit。
 
-### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.7 完成）
+### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.8 完成）
 
 **目標**：一顆用 Veryl 寫的 RV64 處理器，先跑起 **xv6-riscv**，再跑 **Linux**。重點是 HDL 本身正確；
 EDA（v2c 的模擬、合成、FPGA）等 CPU 做對了再跟上。
@@ -92,7 +92,7 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.5 ✓ | **加速 + C 擴充**：取指令和上一個指令的結束重疊、RAM 少等一拍；壓縮指令（16 位元指令展開、跨 4 位元組邊界的取指） | riscv-tests 加上 rv64uc；xv6 用 `rv64imac` 重編也能跑；開機的拍數 |
 | v2.6 ✓ | **Linux**：OpenSBI（`fw_payload`，裝置樹嵌入）+ Linux 6.12（`rv64imac`、不含 FPU、tinyconfig 加 `linux/rv64soc.config`）+ 只有一個小 init 的 initramfs；SoC 加上關機裝置（`sifive,test0`）；kernel 用 LLVM 在 macOS 上編（sparse checkout） | 開到 init、印出 `/proc/version` / `/proc/cpuinfo`、poweroff（`linux/test.sh`）；之後視情況加 F / D 擴充，跑 busybox |
 | v2.7 ✓ | **正確性**：隨機指令測試（`verify/randgen.py`：M / S / U 模式、Sv39 隨機權限、非法編碼、例外）和 spike 逐指令比對；中斷的定向測試（`verify/irq.S`）；`examples/rv64/test.sh` 回歸 | 900 支隨機程式與 spike 完全相同；中斷 10 項；riscv-tests、Linux |
-| v2.8 | **合成**：乘除法改成多週期（好合成），veryl-eda 合成 `Rv64Core`，閘級網表放回 Verilator 跑同樣的測試 | 閘級網表通過 riscv-tests、隨機測試、Linux |
+| v2.8 ✓ | **合成**：乘除法改成多週期（64 拍反覆式，網表 13 萬 → 6 萬元件），veryl-eda 合成 `Rv64Core`，網表（通用閘、ECP5、vlib、SKY130）放回 Verilator 跑同樣的測試（`sim/build_gates.sh`） | 四種網表都通過 riscv-tests；通用閘網表另跑隨機測試、中斷測試、Linux |
 | v2.9 | **佈局繞線**：能上 FPGA 的 SoC（block RAM、UART 腳位），ECP5（veryl-eda 對應 → nextpnr-ecp5 → 繞線後的網表再模擬）；ASIC（veryl-eda 自己的 vlib / SKY130 佈局繞線，DRC 乾淨，標準元件網表再模擬） | 每一層的網表都跑同一組測試 |
 | 之後 | 回到 v2c（veryl-sim 跑得動 Rv64：記憶體、事件驅動，修補檔已存）；F / D 與 busybox；ULX3S 實機 | |
 

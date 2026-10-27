@@ -3,7 +3,7 @@
 // ==========================================
 // M / S / U 三種特權模式、陷阱與委派（medeleg / mideleg）、mret / sret / wfi、
 // SV39 虛擬記憶體（三層分頁表走訪、page fault、SUM / MXR / MPRV；Svadu：menvcfg.ADUE 時由硬體設定 A / D 位元）。
-// 足夠跑 xv6-riscv。設計以好懂為先：沒有管線、乘除法是組合邏輯；16 筆的 TLB 只為了速度（行為不變）。
+// 足夠跑 xv6-riscv 與 Linux。設計以好懂為先：沒有管線、乘除法 64 拍；16 筆的 TLB 只為了速度（行為不變）。
 //
 // 每個指令走過的狀態：
 //   Fetch → [Walk → (WalkW)]* → Mem（取指令）→ Exec
@@ -50,14 +50,15 @@ module Rv64Core #(
     o_trap      : output logic    ,
     o_trap_cause: output logic<64>,
 ) {
-    const S_FETCH: logic<3> = 3'd0;
-    const S_WALK : logic<3> = 3'd1;
-    const S_WALKW: logic<3> = 3'd2;
-    const S_MEM  : logic<3> = 3'd3;
-    const S_EXEC : logic<3> = 3'd4;
-    const S_AMOW : logic<3> = 3'd5;
-    const S_WFI  : logic<3> = 3'd6;
-    const S_FETCH2: logic<3> = 3'd7; // 跨 4 位元組邊界的 32 位元指令：取後半
+    const S_FETCH: logic<4> = 4'd0;
+    const S_WALK : logic<4> = 4'd1;
+    const S_WALKW: logic<4> = 4'd2;
+    const S_MEM  : logic<4> = 4'd3;
+    const S_EXEC : logic<4> = 4'd4;
+    const S_AMOW : logic<4> = 4'd5;
+    const S_WFI  : logic<4> = 4'd6;
+    const S_FETCH2: logic<4> = 4'd7; // 跨 4 位元組邊界的 32 位元指令：取後半
+    const S_MULDIV: logic<4> = 4'd8; // 乘除法（64 拍）
 
     // 存取的種類
     const K_FETCH: logic<2> = 2'd0;
@@ -69,7 +70,7 @@ module Rv64Core #(
     const PRV_S: logic<2> = 2'd1;
     const PRV_M: logic<2> = 2'd3;
 
-    var state: logic<3> ;
+    var state: logic<4> ;
     var pc   : logic<64>;
     var ir_raw: logic<32>; // 取到的指令（壓縮指令只有低 16 位元）
     var ir_lo : logic<16>; // 跨邊界的 32 位元指令的前半
@@ -214,7 +215,6 @@ module Rv64Core #(
     let is_mul  : logic = (op_reg || op_reg32) && f7 == 7'b0000001;
     let is_lr   : logic = op_amo && f5 == 5'b00010;
     let is_sc   : logic = op_amo && f5 == 5'b00011;
-    let is_rmw  : logic = op_amo && !is_lr && !is_sc;
     let is_csr  : logic = op_system && f3 != 3'd0 && f3 != 3'd4;
     let is_ecall: logic = ir == 32'h0000_0073;
     let is_ebrk : logic = ir == 32'h0010_0073;
@@ -260,51 +260,46 @@ module Rv64Core #(
     }
     let alu32: logic<64> = {w_res[31] repeat 32, w_res};
 
-    // ---------------------------------------------------------------- 乘除法（M 擴充，組合邏輯）
-    // 乘法：兩個運算元擴展成 128 位元（有號的話符號擴展），乘積的高 64 位元就是 mulh*
-    let m_a : logic<128> = {(x1[63] && (f3 == 3'b001 || f3 == 3'b010)) repeat 64, x1};
-    let m_b : logic<128> = {(x2[63] && f3 == 3'b001) repeat 64, x2};
-    let m_p : logic<128> = m_a * m_b;
-    // 除法：先取絕對值做無號除法，再修正正負號；除以 0 與溢位照規格
-    let d_sg: logic     = !f3[0];
-    let d_na: logic     = d_sg && x1[63];
-    let d_nb: logic     = d_sg && x2[63];
-    let d_ua: logic<64> = if d_na ? 64'd0 - x1 : x1;
-    let d_ub: logic<64> = if d_nb ? 64'd0 - x2 : x2;
-    let d_bz: logic     = x2 == 64'd0;
-    let d_q : logic<64> = if d_bz ? 64'd0 : d_ua / d_ub;
-    let d_r : logic<64> = if d_bz ? 64'd0 : d_ua % d_ub;
-    let d_qs: logic<64> = if d_na ^ d_nb ? 64'd0 - d_q : d_q;
-    let d_rs: logic<64> = if d_na ? 64'd0 - d_r : d_r;
-    var mres: logic<64>;
+    // ---------------------------------------------------------------- 乘除法（M 擴充，多週期）
+    // 64 拍：乘法是運算元絕對值的移位加法，除法是還原式除法，最後再修正正負號。
+    // *W 指令先把運算元擴展成 64 位元（divw / remw 符號擴展，其他零擴展），結果取低 32 位元再符號擴展；
+    // 除以 0（商全 1、餘數是被除數）與溢位（-2^63 / -1、-2^31 / -1）因此都自然正確。
+    let md_div : logic     = f3[2];
+    let md_sa  : logic     = if md_div ? !f3[0] : (f3 == 3'b001 || f3 == 3'b010); // mulh、mulhsu、div、rem
+    let md_sb  : logic     = if md_div ? !f3[0] : f3 == 3'b001;                   // mulh、div、rem
+    let md_a0  : logic<64> = if op_reg32 ? (if md_sa ? {x1[31] repeat 32, x1[31:0]} : {32'd0, x1[31:0]}) : x1;
+    let md_b0  : logic<64> = if op_reg32 ? (if md_sb ? {x2[31] repeat 32, x2[31:0]} : {32'd0, x2[31:0]}) : x2;
+    let md_na  : logic     = md_sa && md_a0[63];
+    let md_nb  : logic     = md_sb && md_b0[63];
+    let md_ua  : logic<64> = if md_na ? 64'd0 - md_a0 : md_a0;
+    let md_ub  : logic<64> = if md_nb ? 64'd0 - md_b0 : md_b0;
+
+    var md_x  : logic<64>; // 乘法：|a|（每拍加上去的），除法：|b|（除數）
+    var md_hi : logic<64>; // 乘積的高半／餘數
+    var md_lo : logic<64>; // 乘數（逐位元移出，乘積的低半移入）／被除數（移出）與商（移入）
+    var md_cnt: logic<7> ;
+    var md_neg: logic    ; // 結果要取負
+    var md_bz : logic    ; // 除以 0
+    var md_a  : logic<64>; // 被除數（除以 0 時的餘數）
+
+    // 一拍：乘法 {hi, lo} = ({hi + (lo[0] ? x : 0)}, lo) >> 1；除法 r = r << 1 | 被除數的下一位，夠減就減並記 1
+    let md_sum : logic<65> = {1'b0, md_hi} + (if md_lo[0] ? {1'b0, md_x} : 65'd0);
+    let md_sh  : logic<65> = {md_hi, md_lo[63]};
+    let md_diff: logic<65> = md_sh - {1'b0, md_x};
+    // 結果：128 位元乘積取負只要低半 ~lo + 1、高半 ~hi + (lo == 0)
+    let md_lo_n: logic<64> = ~md_lo + 64'd1;
+    let md_hi_n: logic<64> = ~md_hi + (if md_lo == 64'd0 ? 64'd1 : 64'd0);
+    var md_r64 : logic<64>;
     always_comb {
         case f3 {
-            3'b000                  : mres = m_p[63:0];
-            3'b001, 3'b010, 3'b011  : mres = m_p[127:64];
-            3'b100, 3'b101          : mres = if d_bz ? 64'hffff_ffff_ffff_ffff : d_qs;
-            default                 : mres = if d_bz ? x1 : d_rs;
+            3'b000                : md_r64 = md_lo;                                     // mul（沒有正負號）
+            3'b001, 3'b010, 3'b011: md_r64 = if md_neg ? md_hi_n : md_hi;               // mulh、mulhsu、mulhu
+            3'b100, 3'b101        : md_r64 = if md_bz ? 64'hffff_ffff_ffff_ffff : if md_neg ? md_lo_n : md_lo; // div、divu
+            default               : md_r64 = if md_bz ? md_a : if md_neg ? 64'd0 - md_hi : md_hi;            // rem、remu
         }
     }
-    // *W：低 32 位元
-    let mw_p : logic<32> = x1[31:0] * x2[31:0];
-    let dw_na: logic     = d_sg && x1[31];
-    let dw_nb: logic     = d_sg && x2[31];
-    let dw_ua: logic<32> = if dw_na ? 32'd0 - x1[31:0] : x1[31:0];
-    let dw_ub: logic<32> = if dw_nb ? 32'd0 - x2[31:0] : x2[31:0];
-    let dw_bz: logic     = x2[31:0] == 32'd0;
-    let dw_q : logic<32> = if dw_bz ? 32'd0 : dw_ua / dw_ub;
-    let dw_r : logic<32> = if dw_bz ? 32'd0 : dw_ua % dw_ub;
-    let dw_qs: logic<32> = if dw_na ^ dw_nb ? 32'd0 - dw_q : dw_q;
-    let dw_rs: logic<32> = if dw_na ? 32'd0 - dw_r : dw_r;
-    var mw_r : logic<32>;
-    always_comb {
-        case f3 {
-            3'b000        : mw_r = mw_p;
-            3'b100, 3'b101: mw_r = if dw_bz ? 32'hffff_ffff : dw_qs;
-            default       : mw_r = if dw_bz ? x1[31:0] : dw_rs;
-        }
-    }
-    let mres32: logic<64> = {mw_r[31] repeat 32, mw_r};
+    let md_res : logic<64> = if op_reg32 ? {md_r64[31] repeat 32, md_r64[31:0]} : md_r64;
+    let md_done: logic     = state == S_MULDIV && md_cnt == 7'd64;
 
     // ---------------------------------------------------------------- 分支、跳躍
     var take: logic;
@@ -790,12 +785,16 @@ module Rv64Core #(
         retire  = 1'b0;
         if !tk {
             case state {
-                S_EXEC: if !is_ls {
+                S_EXEC: if !is_ls && !is_mul {
                     retire  = 1'b1;
                     wb_we   = op_lui || op_auipc || op_jal || op_jalr || op_imm || op_reg || op_imm32 || op_reg32 || is_csr;
                     wb_data = if op_lui ? imm_u : if op_auipc ? pc + imm_u : if op_jal || op_jalr ? pc4
-                        : if is_csr ? csr_rdata : if op_reg32 ? (if is_mul ? mres32 : alu32) : if op_imm32 ? alu32
-                        : if is_mul ? mres : alu;
+                        : if is_csr ? csr_rdata : if op_reg32 || op_imm32 ? alu32 : alu;
+                }
+                S_MULDIV: if md_done {
+                    retire  = 1'b1;
+                    wb_we   = 1'b1;
+                    wb_data = md_res;
                 }
                 S_MEM: if mem_done && (acc_kind == K_LOAD || acc_kind == K_STORE) {
                     retire  = 1'b1;
@@ -830,10 +829,40 @@ module Rv64Core #(
     assign o_trap_cause = tk_cause;
 
     let exec_ok : logic = state == S_EXEC && !tk;
-    let done_ins: logic = (state == S_EXEC && !is_ls && !op_system) || (state == S_MEM && mem_done && (acc_kind == K_LOAD || acc_kind == K_STORE)) || (state == S_AMOW && i_ack);
+    let done_ins: logic = (state == S_EXEC && !is_ls && !is_mul && !op_system) || md_done || (state == S_MEM && mem_done && (acc_kind == K_LOAD || acc_kind == K_STORE)) || (state == S_AMOW && i_ack);
     let fast    : logic = !tk && done_ins && !irq && (!pc_vm || fs_canon);
     let do_fetch: logic = ((state == S_FETCH || state == S_FETCH2) && !tk) || fast;
     let csr_we  : logic = exec_ok && is_csr && csr_wr;
+
+    // 乘除法：Exec 載入運算元，每拍一步，第 64 拍之後 md_done
+    always_ff {
+        if_reset {
+            md_x   = 64'd0;
+            md_hi  = 64'd0;
+            md_lo  = 64'd0;
+            md_cnt = 7'd0;
+            md_neg = 1'b0;
+            md_bz  = 1'b0;
+            md_a   = 64'd0;
+        } else if exec_ok && is_mul {
+            md_x   = if md_div ? md_ub : md_ua;
+            md_hi  = 64'd0;
+            md_lo  = if md_div ? md_ua : md_ub;
+            md_cnt = 7'd0;
+            md_neg = if md_div && f3[1] ? md_na : md_na ^ md_nb; // 餘數跟被除數同號
+            md_bz  = md_b0 == 64'd0;
+            md_a   = md_a0;
+        } else if state == S_MULDIV && md_cnt != 7'd64 {
+            md_cnt = md_cnt + 7'd1;
+            if md_div {
+                md_hi = if md_diff[64] ? md_sh[63:0] : md_diff[63:0];
+                md_lo = {md_lo[62:0], !md_diff[64]};
+            } else {
+                md_hi = md_sum[64:1];
+                md_lo = {md_sum[0], md_lo[63:1]};
+            }
+        }
+    }
 
     // TLB 的填入（走訪找到可以用的葉節點）與清除
     let tlb_fill : logic    = state == S_WALK && i_ack && !i_err && p_leaf && !p_fault;
@@ -1038,6 +1067,8 @@ module Rv64Core #(
                             acc_pa = ls_va;
                             state  = S_MEM;
                         }
+                    } else if is_mul {
+                        state = S_MULDIV; // 運算元在下面的乘除法暫存器
                     } else {
                         pc    = if op_jal || op_jalr || (op_branch && take) ? tgt : pc4;
                         state = S_FETCH;
@@ -1132,6 +1163,10 @@ module Rv64Core #(
                                 default: {}
                             }
                         }
+                    }
+                    S_MULDIV: if md_done {
+                        pc    = pc4;
+                        state = S_FETCH;
                     }
                     S_WFI: if wake {
                         state = S_FETCH;
