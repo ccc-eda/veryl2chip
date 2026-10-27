@@ -26,6 +26,7 @@ veryl2chip 是給 [Veryl](https://veryl-lang.org/) 硬體描述語言用的一�
 | [13. 驗證與開發](13-develop.md) | 專案的測試、形式驗證、給想改程式的人 |
 | [14. 參考](14-reference.md) | `v2c` 指令總表、環境變數、記憶體映射、疑難排解 |
 | [15. 選哪一種](15-targets.md) | FPGA、ASIC、veryl-emu、riscv-emu：看電路還是跑軟體、速度 |
+| [16. 範例總表](16-examples.md) | 每個範例做什麼、用到哪些檔案、命令列與 IDE 怎麼跑 |
 
 ## 其他文件
 

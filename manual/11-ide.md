@@ -202,9 +202,11 @@ UART 接到分頁裡的終端機。
 | 基礎 | 加法器、package + enum、generate、function |
 | 時序 | 計數器、狀態機、RAM、block RAM、FIFO、struct、七段顯示器 |
 | 周邊 | UART、VGA |
-| RISC-V | 單週期 RV32I、RISC-V SoC |
+| RISC-V | 單週期 RV32I、RISC-V SoC、RV64 開發板（Linux + MicroPython + C + 螢幕，模擬機） |
 | C 程式 | `examples/c/` 的 8 個程式在 `RvBoard` 上 |
 | 綜合 | 進位鏈、多塊 block RAM、語言功能大雜燴 |
+
+每個範例的說明、檔案與命令列的跑法見第 16 章〈[範例總表](16-examples.md)〉。
 
 ## 網址參數
 

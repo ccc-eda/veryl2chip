@@ -315,7 +315,8 @@ cat /sys/class/gpio/gpio$((B+2))/value
 
 檔案（v2.18）：RAM 最後 16 MB（0x8F00_0000）在裝置樹裡是 reserved-memory，作為和 IDE 交換檔案的區域（開頭 512 位元組是一行
 `VERYLFS <大小>`，後面接 tar）：`getfiles`（`/init` 開機時執行）解到 `/root`，`savefiles` 把 `/root` 打包寫回，並送出 `ESC ] 1337 ; veryl-save BEL`
-通知 IDE。RISC-V 的 `/dev/mem` 只能讀寫 Linux 記憶體範圍內的位址，所以不能把這塊排除在 RAM 之外。測試平台用 `-l 0x8F000000:檔案` 放進去，
+通知 IDE。RISC-V 的 `/dev/mem` 只能讀寫 Linux 記憶體範圍內的位址，所以不能把這塊排除在 RAM 之外。測試平台用 `-l 0x8F000000:檔案` 放進去
+（`python3 linux/mkarea.py -o area.img 檔案…` 打包），
 `emu/rv64emu -d 0x8F000000:長度:檔案` 結束時存出來；`board/blink.sh`、`board/button.sh` 是開發板的範例腳本。
 
 MicroPython（v2.19）：`linux/build.sh` 用 `musl-cc` 把官方 MicroPython（v1.24.1，`MICROPYTHON`，預設 `/Users/Shared/ccc/micropython`）的
