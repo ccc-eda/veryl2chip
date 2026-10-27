@@ -41,7 +41,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.18 | 2026-10-27 | `b428cc3` | 2.18.0：開發板 4：檔案進出板子 | |
 | v2.19 | 2026-10-27 | `c239ae3` | 2.19.0：開發板 5：MicroPython | |
 | v2.20 | 2026-10-27 | `8bd9404` | 2.20.0：開發板 6：C 程式 | |
-| v2.21 | 2026-10-27 | （本版） | 2.21.0：開發板 7：螢幕 | |
+| v2.21 | 2026-10-27 | `dfdddd2` | 2.21.0：開發板 7：螢幕 | |
+| v2.22 | 2026-10-27 | （本版） | 2.22.0：riscv-emu 1：指令集模擬器 | |
 
 ---
 
@@ -466,6 +467,20 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   `fb_line`、`fb_circle`、`fb_text`（和 VGA 共用的 5 × 7 字型移到共用區）；`__syscall6`。
 - 範例 `clock.py`、`shapes.c`。驗證：`linux/test.sh`（Verilator 與 veryl-emu）MicroPython 與 C 各畫一個點再讀回；npm test 確認開機問候語在
   螢幕上，MicroPython 畫的內容就是 `screen()` 的內容。
+
+### v2.22：riscv-emu 1，指令集模擬器
+
+- 使用者問：像 QEMU 那樣模擬指令集、轉成 wasm 會不會更快？會：veryl-emu 每一拍都要算整顆 Rv64Core 的訊號。於是另寫 **riscv-emu**
+  （新的 crate，不依賴其他套件）：`cpu.rs`（RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu、M / S / U、SV39 與 TLB、中斷與例外，
+  行為照 Rv64Core）、`bus.rs`（Rv64Soc 的 finisher、CLINT、PLIC、UART、GPIO，一個暫存器一個暫存器照 `rv64soc.veryl`）、CLI `rvemu`
+  （選項和 `rv64sim` / `rv64emu` 相同，所以 `examples/rv64` 的腳本都能用 `SIM=` 換成它；`xv6/test.sh` 也加上 `SIM`）。
+- 時間：`mtime` 每個指令加一（結果可以重現），`wfi` 沒事時跳到下一個計時器；`-r` 跟著真實時間（在終端機打字時的預設）。
+- 驗證：riscv-tests 196 支全過（第一次跑 194 支：`minstret` 寫入的那個指令不能算；`tselect` / `tdata*` 要存在、讀 0）；
+  和 spike 逐指令比對 192 支相同，另外 4 支是 RTL 也有的已知差別；`verify/random.sh` 90 支隨機程式（M / S / U）和 spike 相同；
+  開 Linux 時和 RTL 的 commit log 前 589,593 個指令相同（第一個差別是讀 `cycle`）；`linux/test.sh` 1.6 秒（Verilator 50 秒、
+  veryl-emu 107 秒）；xv6 `usertests` 全過（285 億個指令，5.6 分鐘，84 MIPS）。`cargo test`：手組的小程式、壓縮指令、
+  riscv-tests 與 Linux（有建置時）。
+- 根目錄的 `build.sh`、`test.sh` 與 CI 加上 riscv-emu。
 
 ---
 

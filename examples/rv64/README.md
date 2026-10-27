@@ -148,6 +148,24 @@ OBJ=sim/obj_ecp5 verify/random.sh 1 100       # 隨機測試（和 spike 比）
 四種對應後的網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
 乘除法原本是組合邏輯（64 位元的乘法器與除法器，網表 13 萬個元件），改成 64 拍的反覆式後剩 6 萬個。
 
+## riscv-emu：指令集模擬（v2.22）
+
+[riscv-emu](../../riscv-emu/README.tw.md) 像 QEMU 一樣只模擬指令集，不模擬電路：同樣的 Rv64Soc 周邊、同樣的 `fw_payload.bin`，
+`linux/test.sh` 1.6 秒（Verilator 50 秒）。`rvemu` 的選項和 `rv64sim`、`rv64emu` 相同：
+
+```sh
+(cd ../../riscv-emu && cargo build --release)
+SIM=../../riscv-emu/target/release/rvemu sim/riscv_tests.sh       # 196 支
+SIM=../../riscv-emu/target/release/rvemu verify/random.sh 1 30    # 隨機程式，和 spike 逐指令比對
+SIM=../../riscv-emu/target/release/rvemu linux/test.sh
+SIM=../../riscv-emu/target/release/rvemu xv6/test.sh usertests     # 285 億個指令，約 6 分鐘
+../../riscv-emu/target/release/rvemu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開 Linux，直接打字
+```
+
+和 RTL 的 commit log（`rv64sim -t` 對 `rvemu -t`）比：開 Linux 時前 589,593 個指令相同，第一個差別是讀 `cycle`（硬體數時脈，
+riscv-emu 數指令，`mtime` 也是每個指令加一）。riscv-tests 和 spike 逐指令比對，只有 RTL 也有的四個已知差別（觸發器、marchid、
+spike 的 misa.C 可寫、spike 的 SC 隨機失敗）。
+
 ## veryl-emu：編譯成 WebAssembly
 
 [veryl-emu](../../veryl-emu/README.tw.md) 是我們自己的編譯式模擬器（像 Verilator，但產生 WebAssembly）：

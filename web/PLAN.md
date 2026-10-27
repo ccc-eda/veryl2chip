@@ -138,7 +138,7 @@ veryl-emu 模擬的是硬體：每一拍都要算整顆 Rv64Core 的訊號，瀏
 
 | 版本 | 內容 | 驗證 |
 |---|---|---|
-| v2.22 | **riscv-emu 核心**：新的 Rust crate `riscv-emu/`（不依賴其他套件）：RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu、M / S / U、SV39（含 TLB）、中斷與例外，和 Rv64Core 的行為一致（mtval、misa、PMP 只有暫存器等）；Rv64Soc 的周邊（CLINT、PLIC、UART、GPIO、finisher、交換區、螢幕）；時間：預設每個指令 1 拍，wfi 直接跳到下一個計時器中斷；CLI `rvemu`（同 `rv64sim` 的 `-s` 腳本、`!gpio`、`-l`、`-d`、`--log` commit log） | riscv-tests（同 `sim/riscv_tests.sh`）；commit log 與 spike 逐行比對（`sim/spike_diff.sh`）；`linux/test.sh SIM=…/rvemu`；xv6 `test.sh`；速度 |
+| v2.22 ✓ | **riscv-emu 核心**：新的 Rust crate `riscv-emu/`（不依賴其他套件）：RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu、M / S / U、SV39（含 TLB）、中斷與例外，和 Rv64Core 的行為一致（mtval、misa、PMP 只有暫存器等）；Rv64Soc 的周邊（CLINT、PLIC、UART、GPIO、finisher、交換區、螢幕）；時間：預設每個指令 1 拍，wfi 直接跳到下一個計時器中斷；CLI `rvemu`（同 `rv64sim` 的 `-s` 腳本、`!gpio`、`-l`、`-d`、`--log` commit log） | riscv-tests（同 `sim/riscv_tests.sh`）；commit log 與 spike 逐行比對（`sim/spike_diff.sh`）；`linux/test.sh SIM=…/rvemu`；xv6 `test.sh`；速度 |
 | v2.23 | **IDE 的 riscv-emu**：crate 編成 wasm（第二個 wasm，按需載入），worker 有兩種引擎；`machine.json` 的 `engine` 與工具列的選擇（veryl-emu / riscv-emu）；GPIO、檔案、螢幕、▶ 執行都一樣；瀏覽器裡的時間跟著真實時間走（`sleep(1)` 就是一秒）；冷開機就夠快，不用快照 | npm test：Node 上用 riscv-emu 開機，跑和 veryl-emu 一樣的檢查（GPIO、檔案、MicroPython、C、螢幕）；瀏覽器實測速度 |
 | v2.24 | **翻譯成 WebAssembly（像 QEMU 的 TCG）**：常跑的基本區塊（同一個實體頁、同一個權限）翻成 wasm 函式，一批一批編成模組，以後直接呼叫；寫到程式碼頁、`fence.i`、`sfence.vma`、換頁表時丟掉翻譯；中斷在區塊之間檢查；翻譯器與直譯器結果逐指令比對 | 翻譯與直譯跑同樣的程式，暫存器、記憶體、輸出相同；riscv-tests、Linux、MicroPython；量速度（目標：比直譯再快幾倍） |
 | v2.25 | **四種目標的介面**：標題列的目標選單改成 FPGA / ASIC / veryl-emu / riscv-emu，各自的說明（看電路還是跑軟體、速度）；手冊一章「選哪一種」 | 瀏覽器實測；npm test |

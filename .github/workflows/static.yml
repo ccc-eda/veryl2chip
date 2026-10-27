@@ -31,6 +31,7 @@ jobs:
             veryl-sim
             veryl-eda
             veryl-wasm
+            riscv-emu
 
       - name: Node.js
         uses: actions/setup-node@v4
@@ -56,6 +57,10 @@ jobs:
         run: |
           cargo test --release
           cargo build --release
+
+      - name: riscv-emu (cargo test)
+        working-directory: riscv-emu
+        run: cargo test --release
 
       - name: Tutorial (simulation, gate level, iCEBreaker bitstreams)
         run: ./tutorial/check.sh

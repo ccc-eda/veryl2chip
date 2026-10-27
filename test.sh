@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Test the whole project; every step runs even after a failure, with a summary at the end.
 #
-#   ./test.sh          what CI runs: veryl-sim, cargo test of veryl-eda, the tutorial's flow, veryl-emu's check, npm test
+#   ./test.sh          what CI runs: veryl-sim, cargo test of veryl-eda, the tutorial's flow, veryl-emu's check,
+#                      cargo test of riscv-emu, npm test
 #   ./test.sh --full   + veryl-eda/test.sh: yosys formal equivalence with `veryl build`, the FPGA flows
 #                        and the own place & route's co-simulation (needs OSS CAD Suite; tens of minutes)
 #
@@ -71,6 +72,12 @@ if command -v node > /dev/null; then
 else
     results+=("SKIP  veryl-emu (Node.js not installed)")
 fi
+
+riscv_emu_tests() {
+    cd "$ROOT/riscv-emu"
+    cargo test --release
+}
+run riscv-emu riscv_emu_tests
 
 web_tests() {
     cd "$ROOT/web"
