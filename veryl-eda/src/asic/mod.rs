@@ -149,9 +149,9 @@ fn physical(mapped: &Netlist, seed: u64, util: f64, extra_hold: f64) -> Result<(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
+pub(crate) fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
 #[cfg(target_arch = "wasm32")]
-fn now() -> f64 { 0.0 }
+pub(crate) fn now() -> f64 { 0.0 }
 
 /// the placement (and pins) as DEF, 1000 database units per µm, with the
 /// current technology's cell, pin, site, layer and via names

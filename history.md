@@ -32,7 +32,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.9 | 2026-10-27 | `fcfa73b` | 2.9.0：ECP5 block RAM，`Rv64Fpga` 經 nextpnr-ecp5 佈局繞線，繞線後的網表通過測試 | |
 | v2.10 | 2026-10-27 | `8dbe56c` | 2.10.0：大設計的全域佈局，`Rv64Core` 在 vlib 上自己佈局繞線，繞線後的網表通過測試 | |
 | v2.11 | 2026-10-27 | `f0ce858` | 2.11.0：Linux 跑 busybox，有 shell 可以互動 | |
-| v2.12 | 2026-10-27 | （本版） | 2.12.0：veryl-emu，把設計編譯成 WebAssembly 的模擬器 | |
+| v2.12 | 2026-10-27 | `7b0b7ff` | 2.12.0：veryl-emu，把設計編譯成 WebAssembly 的模擬器 | |
+| v2.13 | 2026-10-27 | （本版） | 2.13.0：IDE 的模擬機，瀏覽器裡開 Linux | |
 
 ---
 
@@ -345,6 +346,19 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   196 支 riscv-tests、120 支隨機程式與 spike 逐指令相同、中斷測試、Linux 開到 busybox 的 shell。
 - 速度：Linux 開機 2.3 億拍，Node 24 上 104 秒（220 萬拍 / 秒），Verilator 32 秒（720 萬拍 / 秒）。
 - 網頁暫時不重建，所以 veryl-emu 還沒有進 IDE（v2.13）。
+
+### v2.13：IDE 的模擬機（瀏覽器裡開 Linux）
+
+- 討論：RV64 這種大設計放不進 FPGA，也不適合 ASIC，所以 IDE 除了 FPGA（虛擬板）與 ASIC（版圖）之外，加上第三種「模擬機」：
+  設計用 veryl-emu 編成 WebAssembly，當成一台機器開機。放成和 ⚡ 虛擬板並列的「🖥 模擬機」按鈕與分頁（不放進合成後端的選單，因為它不經過合成）。
+- `veryl-wasm` 加上 veryl-emu 與 `emu_compile` 指令（核心 wasm 9.9 → 11.1 MB）。`web/src/emu_machine.ts`（沒有 DOM：載入 ELF / 二進位、重設、
+  UART、關機裝置）、`emu_worker.ts`（每片約 50 ms，回報輸出與速度）、`ide/emu.ts`（工具列、終端機：處理 Linux 用的 VT100 序列，
+  打字經過隱藏的 textarea，所以手機、輸入法、貼上都可以）。專案的 `machine.json` 說明頂層與腳位。
+- 範例「RV64 + Linux（模擬機）」：Rv64Core + Rv64Soc 與 machine.json；`img_linux.js`（OpenSBI + Linux + busybox，gzip + base64 約 2.4 MB）
+  第一次開機才用 `<script>` 載入，所以 `file://` 也能用。這種專案按 ▶ 測試或合成頂層時改成提示（veryl-sim 展開 256 MB 的陣列會讓分頁當掉）。
+- 結果：瀏覽器（Claude 的預覽，Chromium）每秒約 130–160 萬拍，約 2.5 分鐘開到 `rv64:~$`，`uname -a`、`ls /bin | wc -l`、`free` 都正常。
+- npm test 新增：Node 用同一個 `emu_machine` 跑 rv64 範例到 OpenSBI 的平台橫幅（約 1500 萬拍，7 秒）。
+  這次重建網頁時也抓到 v2.10 的錯誤：全域繞線的進度計時用了 `std::time::Instant`，wasm 上沒有時鐘，網頁的 ASIC 流程全部失敗；改用 `asic::now()`。
 
 ---
 

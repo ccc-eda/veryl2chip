@@ -4,6 +4,8 @@
 //   app.js       TypeScript UI bundled by esbuild into one classic script
 //   api.cjs      the same core API for the Node tests
 //   ide.js       the IDE page (M11), same core
+//   img_linux.js the emulator's Linux image for the RV64 example (OpenSBI + Linux + busybox, gzip + base64),
+//                loaded by the page only when the emulator boots it
 //   index.html (the IDE), ide.css, demo.html (the demo page), style.css, ide.html (redirects to index.html)
 // Usage: node build.mjs [--skip-wasm]
 import { execFileSync } from 'node:child_process';
@@ -63,6 +65,7 @@ const EN = {
   acc: { title_en: 'AccTest 32-bit carry chain' },
   uart: { title_en: 'UART transmitter / receiver (loopback test)', note_en: 'UartTx → UartRx loopback, 8N1, 8 clocks per bit' },
   vga: { title_en: 'VGA 640×480 timing + color bars', note_en: 'The test uses a small 24×12 frame; synthesis uses the default 800×525; on the virtual board a VGA monitor on PMOD1A+1B' },
+  rv64_linux: { title_en: 'RV64 + Linux (emulator)', note_en: 'Rv64Core (RV64IMAC, M/S/U, SV39) in Rv64Soc with 256 MB RAM: too large for the FPGA / ASIC flows, so it runs in the emulator (🖥): veryl-emu compiles it to WebAssembly and boots OpenSBI + Linux 6.12 + busybox (about 230 M cycles to the shell); type in the terminal. machine.json says which ports are the reset, the UART, the finisher and the RAM' },
   rv32i: { title_en: 'RV32I single-cycle CPU', note_en: 'TestRiscvCore runs examples/sw/rv32i_test.S (41 results, expected values cross-checked with spike)' },
   soc: { title_en: 'RISC-V SoC (FPGA)', note_en: 'Fibonacci(10) = 55 → LEDs; iCEBreaker pins (LEDs on PMOD1A)' },
   alu_fail: { title_en: 'Alu (with an assertion that fails on purpose)', note_en: 'What a failing assertion looks like: tb_alu has a "should fail on purpose" assertion' },
@@ -117,15 +120,34 @@ const EX = [
   { id: 'uart', group: '周邊', title: 'UART 收發器（迴路測試）', files: ['examples/src/uart.veryl'], synth: 'UartLoop', note: 'UartTx → UartRx 迴路，8N1，每位元 8 個時脈' },
   { id: 'vga', group: '周邊', title: 'VGA 640×480 時序 + 色條', files: ['examples/src/vga.veryl'], synth: 'VgaDemo', pcf: 'examples/vga.pcf',
     note: '測試用縮小的 24×12 畫面；合成用預設的 800×525；虛擬板上接 PMOD1A+1B 的 VGA 螢幕', board: { uart: false, baud: 115200, pmod1a: 'vga', pmod1b: '' } },
+  { id: 'rv64_linux', group: 'RISC-V', title: 'RV64 + Linux（模擬機）', files: ['examples/rv64/src/rv64core.veryl', 'examples/rv64/src/rv64soc.veryl'], synth: 'Rv64Core', asic: false, emu: true,
+    machine: { top: 'Rv64Soc', reset: { port: 'i_rst', active: 0, cycles: 2 },
+      uart: { tx_valid: 'o_tx_valid', tx_data: 'o_tx_data', rx_valid: 'i_rx_valid', rx_data: 'i_rx_data', rx_ready: 'o_rx_ready' },
+      finish: { valid: 'o_finish', code: 'o_finish_code', pass: 0x5555 }, ram: { array: 'mem', base: '0x80000000' }, load: [{ image: 'linux' }] },
+    note: 'Rv64Core（RV64IMAC、M / S / U、SV39）放在有 256 MB RAM 的 Rv64Soc 裡：FPGA / ASIC 流程放不下，所以用模擬機（🖥）跑：veryl-emu 把它編成 WebAssembly，開 OpenSBI + Linux 6.12 + busybox（開到 shell 約 2.3 億拍），在終端機裡打字。machine.json 說明哪些腳位是重設、UART、關機裝置與 RAM' },
   { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
   { id: 'soc', group: 'RISC-V', title: 'RISC-V SoC（FPGA）', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl', 'veryl-eda/examples/soc.veryl'],
     synth: 'RiscvSoc', pcf: 'veryl-eda/examples/icebreaker.pcf', note: 'Fibonacci(10) = 55 → LED；iCEBreaker 腳位（LED 在 PMOD1A）', board: { uart: false, baud: 115200, pmod1a: 'led8', pmod1b: '' } },
   { id: 'alu_fail', group: '其他', title: 'Alu（含一個故意失敗的斷言）', files: ['veryl-sim/examples/alu.veryl'], synth: 'Alu',
     note: '示範斷言失敗的樣子：tb_alu 有一個 "should fail on purpose" 的斷言' },
-].map((e) => ({ ...e, ...EN[e.id], group_en: GROUP_EN[e.group], files: e.files.map(rd), pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined }));
+].map((e) => ({ ...e, ...EN[e.id], group_en: GROUP_EN[e.group], pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined, machine: undefined,
+  files: [...e.files.map(rd), ...(e.machine ? [{ name: 'machine.json', src: JSON.stringify(e.machine, null, 2) + '\n' }] : [])] }));
 fs.writeFileSync(path.join(dist, 'examples.js'), `var VERYL_EXAMPLES = ${JSON.stringify(EX)};\n`);
 console.log(`examples.js  ${EX.length} projects`);
+
+// ---- the emulator's Linux image (examples/rv64/linux/build.sh) ----
+{
+  const img = path.join(root, 'examples/rv64/linux/build/opensbi/platform/generic/firmware/fw_payload.bin');
+  if (fs.existsSync(img)) {
+    const { gzipSync } = await import('node:zlib');
+    const gz = gzipSync(fs.readFileSync(img), { level: 9 });
+    fs.writeFileSync(path.join(dist, 'img_linux.js'), `// OpenSBI (BSD-2-Clause) + Linux 6.12 (GPL-2.0) + busybox 1.36 (GPL-2.0) + musl (MIT) for Rv64Soc, built by examples/rv64/linux/build.sh; gzip + base64\nvar VERYL_IMAGES = typeof VERYL_IMAGES === 'undefined' ? {} : VERYL_IMAGES;\nVERYL_IMAGES.linux = "${gz.toString('base64')}";\n`);
+    console.log(`img_linux.js ${(gz.length / 1e6).toFixed(1)} MB gzip`);
+  } else if (!fs.existsSync(path.join(dist, 'img_linux.js'))) {
+    console.warn('examples/rv64/linux/build: no Linux image (run examples/rv64/linux/build.sh): the RV64 example cannot boot in the emulator');
+  }
+}
 
 // ---- IceStorm chip database for place and route (gzip, base64) ----
 const chipdbCands = [process.env.VERYL_EDA_CHIPDB, '/usr/local/share/icebox/chipdb-5k.txt', '/usr/share/icebox/chipdb-5k.txt',
@@ -143,10 +165,14 @@ if (chipdbPath) {
 // ---- TypeScript ----
 const worker = await esbuild.build({ entryPoints: [path.join(here, 'src/worker.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
 const workerSrc = worker.outputFiles[0].text;
+const emuWorker = await esbuild.build({ entryPoints: [path.join(here, 'src/emu_worker.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
+const emuWorkerSrc = emuWorker.outputFiles[0].text;
 await esbuild.build({ entryPoints: [path.join(here, 'src/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'app.js'), logLevel: 'warning',
   define: { WORKER_SRC: JSON.stringify(workerSrc) } });
 await esbuild.build({ entryPoints: [path.join(here, 'src/ide/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'ide.js'), logLevel: 'warning',
-  define: { WORKER_SRC: JSON.stringify(workerSrc) } });
+  define: { WORKER_SRC: JSON.stringify(workerSrc), EMU_WORKER_SRC: JSON.stringify(emuWorkerSrc) } });
+// the emulator's machine for the Node tests
+await esbuild.build({ entryPoints: [path.join(here, 'src/emu_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'emu_machine.cjs'), logLevel: 'warning' });
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
 for (const f of ['index.html', 'ide.css', 'demo.html', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
-console.log('app.js, ide.js, api.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');
+console.log('app.js, ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');

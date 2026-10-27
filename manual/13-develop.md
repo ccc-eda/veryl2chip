@@ -62,9 +62,10 @@ cd web && npm test                            # 網頁（要先 npm run build）
 | `veryl-eda/src/pdk/` | 技術抽象、Liberty / LEF / DEF 讀取、SKY130 綁定；`veryl-eda/pdk/sky130hd/` 內附的子集 |
 | `veryl-eda/src/board/` | 虛擬板：引擎、iCEBreaker、位元流解碼、周邊 |
 | `veryl-eda/src/rv/` | C 編譯器、組譯器、指令集模擬器 |
+| `veryl-emu/` | 編譯式模擬器：把設計編成 WebAssembly（`ir.rs` 定寬度、`gen.rs` 排程與產生碼、`wasm.rs` 編碼器），`js/emu.mjs`；IDE 的模擬機用它 |
 | `veryl-wasm/` | 給網頁的 WebAssembly（C ABI，JSON 進出） |
 | `web/` | IDE 與展示頁（TypeScript）；`web/dist/` 是建好的、直接可用的網頁（有進 git） |
-| `examples/` | Veryl 範例（官方 Veryl 專案）、`examples/c/` C 範例、`examples/sw/` RISC-V 組合語言測試 |
+| `examples/` | Veryl 範例（官方 Veryl 專案）、`examples/rv64/` RV64 處理器與 xv6 / Linux、`examples/c/` C 範例、`examples/sw/` RISC-V 組合語言測試 |
 | `tutorial/` | 教學與虛擬實驗課 |
 | `tools/` | SKY130 下載與子集、GDS 檢查、字型、簡體轉換 |
 

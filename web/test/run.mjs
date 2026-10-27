@@ -20,7 +20,8 @@ const expectFail = new Set(['alu_fail']);
 // the Veryl files of an example (the C examples also have a .c program); examples on
 // the same hardware as another one (same_hw) are checked as programs, below
 const vfiles = (ex) => ex.files.filter((f) => f.name.endsWith('.veryl'));
-const HW = ctx.VERYL_EXAMPLES.filter((ex) => !ex.same_hw).map((ex) => ({ ...ex, files: vfiles(ex) }));
+// (emulator examples, machine.json, run in the emulator only: checked below)
+const HW = ctx.VERYL_EXAMPLES.filter((ex) => !ex.same_hw && !ex.emu).map((ex) => ({ ...ex, files: vfiles(ex) }));
 for (const ex of HW) {
   const t0 = Date.now();
   let line;
@@ -468,7 +469,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   fs.writeFileSync(ip, js);
   const { hans } = createRequire(import.meta.url)(ip);
   const srcDir = path.join(dist, '../src');
-  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts'];
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts', 'ide/emu.ts'];
   const han = /[\u3400-\u9fff]/;
   const trad = new Set('極製複貼麵學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
   let pairs = 0, badEn = [], badHans = [];
@@ -484,6 +485,38 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const ok = pairs > 150 && !badEn.length && !badHans.length;
   if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} i18n     ${pairs} tr() pairs${badEn.length ? '; Chinese in English: ' + badEn.slice(0, 3).join(' | ') : ''}${badHans.length ? '; not simplified: ' + badHans.slice(0, 3).join(' | ') : ''}; ${hans('檔案總管：模擬退火後繞線')}`);
+}
+
+// the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine
+// (emu_machine.ts, as in the page's worker) boots its image far enough to print
+{
+  const { Machine, machineStops } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
+  if (fs.existsSync(path.join(dist, 'img_linux.js'))) vm.runInContext(fs.readFileSync(path.join(dist, 'img_linux.js'), 'utf8'), ctx);
+  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu)) {
+    const t0 = Date.now();
+    let line;
+    try {
+      const cfg = JSON.parse(ex.files.find((f) => f.name === 'machine.json').src);
+      const r = core.call({ cmd: 'emu_compile', files: vfiles(ex), top: cfg.top, stops: machineStops(cfg) });
+      const m = await Machine.create(fromBase64(r.wasm), r.meta, cfg);
+      for (const l of cfg.load ?? []) {
+        if (!ctx.VERYL_IMAGES?.[l.image]) throw new Error(`no image ${l.image} (img_${l.image}.js)`);
+        m.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+      }
+      m.reset();
+      // OpenSBI's banner names the platform after a few million cycles
+      let out = '';
+      while (m.cycle < 30_000_000 && !/Platform Name\s*: veryl2chip Rv64Soc/.test(out)) out += String.fromCharCode(...m.step(1_000_000).out);
+      const ok = /Platform Name\s*: veryl2chip Rv64Soc/.test(out);
+      if (!ok) bad++;
+      const mhz = m.cycle / ((Date.now() - t0) / 1000) / 1e6;
+      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} emulator: ${r.stats.split(';')[0]}; OpenSBI banner after ${(m.cycle / 1e6).toFixed(1)} M cycles (${mhz.toFixed(2)} MHz)`;
+    } catch (e) {
+      bad++;
+      line = `FAIL ${ex.id.padEnd(9)} emulator: ${e.message}`;
+    }
+    console.log(`${line}  (${Date.now() - t0} ms)`);
+  }
 }
 
 // a broken source must come back as a message, not crash the core

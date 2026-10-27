@@ -32,6 +32,7 @@ Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一
 - 下方面板（问题、输出、测试结果、波形）、状态栏、命令菜单（Ctrl/⌘+Shift+P）、快速开档（Ctrl/⌘+P）
 - ⚡ **虚拟 iCEBreaker**：把设计刻录到画出来的开发板上，LED 会亮（亮度依工作周期）、按钮可以按，引脚和真实板相同（跑的是布局布线后真正的比特流：解码回电路、逐周期仿真，小设计约真实速度的 0.3–0.4 倍；任何 iCE40UP5K 的 `.bin`，例如 nextpnr 产生的，都可以拖放上去）；可以接上 USB 序列终端机与 PMOD 模块（8 颗 LED、8 个开关、两位数七段显示器、VGA 屏幕、蜂鸣器）与**面包板**（LED、电阻、按钮、开关、导线接在 PMOD 引脚上；短路、没有限流电阻、输入浮接都会警告）；引脚表会写入项目的 `pins.pcf`；整个实验（文件、引脚、模块、面包板）可以用一个链接分享
 - **在你自己的 RISC-V 上跑 C**：`RvSoc`（`examples/src/rvsoc.veryl`，多周期 RV32IMA + Zicsr、有中断，寄存器堆与 8 KB 存储器都在 block RAM，加上 LED、按钮、开关、UART、计时器）跑在浏览器里由 veryl-eda 自己的编译器（`src/rv/`：C 子集、汇编器、指令集仿真器）编出来的 C 程序；⚡ 把程序放进 block RAM（只改程序时不用重新综合、布局布线），虚拟板的 CPU 模式以即时速度运行，门级 SoC 约真实的 1%；还有 VGA 文本模式（`RvVgaBoard`，40 × 30 字符）、用 C 写的抢占式多线程内核（计时器中断、ecall、原子指令）；示例在「C 程序」群组
+- 🖥 **仿真机**：放不进 FPGA、也不适合 ASIC 的大设计：veryl-emu 把设计编成 WebAssembly，在 worker 里当成一台机器跑，UART 接到终端（项目的 `machine.json` 说明引脚）；示例 **RV64 + Linux** 在浏览器里开 OpenSBI + Linux + busybox（每秒约 150 万拍，两三分钟开到 shell）
 - 接口可用繁体中文、简体中文或英文（标题列的菜单切换；默认依浏览器语言）
 
 `index.html#ex=fifo&stage=place` 会打开某个示例并跳到某个阶段；加上 `&run=1` / `&verify=1` 会直接开始测试，`&board=1` 会刻录到虚拟板。

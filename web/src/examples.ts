@@ -20,6 +20,8 @@ export interface Example {
   group_en?: string;
   /** what is plugged into the virtual board */
   board?: import('./ide/board').BoardSetup;
+  /** runs in the emulator (machine.json), not in the testbench simulator */
+  emu?: boolean;
 }
 
 declare const VERYL_EXAMPLES: Example[];

@@ -1,8 +1,8 @@
 [package]
 name = "veryl-wasm"
-version = "2.12.0"
+version = "2.13.0"
 edition = "2021"
-description = "WebAssembly build of veryl-sim + veryl-eda for the browser environment"
+description = "WebAssembly build of veryl-sim + veryl-eda + veryl-emu for the browser environment"
 # only for the web build (web/dist), not published
 publish = false
 
@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 veryl-parser = "0.22"
 veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim" }
 veryl-eda = { package = "veryl2chip-eda", path = "../veryl-eda" }
+veryl-emu = { package = "veryl2chip-emu", path = "../veryl-emu" }
 serde_json = "1"
 
 [profile.release]

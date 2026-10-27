@@ -102,6 +102,33 @@
 
 - 「⇄ FPGA vs ASIC 比較」把兩個後端的面積、時序、功耗並排。
 
+## 模擬機（🖥）
+
+有些設計放不進 FPGA，也不適合走 ASIC，例如有 256 MB RAM 的 RV64 SoC。這種設計用第三種方式「實體化」：
+標題列的「🖥 模擬機」用 veryl-emu（`veryl-emu/`，見第 13 章的原始碼地圖）把設計編譯成 WebAssembly，在瀏覽器的背景 worker 裡當成一台機器開機，
+UART 接到分頁裡的終端機。
+
+- 專案要有 `machine.json`，說明頂層模組和腳位的用途：
+
+  ```json
+  {
+    "top": "Rv64Soc",
+    "reset": { "port": "i_rst", "active": 0, "cycles": 2 },
+    "uart": { "tx_valid": "o_tx_valid", "tx_data": "o_tx_data", "rx_valid": "i_rx_valid", "rx_data": "i_rx_data", "rx_ready": "o_rx_ready" },
+    "finish": { "valid": "o_finish", "code": "o_finish_code", "pass": 21845 },
+    "ram": { "array": "mem", "base": "0x80000000" },
+    "load": [{ "image": "linux" }]
+  }
+  ```
+
+  UART 是交握式的埠（一拍一個位元組：`tx_valid` 那一拍送出 `tx_data`，`rx_valid` 送進 `rx_data`）；
+  寫入關機裝置（`finish`）時結束；`load` 是開機前放進 RAM 的程式（內建的映像，ELF 依它的程式段）。
+- 工具列：🖥 開機（重新編譯、載入、開機）、⏸ / ▶、⟲ 重設、📂 程式（載入自己的 ELF 或二進位檔再開機），以及拍數與速度。
+- 範例「RV64 + Linux（模擬機）」開 OpenSBI + Linux 6.12 + busybox：瀏覽器裡每秒約 150 萬拍，開到 `rv64:~$` 約兩三分鐘，
+  之後就可以在終端機打指令。Linux 映像（`img_linux.js`，約 2.4 MB）第一次開機時才載入。
+- 這種專案的頂層太大，▶ 測試與合成會改成提示用模擬機（裡面的 `Rv64Core` 仍然可以合成）。
+- 手機上 256 MB 的記憶體可能配置不到；模擬機的按鈕在手機版收在 ⋯ 裡。
+
 ## C 程式
 
 專案有 `.c` 檔時：

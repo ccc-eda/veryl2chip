@@ -3836,6 +3836,293 @@ ${lines.join("\n")}
     }
   };
 
+  // src/ide/emu.ts
+  var Term = class {
+    constructor() {
+      __publicField(this, "lines", [[]]);
+      __publicField(this, "row", 0);
+      __publicField(this, "col", 0);
+      __publicField(this, "esc", "");
+    }
+    write(bytes) {
+      for (const b of bytes) {
+        const ch = String.fromCharCode(b);
+        if (this.esc) {
+          this.esc += ch;
+          if (this.esc === "\x1B[" || this.esc.length > 2 && this.esc.startsWith("\x1B[") && !/[@-~]/.test(ch)) continue;
+          if (this.esc.startsWith("\x1B[")) this.csi(this.esc.slice(2, -1), ch);
+          this.esc = "";
+          continue;
+        }
+        if (b === 27) {
+          this.esc = ch;
+          continue;
+        }
+        if (b === 13) {
+          this.col = 0;
+          continue;
+        }
+        if (b === 10) {
+          this.newline();
+          continue;
+        }
+        if (b === 8) {
+          if (this.col > 0) this.col--;
+          continue;
+        }
+        if (b === 9) {
+          this.col = this.col + 8 & ~7;
+          continue;
+        }
+        if (b < 32 || b === 127) continue;
+        const line = this.lines[this.row];
+        while (line.length < this.col) line.push(" ");
+        line[this.col++] = ch;
+      }
+    }
+    newline() {
+      this.row++;
+      if (this.row >= this.lines.length) this.lines.push([]);
+      if (this.lines.length > 3e3) {
+        this.lines.splice(0, 1e3);
+        this.row -= 1e3;
+      }
+    }
+    csi(p, f) {
+      const n = parseInt(p) || 1;
+      const line = this.lines[this.row];
+      switch (f) {
+        case "A":
+          this.row = Math.max(0, this.row - n);
+          break;
+        case "B":
+          this.row = Math.min(this.lines.length - 1, this.row + n);
+          break;
+        case "C":
+          this.col += n;
+          break;
+        case "D":
+          this.col = Math.max(0, this.col - n);
+          break;
+        case "K":
+          if (p === "" || p === "0") line.length = Math.min(line.length, this.col);
+          else if (p === "2") line.length = 0;
+          break;
+        case "J":
+          if (p === "2" || p === "3") {
+            this.lines = [[]];
+            this.row = 0;
+            this.col = 0;
+          } else this.lines.length = this.row + 1;
+          break;
+        case "H":
+          this.col = 0;
+          break;
+        case "P":
+          line.splice(this.col, n);
+          break;
+        default:
+          break;
+      }
+    }
+    html(cursor) {
+      const esc5 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      return this.lines.map((l, i) => {
+        if (i !== this.row || !cursor) return esc5(l.join(""));
+        const s = l.join("");
+        const c = s[this.col] ?? " ";
+        return esc5(s.slice(0, this.col)) + `<span class="em-cur">${esc5(c)}</span>` + esc5(s.slice(this.col + 1));
+      }).join("\n");
+    }
+  };
+  var Emulator = class {
+    constructor(host) {
+      __publicField(this, "host", host);
+      __publicField(this, "w", null);
+      __publicField(this, "term", new Term());
+      __publicField(this, "dirty", false);
+      __publicField(this, "state", "off");
+      __publicField(this, "last", null);
+      __publicField(this, "stat", { cycle: 0, rate: 0 });
+      /** the IDE: compile the project and get its images */
+      __publicField(this, "onStart", null);
+      __publicField(this, "upload", null);
+      __publicField(this, "uploadName", "");
+      host.innerHTML = `<div class="vb-bar">
+        <button class="tb-btn" data-a="boot" title="${tr("\u7528 veryl-emu \u628A\u8A2D\u8A08\u7DE8\u8B6F\u6210 WebAssembly\uFF0C\u8F09\u5165\u7A0B\u5F0F\u5F8C\u958B\u6A5F", "Compile the design to WebAssembly with veryl-emu, load the programs and boot")}">${tr("\u{1F5A5} \u958B\u6A5F", "\u{1F5A5} Boot")}</button>
+        <button class="tb-btn" data-a="pause" disabled>\u23F8</button>
+        <button class="tb-btn" data-a="reset" disabled title="${tr("\u91CD\u8A2D\uFF08\u91CD\u65B0\u8F09\u5165\u7A0B\u5F0F\uFF0C\u5F9E\u982D\u958B\u6A5F\uFF09", "Reset (reload the programs, boot again)")}">\u27F2</button>
+        <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u81EA\u5DF1\u7684\u7A0B\u5F0F\uFF08ELF \u6216\u4E8C\u9032\u4F4D\u6A94\uFF0C\u653E\u5728 RAM \u7684\u958B\u982D\uFF09\u518D\u958B\u6A5F", "Load your own program (ELF or a binary at the start of the RAM), then boot")}">${tr("\u{1F4C2} \u7A0B\u5F0F", "\u{1F4C2} Program")}</button>
+        <input type="file" class="hidden" data-a="file">
+        <span class="vb-stat em-stat"></span>
+      </div>
+      <div class="em-note"></div>
+      <div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div>`;
+      const q = (a) => host.querySelector(`[data-a="${a}"]`);
+      q("boot").onclick = () => this.boot();
+      q("pause").onclick = () => this.pauseResume();
+      q("reset").onclick = () => {
+        if (this.w && this.last) {
+          this.term = new Term();
+          this.dirty = true;
+          this.w.postMessage({ type: "reset" });
+          this.set("run");
+          this.inEl.focus();
+        }
+      };
+      q("upload").onclick = () => q("file").click();
+      q("file").onchange = async () => {
+        const f = q("file").files?.[0];
+        if (!f) return;
+        this.upload = new Uint8Array(await f.arrayBuffer());
+        this.uploadName = f.name;
+        q("file").value = "";
+        this.boot();
+      };
+      const inp = this.inEl;
+      this.termEl.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        inp.focus();
+        this.dirty = true;
+      });
+      inp.addEventListener("keydown", (e) => this.key(e));
+      inp.addEventListener("input", () => {
+        const v = inp.value;
+        inp.value = "";
+        if (v) this.send([...v].map((c) => c === "\n" ? 13 : c.charCodeAt(0) & 255));
+      });
+      inp.addEventListener("focus", () => {
+        this.dirty = true;
+      });
+      inp.addEventListener("blur", () => {
+        this.dirty = true;
+      });
+      this.note(tr("\u6309\u300C\u{1F5A5} \u958B\u6A5F\u300D\uFF1A\u8A2D\u8A08\u7528 veryl-emu \u7DE8\u8B6F\u6210 WebAssembly\uFF0C\u5728\u700F\u89BD\u5668\u88E1\u7576\u6210\u4E00\u53F0\u6A5F\u5668\u8DD1\uFF1B\u9EDE\u4E00\u4E0B\u7D42\u7AEF\u6A5F\u5C31\u53EF\u4EE5\u6253\u5B57\u3002", 'Press "\u{1F5A5} Boot": veryl-emu compiles the design to WebAssembly and runs it as a machine in the browser; click the terminal to type.'));
+      const tick = () => {
+        if (this.dirty) this.render();
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
+    get termEl() {
+      return this.host.querySelector(".em-term");
+    }
+    get inEl() {
+      return this.host.querySelector(".em-in");
+    }
+    note(s) {
+      this.host.querySelector(".em-note").textContent = s;
+    }
+    get running() {
+      return this.state === "run";
+    }
+    set(s) {
+      this.state = s;
+      const q = (a) => this.host.querySelector(`[data-a="${a}"]`);
+      q("pause").disabled = s === "off" || s === "end";
+      q("pause").textContent = s === "pause" ? "\u25B6" : "\u23F8";
+      q("reset").disabled = s === "off";
+      this.dirty = true;
+    }
+    render() {
+      this.dirty = false;
+      const t = this.termEl;
+      const atBottom = t.scrollTop + t.clientHeight >= t.scrollHeight - 30;
+      t.innerHTML = this.term.html(document.activeElement === this.inEl);
+      if (atBottom) t.scrollTop = t.scrollHeight;
+      const st = this.host.querySelector(".em-stat");
+      const mhz = (this.stat.rate / 1e6).toFixed(2);
+      const what = { off: tr("\u95DC\u6A5F", "off"), run: tr("\u57F7\u884C\u4E2D", "running"), pause: tr("\u66AB\u505C", "paused"), end: tr("\u7D50\u675F", "ended") }[this.state];
+      st.textContent = this.state === "off" ? "" : tr(`${what}\u3000${(this.stat.cycle / 1e6).toFixed(1)} M \u62CD\u3000${mhz} MHz`, `${what}  ${(this.stat.cycle / 1e6).toFixed(1)} M cycles  ${mhz} MHz`);
+    }
+    async boot() {
+      if (!this.onStart) return;
+      this.note(tr("\u7DE8\u8B6F\u4E2D\u2026", "Compiling\u2026"));
+      let s;
+      try {
+        s = await this.onStart();
+      } catch (e) {
+        this.note(String(e.message ?? e));
+        return;
+      }
+      if (!s) return;
+      if (this.upload) s.images = [{ bytes: this.upload }];
+      this.last = s;
+      this.w?.terminate();
+      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : max - done;\n        const n = single ? 0 : this.x.run(want);\n        done += n;\n        if (n < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      return { cycles: done, out, finished: this.finished };\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    m.reset();\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate });\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        boot();\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
+      this.w = new Worker(url);
+      this.w.onmessage = (e) => this.msg(e.data);
+      this.w.onerror = (e) => {
+        this.note(tr("\u6A21\u64EC\u6A5F\u932F\u8AA4\uFF1A", "Emulator error: ") + (e.message ?? ""));
+        this.set("end");
+      };
+      this.term = new Term();
+      this.stat = { cycle: 0, rate: 0 };
+      const prog = this.upload ? tr(`\u7A0B\u5F0F\uFF1A${this.uploadName}`, `program: ${this.uploadName}`) : s.cfg.load?.length ? tr(`\u7A0B\u5F0F\uFF1A${s.cfg.load.map((l) => l.image).join("\u3001")}`, `program: ${s.cfg.load.map((l) => l.image).join(", ")}`) : "";
+      this.note(`${s.cfg.top}: ${s.stats}${prog ? "\u3000" + prog : ""}`);
+      this.w.postMessage({ type: "start", wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images });
+      this.set("run");
+      this.inEl.focus();
+    }
+    msg(d) {
+      if (d.type === "out") {
+        if (d.bytes.length) {
+          this.term.write(d.bytes);
+        }
+        this.stat.cycle = d.cycle;
+        if (d.rate) this.stat.rate = d.rate;
+        this.dirty = true;
+      } else if (d.type === "finished") {
+        this.stat.cycle = d.cycle;
+        this.term.write([...`\r
+[${d.pass ? tr("\u7D50\u675F\uFF08\u6B63\u5E38\uFF09", "finished (pass)") : tr("\u7D50\u675F\uFF0C\u4EE3\u78BC", "finished, code")} 0x${d.code.toString(16)}]\r
+`].map((c) => c.charCodeAt(0)));
+        this.set("end");
+      } else if (d.type === "error") {
+        this.note(tr("\u6A21\u64EC\u6A5F\u932F\u8AA4\uFF1A", "Emulator error: ") + d.msg);
+        this.set("end");
+      }
+    }
+    pauseResume() {
+      if (!this.w) return;
+      if (this.state === "run") {
+        this.w.postMessage({ type: "pause" });
+        this.set("pause");
+      } else if (this.state === "pause") {
+        this.w.postMessage({ type: "resume" });
+        this.set("run");
+      }
+    }
+    send(bytes) {
+      if (this.w && this.state === "run") this.w.postMessage({ type: "input", bytes });
+    }
+    key(e) {
+      const k = e.key;
+      const seq = { ArrowUp: "\x1B[A", ArrowDown: "\x1B[B", ArrowRight: "\x1B[C", ArrowLeft: "\x1B[D", Home: "\x1B[H", End: "\x1B[F", Delete: "\x1B[3~" };
+      let s = null;
+      if (e.ctrlKey && !e.metaKey && k.length === 1 && /[a-z]/i.test(k)) s = String.fromCharCode(k.toUpperCase().charCodeAt(0) - 64);
+      else if (e.metaKey) return;
+      else if (k === "Enter") s = "\r";
+      else if (k === "Backspace") s = "\x7F";
+      else if (k === "Tab") s = "	";
+      else if (k === "Escape") s = "\x1B";
+      else if (seq[k]) s = seq[k];
+      if (s === null) return;
+      e.preventDefault();
+      this.send([...s].map((c) => c.charCodeAt(0) & 255));
+    }
+    stop() {
+      this.w?.terminate();
+      this.w = null;
+      this.set("off");
+    }
+  };
+
+  // src/emu_machine.ts
+  function machineStops(cfg) {
+    return [cfg.uart?.tx_valid, cfg.finish?.valid].filter((s) => !!s);
+  }
+
   // src/ide/highlight.ts
   var KEYWORDS = new Set("module interface package function import export inst param const var let assign always_ff always_comb initial final if else if_reset case switch default for in rev step return break input output inout modport struct enum union typedef embed include generate pub proto bind connect type as repeat inside outside unsafe alias true false".split(" "));
   var TYPES = new Set("logic bit clock clock_posedge clock_negedge reset reset_async_high reset_async_low reset_sync_high reset_sync_low u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 signed tri string".split(" "));
@@ -4224,10 +4511,11 @@ ${lines.join("\n")}
   var FLOW_TAB = "\u2699flow";
   var WELCOME = "\u2605welcome";
   var BOARD_TAB = "\u26A1board";
+  var EMU_TAB = "\u{1F5A5}emu";
   var TUTORIAL = "https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md";
   var ASM_TAB = "\u2699asm";
-  var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n === BOARD_TAB ? tr("\u26A1 \u865B\u64EC iCEBreaker", "\u26A1 Virtual iCEBreaker") : n === ASM_TAB ? tr("\u7D44\u5408\u8A9E\u8A00", "Assembly") : n;
-  var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === ASM_TAB;
+  var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n === BOARD_TAB ? tr("\u26A1 \u865B\u64EC iCEBreaker", "\u26A1 Virtual iCEBreaker") : n === EMU_TAB ? tr("\u{1F5A5} \u6A21\u64EC\u6A5F", "\u{1F5A5} Emulator") : n === ASM_TAB ? tr("\u7D44\u5408\u8A9E\u8A00", "Assembly") : n;
+  var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB;
   function file(name) {
     return proj.files.find((f) => f.name === name);
   }
@@ -4275,6 +4563,8 @@ ${lines.join("\n")}
     $2("synOverlay").classList.toggle("hidden", a !== FLOW_TAB);
     syncStage();
     $2("boardPane").classList.toggle("hidden", a !== BOARD_TAB);
+    $2("emuPane").classList.toggle("hidden", a !== EMU_TAB);
+    if (a === EMU_TAB) ensureEmu();
     if (board) {
       if (a === BOARD_TAB) {
         if (boardWasRunning) {
@@ -4321,7 +4611,7 @@ ${lines.join("\n")}
       const f = file(n);
       const errs = problems.some((p) => p.file === n && p.severity === "error");
       t.className = "tab" + (n === proj.active ? " cur" : "") + (f && original(n) !== void 0 && original(n) !== f.src ? " dirty" : "") + (errs ? " err" : "");
-      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === ASM_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : f?.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc4(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
+      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : f?.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc4(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
       t.onclick = () => {
         proj.active = n;
         persist();
@@ -4478,7 +4768,7 @@ ${lines.join("\n")}
     wave?.set(null);
     $2("p-output").textContent = "";
     $2("p-results").innerHTML = "";
-    if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = void 0;
+    if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
     renderProjects();
     showActive();
@@ -4813,6 +5103,8 @@ int main(void) {
   var KIND = (k) => ({ rtl: "RTL", opt: tr("\u901A\u7528\u9598", "generic gates"), ice40: "iCE40", asic: tr("\u6A19\u6E96\u5143\u4EF6", "standard cells") })[k] ?? k;
   async function simulate(top, mode, vcd) {
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
+    const mc = machineCfg();
+    if (mc && (!top && !mods.some((m) => m.test) || top === mc.top)) throw new Error(tr(`${mc.top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u9069\u5408 testbench \u6A21\u64EC\uFF1A\u8ACB\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${mc.top} is a machine (machine.json), too large for the testbench simulator: use "\u{1F5A5} Emulator"`));
     const gate = mode === "rtl" ? {} : { gate: mode, synth: synthTop() };
     if (mode !== "rtl" && !synthTop()) throw new Error(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08\u9598\u7D1A\u6A21\u64EC\u9700\u8981\u5408\u6210\u9802\u5C64\uFF09", "No synthesizable module (gate-level simulation needs a synthesis top)"));
     return core.call({ cmd: "simulate", files, top, max_time: 1e6, vcd, ...gate });
@@ -4913,6 +5205,10 @@ int main(void) {
       alert(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08#[test] \u6A21\u7D44\u4E0D\u80FD\u5408\u6210\uFF09", "No synthesizable module (#[test] modules cannot be synthesized)"));
       return;
     }
+    if (machineCfg()?.top === top) {
+      alert(tr(`${top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u80FD\u5408\u6210\uFF1A\u8ACB\u9078\u5B83\u88E1\u9762\u7684\u6A21\u7D44\uFF0C\u6216\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${top} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "\u{1F5A5} Emulator"`));
+      return;
+    }
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
     const key = JSON.stringify([files, top, pcfOf(proj)]);
     openFile(FLOW_TAB);
@@ -4949,6 +5245,64 @@ int main(void) {
     const pick = items.filter((x, i) => i === 1 || /^LUT4 |DFF \d|^Fmax/.test(x)).map((x) => x.replace(/ → /, "\u2192"));
     sb.textContent = `\u2699 ${synthTop()} \xB7 ${pick.join(" \xB7 ")}`;
     sb.title = items.join("\n");
+  }
+  var emu = null;
+  function machineCfg() {
+    const f = proj.files.find((x) => x.name === "machine.json");
+    if (!f) return null;
+    try {
+      return JSON.parse(f.src);
+    } catch {
+      return null;
+    }
+  }
+  async function image(name) {
+    const have = () => typeof VERYL_IMAGES !== "undefined" && VERYL_IMAGES[name];
+    if (!have()) {
+      await new Promise((ok, fail) => {
+        const s = document.createElement("script");
+        s.src = `img_${name}.js`;
+        s.onload = () => ok();
+        s.onerror = () => fail(new Error(tr(`\u627E\u4E0D\u5230\u7A0B\u5F0F\u6620\u50CF img_${name}.js`, `program image img_${name}.js not found`)));
+        document.head.appendChild(s);
+      });
+    }
+    if (!have()) throw new Error(tr(`\u7A0B\u5F0F\u6620\u50CF ${name} \u6C92\u6709\u8F09\u5165`, `program image ${name} is not loaded`));
+    return gunzip(fromBase64(VERYL_IMAGES[name]));
+  }
+  function ensureEmu() {
+    if (!emu) {
+      emu = new Emulator($2("emuPane"));
+      emu.onStart = startEmu;
+    }
+    return emu;
+  }
+  function openEmu() {
+    const e = ensureEmu();
+    openFile(EMU_TAB);
+    if (!e.running) e.boot();
+  }
+  async function startEmu() {
+    if (!core) return null;
+    const f = proj.files.find((x) => x.name === "machine.json");
+    if (!f) throw new Error(tr("\u9019\u500B\u5C08\u6848\u6C92\u6709 machine.json\uFF1A\u6A21\u64EC\u6A5F\u8981\u77E5\u9053\u9802\u5C64\u6A21\u7D44\u3001\u91CD\u8A2D\u3001UART\u3001RAM \u7B49\u8173\u4F4D\uFF08\u53EF\u4EE5\u53C3\u8003\u7BC4\u4F8B\u300CRV64 + Linux\u300D\uFF09", 'This project has no machine.json: the emulator needs the top module, the reset, UART and RAM ports (see the example "RV64 + Linux")'));
+    let cfg;
+    try {
+      cfg = JSON.parse(f.src);
+    } catch (e) {
+      throw new Error("machine.json: " + e.message);
+    }
+    setBusy(true, tr("\u{1F5A5} veryl-emu \u7DE8\u8B6F\u4E2D\u2026", "\u{1F5A5} veryl-emu compiling\u2026"));
+    try {
+      const files = proj.files.filter((x) => x.name.endsWith(".veryl"));
+      const r = await core.call({ cmd: "emu_compile", files, top: cfg.top, stops: machineStops(cfg) });
+      const images = [];
+      for (const l of cfg.load ?? []) images.push({ bytes: await image(l.image), addr: l.addr });
+      $2("sbTest").textContent = tr("\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "\u{1F5A5} Emulator booted");
+      return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats };
+    } finally {
+      setBusy(false);
+    }
   }
   var board = null;
   var boardWasRunning = false;
@@ -5228,6 +5582,7 @@ int main(void) {
     $2("cmdRun").onclick = () => runTests();
     $2("cmdVerify").onclick = verifyAll;
     $2("cmdBoard").onclick = () => flashBoard();
+    $2("cmdEmu").onclick = () => openEmu();
     $2("testsRun").onclick = () => runTests();
     $2("testsVerify").onclick = verifyAll;
     $2("synthTop").onchange = () => {
@@ -5335,7 +5690,7 @@ int main(void) {
         projects.push(proj);
       }
     }
-    if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = void 0;
+    if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
     renderProjects();
     fillStages();
@@ -5347,7 +5702,7 @@ int main(void) {
       const t0 = performance.now();
       core = await startCore(fromBase64(VERYL_WASM_B64));
       $2("sbCore").textContent = `\u2713 WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr("\uFF08\u80CC\u666F\u57F7\u884C\u7DD2\uFF09", " (worker thread)") : ""}`;
-      for (const id of ["cmdRun", "cmdVerify", "cmdBoard", "flowTarget", "flowStage"]) $2(id).disabled = false;
+      for (const id of ["cmdRun", "cmdVerify", "cmdBoard", "cmdEmu", "flowTarget", "flowStage"]) $2(id).disabled = false;
       synth = new SynthOverlay(core, {
         embedded: true,
         onStage: (k) => {

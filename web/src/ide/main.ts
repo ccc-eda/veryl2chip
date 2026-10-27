@@ -3,7 +3,7 @@
 // live syntax checking, tests (RTL and gate-level), and every synthesis
 // stage of the FPGA and ASIC flows as an editor tab.
 
-import { fromBase64, ModuleInfo, SimResult, VFile } from '../api';
+import { fromBase64, gunzip, ModuleInfo, SimResult, VFile } from '../api';
 import { Core, startCore } from '../client';
 import { Example, examples, exGroup, exNote, exTitle } from '../examples';
 import { fromLocale, Lang, LANGS, setLang, tr, translateDom } from '../i18n';
@@ -12,6 +12,8 @@ import { newModule, projectZip } from '../templates';
 import { WaveView } from '../wave';
 import { saveAs } from '../zip';
 import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
+import { Emulator, EmuStart } from './emu';
+import { MachineCfg, machineStops } from '../emu_machine';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
 
@@ -95,12 +97,13 @@ const isFpgaStage = (k: string) => FPGA_STAGES.some(s => s.key === k && s.tag ==
 const FLOW_TAB = '\u2699flow';
 const WELCOME = '\u2605welcome';
 const BOARD_TAB = '\u26a1board';
+const EMU_TAB = '\u{1f5a5}emu';
 /** the course tutorial (Traditional Chinese) */
 const TUTORIAL = 'https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md';
 const ASM_TAB = '\u2699asm';
-const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n === BOARD_TAB ? tr('⚡ 虛擬 iCEBreaker', '⚡ Virtual iCEBreaker') : n === ASM_TAB ? tr('組合語言', 'Assembly') : n;
+const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n === BOARD_TAB ? tr('⚡ 虛擬 iCEBreaker', '⚡ Virtual iCEBreaker') : n === EMU_TAB ? tr('🖥 模擬機', '🖥 Emulator') : n === ASM_TAB ? tr('組合語言', 'Assembly') : n;
 /** tabs that are not files */
-const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === ASM_TAB;
+const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB;
 
 function file(name: string): VFile | undefined { return proj.files.find(f => f.name === name); }
 
@@ -152,6 +155,8 @@ function showActive(): void {
   $('synOverlay').classList.toggle('hidden', a !== FLOW_TAB);
   syncStage();
   $('boardPane').classList.toggle('hidden', a !== BOARD_TAB);
+  $('emuPane').classList.toggle('hidden', a !== EMU_TAB);
+  if (a === EMU_TAB) ensureEmu();
   // the board simulates only while it is visible
   if (board) {
     if (a === BOARD_TAB) { if (boardWasRunning) { boardWasRunning = false; board.resume(); } }
@@ -188,7 +193,7 @@ function renderTabs(): void {
     const f = file(n);
     const errs = problems.some(p => p.file === n && p.severity === 'error');
     t.className = 'tab' + (n === proj.active ? ' cur' : '') + (f && original(n) !== undefined && original(n) !== f.src ? ' dirty' : '') + (errs ? ' err' : '');
-    t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === ASM_TAB ? '' : n === WELCOME ? '★' : f?.name.endsWith('.veryl') ? '◆' : f?.name.endsWith('.c') ? 'C' : '▤'}</span><span class="nm">${esc(tabName(n))}</span><span class="x" title="${tr('關閉', 'Close')}"></span>`;
+    t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB ? '' : n === WELCOME ? '★' : f?.name.endsWith('.veryl') ? '◆' : f?.name.endsWith('.c') ? 'C' : '▤'}</span><span class="nm">${esc(tabName(n))}</span><span class="x" title="${tr('關閉', 'Close')}"></span>`;
     t.onclick = () => { proj.active = n; persist(); showActive(); };
     t.onauxclick = e => { if (e.button === 1) closeTab(n); };
     t.querySelector('.x')!.addEventListener('click', e => { e.stopPropagation(); closeTab(n); });
@@ -330,7 +335,7 @@ function switchProject(id: string): void {
   wave?.set(null);
   $('p-output').textContent = '';
   $('p-results').innerHTML = '';
-  if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = undefined;
+  if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
   renderProjects();
   showActive();
@@ -676,6 +681,9 @@ const KIND = (k: string) => ({ rtl: 'RTL', opt: tr('通用閘', 'generic gates')
 
 async function simulate(top: string | null, mode: string, vcd: boolean): Promise<SimResult & { gate: { top: string; cells: number } | null }> {
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
+  // a machine (machine.json) is too large for the testbench simulator: it runs in the emulator
+  const mc = machineCfg();
+  if (mc && ((!top && !mods.some(m => m.test)) || top === mc.top)) throw new Error(tr(`${mc.top} 是模擬機（machine.json），太大不適合 testbench 模擬：請按「🖥 模擬機」`, `${mc.top} is a machine (machine.json), too large for the testbench simulator: use "🖥 Emulator"`));
   const gate = mode === 'rtl' ? {} : { gate: mode, synth: synthTop() };
   if (mode !== 'rtl' && !synthTop()) throw new Error(tr('沒有可合成的模組（閘級模擬需要合成頂層）', 'No synthesizable module (gate-level simulation needs a synthesis top)'));
   return core!.call({ cmd: 'simulate', files, top, max_time: 1_000_000, vcd, ...gate });
@@ -781,6 +789,7 @@ function runSynth(stage?: string): void {
   if (!synth) return;
   const top = synthTop();
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能合成）', 'No synthesizable module (#[test] modules cannot be synthesized)')); return; }
+  if (machineCfg()?.top === top) { alert(tr(`${top} 是模擬機（machine.json），太大不能合成：請選它裡面的模組，或按「🖥 模擬機」`, `${top} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "🖥 Emulator"`)); return; }
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
   const key = JSON.stringify([files, top, pcfOf(proj)]);
   openFile(FLOW_TAB);
@@ -828,6 +837,67 @@ function synthStatus(): void {
   const pick = items.filter((x, i) => i === 1 || /^LUT4 |DFF \d|^Fmax/.test(x)).map(x => x.replace(/ → /, '→'));
   sb.textContent = `⚙ ${synthTop()} · ${pick.join(' · ')}`;
   sb.title = items.join('\n');
+}
+
+// ---------------------------------------------------------------- emulator
+
+let emu: Emulator | null = null;
+declare const VERYL_IMAGES: Record<string, string> | undefined;
+
+/** the project's machine.json (null: none or not valid JSON) */
+function machineCfg(): MachineCfg | null {
+  const f = proj.files.find(x => x.name === 'machine.json');
+  if (!f) return null;
+  try { return JSON.parse(f.src) as MachineCfg; } catch { return null; }
+}
+
+/** a bundled program image (img_NAME.js, loaded when first needed; gzip + base64) */
+async function image(name: string): Promise<Uint8Array> {
+  const have = () => typeof VERYL_IMAGES !== 'undefined' && VERYL_IMAGES[name];
+  if (!have()) {
+    await new Promise<void>((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = `img_${name}.js`;
+      s.onload = () => ok();
+      s.onerror = () => fail(new Error(tr(`找不到程式映像 img_${name}.js`, `program image img_${name}.js not found`)));
+      document.head.appendChild(s);
+    });
+  }
+  if (!have()) throw new Error(tr(`程式映像 ${name} 沒有載入`, `program image ${name} is not loaded`));
+  return gunzip(fromBase64(VERYL_IMAGES![name]));
+}
+
+function ensureEmu(): Emulator {
+  if (!emu) {
+    emu = new Emulator($('emuPane'));
+    emu.onStart = startEmu;
+  }
+  return emu;
+}
+
+function openEmu(): void {
+  const e = ensureEmu();
+  openFile(EMU_TAB);
+  if (!e.running) e.boot();
+}
+
+async function startEmu(): Promise<EmuStart | null> {
+  if (!core) return null;
+  const f = proj.files.find(x => x.name === 'machine.json');
+  if (!f) throw new Error(tr('這個專案沒有 machine.json：模擬機要知道頂層模組、重設、UART、RAM 等腳位（可以參考範例「RV64 + Linux」）', 'This project has no machine.json: the emulator needs the top module, the reset, UART and RAM ports (see the example "RV64 + Linux")'));
+  let cfg: MachineCfg;
+  try { cfg = JSON.parse(f.src); } catch (e) { throw new Error('machine.json: ' + (e as Error).message); }
+  setBusy(true, tr('🖥 veryl-emu 編譯中…', '🖥 veryl-emu compiling…'));
+  try {
+    const files = proj.files.filter(x => x.name.endsWith('.veryl'));
+    const r = await core.call<{ wasm: string; meta: object; stats: string }>({ cmd: 'emu_compile', files, top: cfg.top, stops: machineStops(cfg) });
+    const images: EmuStart['images'] = [];
+    for (const l of cfg.load ?? []) images.push({ bytes: await image(l.image), addr: l.addr });
+    $('sbTest').textContent = tr('🖥 模擬機開機', '🖥 Emulator booted');
+    return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats };
+  } finally {
+    setBusy(false);
+  }
 }
 
 // ---------------------------------------------------------------- virtual board
@@ -1091,6 +1161,7 @@ function wire(): void {
   $('cmdRun').onclick = () => runTests();
   $('cmdVerify').onclick = verifyAll;
   $('cmdBoard').onclick = () => flashBoard();
+  $('cmdEmu').onclick = () => openEmu();
   $('testsRun').onclick = () => runTests();
   $('testsVerify').onclick = verifyAll;
   $<HTMLSelectElement>('synthTop').onchange = () => {
@@ -1186,7 +1257,7 @@ async function boot(): Promise<void> {
     const have = projects.find(p => p.from === ex.id);
     if (have) proj = have; else { proj = fromExample(ex); projects.push(proj); }
   }
-  if (proj.active === FLOW_TAB || proj.active === BOARD_TAB) proj.active = undefined;
+  if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
   renderProjects();
   fillStages();
@@ -1198,7 +1269,7 @@ async function boot(): Promise<void> {
     const t0 = performance.now();
     core = await startCore(fromBase64(VERYL_WASM_B64));
     $('sbCore').textContent = `✓ WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr('（背景執行緒）', ' (worker thread)') : ''}`;
-    for (const id of ['cmdRun', 'cmdVerify', 'cmdBoard', 'flowTarget', 'flowStage']) $<HTMLButtonElement>(id).disabled = false;
+    for (const id of ['cmdRun', 'cmdVerify', 'cmdBoard', 'cmdEmu', 'flowTarget', 'flowStage']) $<HTMLButtonElement>(id).disabled = false;
     synth = new SynthOverlay(core, {
       embedded: true,
       onStage: k => {

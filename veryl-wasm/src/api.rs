@@ -711,6 +711,14 @@ pub fn dispatch(v: &Value) -> R<Value> {
     let cmd = v.get("cmd").and_then(|c| c.as_str()).ok_or("missing cmd")?;
     match cmd {
         "version" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
+        // veryl-emu: the design compiled to a WebAssembly module (the IDE's emulator)
+        "emu_compile" => {
+            let top = v.get("top").and_then(|t| t.as_str());
+            let stops: Vec<String> = v.get("stops").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            let o = veryl_emu::compile(&files(v)?, top, &stops)?;
+            let meta: Value = serde_json::from_str(&o.json).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true, "wasm": base64(&o.wasm), "meta": meta, "stats": o.stats }))
+        }
         "list" => {
             let m = veryl_sim::list(&files(v)?)?;
             Ok(json!({ "ok": true, "modules": m.iter().map(|(n, t)| json!({ "name": n, "test": t })).collect::<Vec<_>>() }))

@@ -26,6 +26,7 @@
     <select id="flowStage" disabled title="合成並檢視這個階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view this stage (Ctrl/⌘+Shift+B)"></select>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
     <button id="cmdBoard" class="tb-btn" disabled title="合成並燒錄到虛擬 iCEBreaker 開發板" data-en-title="Synthesize and flash to a virtual iCEBreaker board" data-en="⚡ Virtual board">⚡ 虛擬板</button>
+    <button id="cmdEmu" class="tb-btn" disabled title="模擬機：用 veryl-emu 把設計編譯成 WebAssembly，當成一台機器開機（放不進 FPGA / ASIC 的大設計，例如 RV64 + Linux；需要 machine.json）" data-en-title="Emulator: veryl-emu compiles the design to WebAssembly and boots it as a machine (for designs too large for the FPGA / ASIC flows, e.g. RV64 + Linux; needs machine.json)" data-en="🖥 Emulator">🖥 模擬機</button>
   </div>
   <span class="spacer"></span>
   <button id="cmdPalette" class="tb-btn ghost" title="命令選單（Ctrl/⌘+Shift+P）" data-en-title="Command palette (Ctrl/⌘+Shift+P)" data-en="⌘ Commands">⌘ 命令</button>
@@ -102,6 +103,7 @@
       <div id="editorHost"></div>
       <div id="welcome" class="hidden"></div>
       <div id="boardPane" class="hidden"></div>
+      <div id="emuPane" class="hidden"></div>
       <div id="synOverlay" class="hidden flowpane">
         <div id="synBar">
           <nav id="synCrumb"></nav>
