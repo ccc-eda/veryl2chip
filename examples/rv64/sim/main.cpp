@@ -198,7 +198,9 @@ int main(int argc, char **argv) {
         if (top->o_ret) {
             insns++;
             if (trace) {
-                printf("core   0: %d 0x%016llx (0x%08x)", (int)top->o_ret_prv, (unsigned long long)top->o_ret_pc, (unsigned)top->o_ret_insn);
+                // 壓縮指令和 spike 一樣印 4 位數
+                if ((top->o_ret_insn & 3) != 3) printf("core   0: %d 0x%016llx (0x%04x)", (int)top->o_ret_prv, (unsigned long long)top->o_ret_pc, (unsigned)top->o_ret_insn);
+                else printf("core   0: %d 0x%016llx (0x%08x)", (int)top->o_ret_prv, (unsigned long long)top->o_ret_pc, (unsigned)top->o_ret_insn);
                 if (top->o_ret_we) printf(" x%-2d 0x%016llx", (int)top->o_ret_rd, (unsigned long long)top->o_ret_wdata);
                 printf("\n");
             }

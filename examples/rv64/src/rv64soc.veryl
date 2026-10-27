@@ -9,8 +9,8 @@
 //   0x8000_0000  RAM  ：2^MEM_BITS 位元組（256 MB）
 // 其他位址：access fault。
 //
-// 匯流排：核心送出請求的下一拍回應（o_req 那一拍取樣、寫入、讀出，下一拍 ack），
-// 資料都在低位元（RAM 依位址的低 3 位元移位）。
+// 匯流排：RAM 在請求的同一拍回應（組合讀取，模擬用；上 FPGA 時換成有延遲的記憶體，核心照樣等 ack），
+// 周邊在下一拍回應；資料都在低位元（RAM 依位址的低 3 位元移位）。
 // 測試平台：i_ld_* 在重設時把程式寫進 RAM；o_tx_* 是 UART 送出的位元組、i_rx_* 是收到的；
 // o_dbg_* 是每次匯流排寫入（riscv-tests 的 tohost）；o_ret_* 是完成的指令。
 
@@ -87,14 +87,18 @@ module Rv64Soc #(
         o_trap_cause              ,
     );
 
-    // 一次存取：請求的那一拍（還沒 ack）
-    let go: logic = req && !ack;
 
     // 位址解碼
     let sel_ram  : logic = addr[63:31] == 33'd1 && addr[30:0] <: (31'd1 << MEM_BITS);
     let sel_clint: logic = addr[63:16] == 48'h0000_0000_0200;
     let sel_plic : logic = addr[63:26] == 38'h00_0000_0003; // 0x0C00_0000 .. 0x0FFF_FFFF
     let sel_uart : logic = addr[63:8] == 56'h00_0000_0010_0000;
+
+    // RAM 在請求的同一拍回應（組合讀取）；周邊與錯誤在下一拍回應：
+    // go = 周邊存取的那一拍（還沒 ack）
+    var ack_r : logic;
+    let ram_go: logic = req && sel_ram;
+    let go    : logic = req && !sel_ram && !ack_r;
 
     // 存取寬度的遮罩，與 RAM 字裡的位元組位置
     var bmask: logic<64>;
@@ -114,7 +118,6 @@ module Rv64Soc #(
 
     // ---------------------------------------------------------------- RAM
     var mem     : logic<64> [WORDS];
-    var ram_word: logic<64>;
     let widx    : logic<MEM_BITS - 3> = addr[MEM_BITS - 1:3];
     let merged  : logic<64>           = (mem[widx] & ~lane_mask) | (lane_data & lane_mask);
 
@@ -122,10 +125,9 @@ module Rv64Soc #(
     always_ff (i_clk) {
         if i_ld_we {
             mem[i_ld_addr[MEM_BITS - 4:0]] = i_ld_data;
-        } else if go && sel_ram && we {
+        } else if ram_go && we {
             mem[widx] = merged;
         }
-        ram_word = mem[widx];
     }
 
     // ---------------------------------------------------------------- CLINT
@@ -361,34 +363,24 @@ module Rv64Soc #(
     }
 
     // ---------------------------------------------------------------- 回應
-    var ack_r  : logic    ;
     var err_r  : logic    ;
     var dev_r  : logic<64>;
-    var ram_r  : logic    ;
-    var lane_r : logic<6> ;
-    var mask_r : logic<64>;
     always_ff {
         if_reset {
-            ack_r  = 1'b0;
-            err_r  = 1'b0;
-            dev_r  = 64'd0;
-            ram_r  = 1'b0;
-            lane_r = 6'd0;
-            mask_r = 64'd0;
+            ack_r = 1'b0;
+            err_r = 1'b0;
+            dev_r = 64'd0;
         } else {
-            ack_r  = go;
-            err_r  = go && !(sel_ram || sel_clint || sel_plic || sel_uart);
-            ram_r  = sel_ram;
-            lane_r = lane;
-            mask_r = bmask;
-            dev_r  = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : 64'd0;
+            ack_r = go;
+            err_r = go && !(sel_clint || sel_plic || sel_uart);
+            dev_r = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : 64'd0;
         }
     }
-    assign ack   = ack_r;
+    assign ack   = ram_go || ack_r;
     assign err   = err_r;
-    assign rdata = if ram_r ? (ram_word >> lane_r) & mask_r : dev_r;
+    assign rdata = if ram_go ? (mem[widx] >> lane) & bmask : dev_r;
 
-    assign o_dbg_wr    = go && we;
+    assign o_dbg_wr    = (ram_go || go) && we;
     assign o_dbg_addr  = addr;
     assign o_dbg_wdata = wdata;
 }

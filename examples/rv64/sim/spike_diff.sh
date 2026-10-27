@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 [ -d /Users/Shared/ccc/oss-cad-suite/bin ] && export PATH=/Users/Shared/ccc/oss-cad-suite/bin:$PATH
 ELF=$1; MAX=${2:-2000000}
 T=$(mktemp -d)
-spike -l --log-commits --isa=rv64ima_zicsr_zicntr_zifencei_sstc_svadu "$ELF" 2>&1 \
+spike -l --log-commits --isa=rv64imac_zicsr_zicntr_zifencei_sstc_svadu "$ELF" 2>&1 \
     | grep -E '^core +0: [0-3] 0x' | awk 'go || $4 ~ /^0x000000008/ { go = 1; print }' \
     | sed -E 's/^(core +0: [0-3] 0x[0-9a-f]+ \(0x[0-9a-f]+\))( x[0-9 ]+ 0x[0-9a-f]+)?.*/\1\2/' | head -n "$MAX" > "$T/spike"
 ./${OBJ:-sim/obj}/rv64sim -t -m 50000000 "$ELF" 2> /dev/null | grep -E '^core' | head -n "$MAX" > "$T/rtl"

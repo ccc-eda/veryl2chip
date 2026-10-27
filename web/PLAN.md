@@ -60,7 +60,7 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 
 每個 M 完成就 commit。
 
-### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.4 完成）
+### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.5 完成）
 
 **目標**：一顆用 Veryl 寫的 RV64 處理器，先跑起 **xv6-riscv**，再跑 **Linux**。重點是 HDL 本身正確；
 EDA（v2c 的模擬、合成、FPGA）等 CPU 做對了再跟上。
@@ -89,7 +89,7 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.2 ✓ | ECP5 對應 + nextpnr-ecp5（見 history.md） | test.sh |
 | v2.3 ✓ | **`Rv64Core`**（`examples/rv64/`，獨立的 Veryl 專案）：多週期 RV64IMA + Zicsr + Zifencei，M / S / U 三種模式、陷阱與委派（medeleg / mideleg）、`mret` / `sret` / `wfi`、`time` CSR、**SV39**（三層走訪、硬體設定 A / D、page fault、`sfence.vma`、SUM / MXR、MPRV）；Verilator 測試平台 `sim/`（C++：記憶體、HTIF `tohost`、CLINT、UART） | riscv-tests 的 rv64ui / um / ua / mi / si，`-p` 與 `-v` 全部通過 |
 | v2.4 ✓ | **xv6-riscv**：開到 `$`。實際做法：virtio 改成 RAM 磁碟（`xv6/ramdisk.c`，xv6 只改三處）、Svadu（`menvcfg.ADUE`）、16 筆 TLB（提前做，只影響速度）、`mstatus.FS` 可寫；`xv6/build.sh`、`xv6/test.sh` | xv6 開機、`echo` / `cat` / `ls` / `mkdir` / `wc`；194 支 riscv-tests 和 spike 逐指令相同（3 個已知差異）；`usertests -q` |
-| v2.5 | **加速 + C 擴充**：取指令和上一個指令的結束重疊、RAM 少等一拍；壓縮指令（16 位元指令展開、跨 4 位元組邊界的取指） | riscv-tests 加上 rv64uc；xv6 用 `rv64imac` 重編也能跑；開機的拍數 |
+| v2.5 ✓ | **加速 + C 擴充**：取指令和上一個指令的結束重疊、RAM 少等一拍；壓縮指令（16 位元指令展開、跨 4 位元組邊界的取指） | riscv-tests 加上 rv64uc；xv6 用 `rv64imac` 重編也能跑；開機的拍數 |
 | v2.6 | **Linux**：OpenSBI（`fw_jump`）+ Linux kernel（`rv64imac`，不含 FPU）+ 只有一個小 init 的 initramfs；裝置樹描述上面的機器 | 開到 init 印出訊息；之後視情況加 F / D 擴充，跑 busybox |
 | v2.7 | 回到 v2c：veryl-sim 跑得動 `Rv64Core`（速度、缺的語法）、`v2c sim` 能開 xv6；IDE 範例 | 同樣的 riscv-tests 在 v2c sim 上通過 |
 | v2.8– | 上 FPGA：周邊改寫成 Veryl、ECP5 block RAM（`DP16KD`）、SDRAM 控制器、ULX3S；虛擬板 | — |

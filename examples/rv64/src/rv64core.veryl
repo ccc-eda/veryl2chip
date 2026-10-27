@@ -1,5 +1,5 @@
 // ==========================================
-// Rv64Core：多週期 RV64IMA + Zicsr + Zicntr + Zifencei + Sstc + Svadu 處理器
+// Rv64Core：多週期 RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu 處理器
 // ==========================================
 // M / S / U 三種特權模式、陷阱與委派（medeleg / mideleg）、mret / sret / wfi、
 // SV39 虛擬記憶體（三層分頁表走訪、page fault、SUM / MXR / MPRV；Svadu：menvcfg.ADUE 時由硬體設定 A / D 位元）。
@@ -57,6 +57,7 @@ module Rv64Core #(
     const S_EXEC : logic<3> = 3'd4;
     const S_AMOW : logic<3> = 3'd5;
     const S_WFI  : logic<3> = 3'd6;
+    const S_FETCH2: logic<3> = 3'd7; // 跨 4 位元組邊界的 32 位元指令：取後半
 
     // 存取的種類
     const K_FETCH: logic<2> = 2'd0;
@@ -70,8 +71,110 @@ module Rv64Core #(
 
     var state: logic<3> ;
     var pc   : logic<64>;
-    var ir   : logic<32>;
+    var ir_raw: logic<32>; // 取到的指令（壓縮指令只有低 16 位元）
+    var ir_lo : logic<16>; // 跨邊界的 32 位元指令的前半
+    var fetch_hi: logic;   // 這次取指令是後半
     var prv  : logic<2> ;
+
+    // ---------------------------------------------------------------- C 擴充：16 位元指令展開成 32 位元
+    // 展開後用同一個解碼器；保留的編碼（與沒有 D 擴充的 c.fld 等）→ c_ill（非法指令）
+    let ir_c: logic     = ir_raw[1:0] != 2'b11;
+    let ci  : logic<16> = ir_raw[15:0];
+    var cx  : logic<32>; // 展開的指令
+    var c_ill: logic;
+    // 常用的欄位：rd' / rs1' / rs2' 是 x8..x15
+    let c_rdp : logic<5>  = {2'b01, ci[4:2]};
+    let c_rs1p: logic<5>  = {2'b01, ci[9:7]};
+    let c_rd  : logic<5>  = ci[11:7];
+    let c_rs2 : logic<5>  = ci[6:2];
+    let c_imm6: logic<12> = {ci[12] repeat 7, ci[6:2]}; // c.addi / c.li / c.andi ...
+    let c_lwi : logic<12> = {5'd0, ci[5], ci[12:10], ci[6], 2'b00};
+    let c_ldi : logic<12> = {4'd0, ci[6:5], ci[12:10], 3'b000};
+    let c_jo  : logic<21> = {ci[12] repeat 10, ci[8], ci[10:9], ci[6], ci[7], ci[2], ci[11], ci[5:3], 1'b0};
+    let c_bo  : logic<13> = {ci[12] repeat 5, ci[6:5], ci[2], ci[11:10], ci[4:3], 1'b0};
+    always_comb {
+        cx    = 32'h0000_0013; // addi x0, x0, 0
+        c_ill = 1'b0;
+        case {ci[1:0], ci[15:13]} {
+            // ---- 第 0 象限
+            5'b00_000: { // c.addi4spn
+                cx    = {2'b00, ci[10:7], ci[12:11], ci[5], ci[6], 2'b00, 5'd2, 3'b000, c_rdp, 7'b0010011};
+                c_ill = ci[12:5] == 8'd0;
+            }
+            5'b00_010: cx = {c_lwi, c_rs1p, 3'b010, c_rdp, 7'b0000011}; // c.lw
+            5'b00_011: cx = {c_ldi, c_rs1p, 3'b011, c_rdp, 7'b0000011}; // c.ld
+            5'b00_110: cx = {c_lwi[11:5], c_rdp, c_rs1p, 3'b010, c_lwi[4:0], 7'b0100011}; // c.sw
+            5'b00_111: cx = {c_ldi[11:5], c_rdp, c_rs1p, 3'b011, c_ldi[4:0], 7'b0100011}; // c.sd
+            // ---- 第 1 象限
+            5'b01_000: cx = {c_imm6, c_rd, 3'b000, c_rd, 7'b0010011}; // c.addi（c.nop）
+            5'b01_001: { // c.addiw
+                cx    = {c_imm6, c_rd, 3'b000, c_rd, 7'b0011011};
+                c_ill = c_rd == 5'd0;
+            }
+            5'b01_010: cx = {c_imm6, 5'd0, 3'b000, c_rd, 7'b0010011}; // c.li
+            5'b01_011: if c_rd == 5'd2 { // c.addi16sp
+                cx    = {ci[12] repeat 3, ci[4:3], ci[5], ci[2], ci[6], 4'd0, 5'd2, 3'b000, 5'd2, 7'b0010011};
+                c_ill = {ci[12], ci[6:2]} == 6'd0;
+            } else { // c.lui
+                cx    = {ci[12] repeat 15, ci[6:2], c_rd, 7'b0110111};
+                c_ill = {ci[12], ci[6:2]} == 6'd0;
+            }
+            5'b01_100: case ci[11:10] {
+                2'b00  : cx = {6'b000000, ci[12], ci[6:2], c_rs1p, 3'b101, c_rs1p, 7'b0010011}; // c.srli
+                2'b01  : cx = {6'b010000, ci[12], ci[6:2], c_rs1p, 3'b101, c_rs1p, 7'b0010011}; // c.srai
+                2'b10  : cx = {c_imm6, c_rs1p, 3'b111, c_rs1p, 7'b0010011}; // c.andi
+                default: if !ci[12] {
+                    case ci[6:5] {
+                        2'b00  : cx = {7'b0100000, c_rdp, c_rs1p, 3'b000, c_rs1p, 7'b0110011}; // c.sub
+                        2'b01  : cx = {7'b0000000, c_rdp, c_rs1p, 3'b100, c_rs1p, 7'b0110011}; // c.xor
+                        2'b10  : cx = {7'b0000000, c_rdp, c_rs1p, 3'b110, c_rs1p, 7'b0110011}; // c.or
+                        default: cx = {7'b0000000, c_rdp, c_rs1p, 3'b111, c_rs1p, 7'b0110011}; // c.and
+                    }
+                } else {
+                    case ci[6:5] {
+                        2'b00  : cx = {7'b0100000, c_rdp, c_rs1p, 3'b000, c_rs1p, 7'b0111011}; // c.subw
+                        2'b01  : cx = {7'b0000000, c_rdp, c_rs1p, 3'b000, c_rs1p, 7'b0111011}; // c.addw
+                        default: c_ill = 1'b1;
+                    }
+                }
+            }
+            5'b01_101: cx = {c_jo[20], c_jo[10:1], c_jo[11], c_jo[19:12], 5'd0, 7'b1101111}; // c.j
+            5'b01_110: cx = {c_bo[12], c_bo[10:5], 5'd0, c_rs1p, 3'b000, c_bo[4:1], c_bo[11], 7'b1100011}; // c.beqz
+            5'b01_111: cx = {c_bo[12], c_bo[10:5], 5'd0, c_rs1p, 3'b001, c_bo[4:1], c_bo[11], 7'b1100011}; // c.bnez
+            // ---- 第 2 象限
+            5'b10_000: cx = {6'b000000, ci[12], ci[6:2], c_rd, 3'b001, c_rd, 7'b0010011}; // c.slli
+            5'b10_010: { // c.lwsp
+                cx    = {4'd0, ci[3:2], ci[12], ci[6:4], 2'b00, 5'd2, 3'b010, c_rd, 7'b0000011};
+                c_ill = c_rd == 5'd0;
+            }
+            5'b10_011: { // c.ldsp
+                cx    = {3'd0, ci[4:2], ci[12], ci[6:5], 3'b000, 5'd2, 3'b011, c_rd, 7'b0000011};
+                c_ill = c_rd == 5'd0;
+            }
+            5'b10_100: if !ci[12] {
+                if c_rs2 == 5'd0 { // c.jr
+                    cx    = {12'd0, c_rd, 3'b000, 5'd0, 7'b1100111};
+                    c_ill = c_rd == 5'd0;
+                } else { // c.mv
+                    cx = {7'd0, c_rs2, 5'd0, 3'b000, c_rd, 7'b0110011};
+                }
+            } else {
+                if c_rs2 == 5'd0 && c_rd == 5'd0 { // c.ebreak
+                    cx = 32'h0010_0073;
+                } else if c_rs2 == 5'd0 { // c.jalr
+                    cx = {12'd0, c_rd, 3'b000, 5'd1, 7'b1100111};
+                } else { // c.add
+                    cx = {7'd0, c_rs2, c_rd, 3'b000, c_rd, 7'b0110011};
+                }
+            }
+            5'b10_110: cx = {4'd0, ci[8:7], ci[12], c_rs2, 5'd2, 3'b010, ci[11:9], 2'b00, 7'b0100011}; // c.swsp
+            5'b10_111: cx = {3'd0, ci[9:7], ci[12], c_rs2, 5'd2, 3'b011, ci[11:10], 3'b000, 7'b0100011}; // c.sdsp
+            // c.fld / c.fsd / c.fldsp / c.fsdsp（沒有 D）與第 0 象限的 100：保留
+            default: c_ill = 1'b1;
+        }
+    }
+    // 執行的指令（32 位元形式）
+    let ir: logic<32> = if ir_c ? cx : ir_raw;
 
     // ---------------------------------------------------------------- 暫存器檔
     var rf: logic<64> [32];
@@ -216,13 +319,12 @@ module Rv64Core #(
             default: take = 1'b0;
         }
     }
-    let pc4     : logic<64> = pc + 64'd4;
+    let pc4     : logic<64> = pc + (if ir_c ? 64'd2 : 64'd4); // 下一個指令（壓縮指令 + 2）
     let br_tgt  : logic<64> = pc + imm_b;
     let jal_tgt : logic<64> = pc + imm_j;
     let jalr_sum: logic<64> = x1 + imm_i;
     let jalr_tgt: logic<64> = {jalr_sum[63:1], 1'b0};
-    // 沒有 C 擴充：跳躍目標一定要 4 的倍數
-    let tgt_mis: logic = (op_jal && jal_tgt[1]) || (op_jalr && jalr_tgt[1]) || (op_branch && take && br_tgt[1]);
+    // 有 C 擴充：跳躍目標只要 2 的倍數（jal / 分支的位移、jalr 清掉的 bit 0 都保證），不會有取指令沒對齊的例外
     let tgt    : logic<64> = if op_jal ? jal_tgt : if op_jalr ? jalr_tgt : br_tgt;
 
     // ---------------------------------------------------------------- CSR
@@ -324,7 +426,7 @@ module Rv64Core #(
                 12'h14D: csr_rdata = stimecmp;
                 12'h180: csr_rdata = {if satp_sv39 ? 4'd8 : 4'd0, satp_asid, satp_ppn};
                 12'h300: csr_rdata = mstatus;
-                12'h301: csr_rdata = 64'h8000_0000_0014_1101; // RV64 A I M S U
+                12'h301: csr_rdata = 64'h8000_0000_0014_1105; // RV64 A C I M S U
                 12'h302: csr_rdata = {48'd0, medeleg};
                 12'h303: csr_rdata = {52'd0, mideleg};
                 12'h304: csr_rdata = {52'd0, mie_r};
@@ -483,6 +585,15 @@ module Rv64Core #(
     }
     let p_next : logic<64> = {8'd0, p_ppn, if walk_lvl == 2'd2 ? acc_va[29:21] : acc_va[20:12], 3'b000};
 
+    // ---------------------------------------------------------------- 取指令
+    // 一個指令完成的那一拍就開始取下一個指令（省掉 Fetch 那一拍）：一般指令（Exec）、load / store（Mem）、
+    // AMO（AmoW）。有中斷要處理、位址不合法、或系統指令（CSR、mret 等會改特權或中斷設定）時照舊回到 Fetch。
+    let pcn     : logic<64> = pc4;
+    let exec_npc: logic<64> = if op_jal || op_jalr || (op_branch && take) ? tgt : pcn;
+    let npc     : logic<64> = if state == S_EXEC ? exec_npc : pcn;
+    let fs_va   : logic<64> = if state == S_FETCH ? pc : if state == S_FETCH2 ? pc + 64'd2 : npc;
+    let fs_canon: logic     = fs_va[63:38] == 26'd0 || fs_va[63:38] == 26'h3ff_ffff;
+
     // ---------------------------------------------------------------- TLB（16 筆全關聯，取指令與資料共用）
     // 只存走訪成功的葉節點。命中、權限夠、A / D 不用更新時直接用存的實體頁號；
     // 其他情況照樣走訪分頁表（例外與 A / D 的行為不變），走訪完覆蓋那一筆。
@@ -496,10 +607,11 @@ module Rv64Core #(
     var acc_thit: logic;          // 這次存取有命中但不能直接用：走訪後覆蓋 acc_tidx
     var acc_tidx: logic<4>;
 
-    // 開始一次存取的位址：Fetch 時是 pc，Exec 時是 load / store / AMO 的位址
-    let bg_va  : logic<64> = if state == S_EXEC ? ls_va : pc;
-    let bg_kind: logic<2>  = if state == S_EXEC ? ls_kind : K_FETCH;
-    let bg_prv : logic<2>  = if state == S_EXEC ? ls_prv : prv;
+    // 開始一次存取的位址：Exec 的 load / store / AMO 是資料位址，其他是取指令的位址 fs_va
+    let bg_ls  : logic     = state == S_EXEC && is_ls;
+    let bg_va  : logic<64> = if bg_ls ? ls_va : fs_va;
+    let bg_kind: logic<2>  = if bg_ls ? ls_kind : K_FETCH;
+    let bg_prv : logic<2>  = if bg_ls ? ls_prv : prv;
     var th_any : logic   ;
     var th_idx : logic<4>;
     always_comb {
@@ -634,10 +746,15 @@ module Rv64Core #(
                 tk_code = af_code;
                 tk_tval = acc_va;
             }
-            S_EXEC: if !legal {
+            S_FETCH2: if pc_vm && !fs_canon {
+                tk      = 1'b1;
+                tk_code = 5'd12;
+                tk_tval = fs_va;
+            }
+            S_EXEC: if !legal || (ir_c && c_ill) {
                 tk      = 1'b1;
                 tk_code = 5'd2;
-                tk_tval = {32'd0, ir};
+                tk_tval = {32'd0, ir_raw}; // 指令本身（壓縮指令是 16 位元）
             } else if is_ecall {
                 tk      = 1'b1;
                 tk_code = if prv == PRV_U ? 5'd8 : if prv == PRV_S ? 5'd9 : 5'd11;
@@ -645,10 +762,6 @@ module Rv64Core #(
                 tk      = 1'b1;
                 tk_code = 5'd3;
                 tk_tval = pc;
-            } else if tgt_mis {
-                tk      = 1'b1;
-                tk_code = 5'd0;
-                tk_tval = tgt;
             } else if is_ls && ls_mis {
                 tk      = 1'b1;
                 tk_code = if ls_kind == K_LOAD ? 5'd4 : 5'd6;
@@ -709,7 +822,7 @@ module Rv64Core #(
 
     assign o_ret       = retire;
     assign o_ret_pc    = pc;
-    assign o_ret_insn  = ir;
+    assign o_ret_insn  = ir_raw;
     assign o_ret_we    = rf_we;
     assign o_ret_rd    = rd;
     assign o_ret_wdata = wb_data;
@@ -718,6 +831,9 @@ module Rv64Core #(
     assign o_trap_cause = tk_cause;
 
     let exec_ok : logic = state == S_EXEC && !tk;
+    let done_ins: logic = (state == S_EXEC && !is_ls && !op_system) || (state == S_MEM && mem_done && (acc_kind == K_LOAD || acc_kind == K_STORE)) || (state == S_AMOW && i_ack);
+    let fast    : logic = !tk && done_ins && !irq && (!pc_vm || fs_canon);
+    let do_fetch: logic = ((state == S_FETCH || state == S_FETCH2) && !tk) || fast;
     let csr_we  : logic = exec_ok && is_csr && csr_wr;
 
     // TLB 的填入（走訪找到可以用的葉節點）與清除
@@ -752,7 +868,9 @@ module Rv64Core #(
         if_reset {
             state     = S_FETCH;
             pc        = RESET_PC;
-            ir        = 32'd0;
+            ir_raw    = 32'd0;
+            ir_lo     = 16'd0;
+            fetch_hi  = 1'b0;
             prv       = PRV_M;
             st_sie    = 1'b0;
             st_mie    = 1'b0;
@@ -844,24 +962,7 @@ module Rv64Core #(
                 state = S_FETCH;
             } else {
                 case state {
-                    S_FETCH: {
-                        acc_kind = K_FETCH;
-                        acc_va   = pc;
-                        acc_size = 2'd2;
-                        if pc_vm && th_ok {
-                            acc_pa = th_pa;
-                            state  = S_MEM;
-                        } else if pc_vm {
-                            walk_addr = {8'd0, satp_ppn, pc[38:30], 3'b000};
-                            walk_lvl  = 2'd2;
-                            acc_thit  = th_any;
-                            acc_tidx  = th_idx;
-                            state     = S_WALK;
-                        } else {
-                            acc_pa = pc;
-                            state  = S_MEM;
-                        }
-                    }
+                    S_FETCH, S_FETCH2: {} // 開始取指令：在 case 之後（do_fetch）
                     S_WALK: if i_ack {
                         if p_leaf {
                             acc_pa = p_pa;
@@ -881,9 +982,17 @@ module Rv64Core #(
                     }
                     S_MEM: if mem_done {
                         case acc_kind {
-                            K_FETCH: {
-                                ir    = i_rdata[31:0];
-                                state = S_EXEC;
+                            K_FETCH: if fetch_hi {
+                                ir_raw = {i_rdata[15:0], ir_lo};
+                                state  = S_EXEC;
+                            } else if i_rdata[1:0] != 2'b11 || acc_size == 2'd2 {
+                                // 壓縮指令，或從 4 位元組對齊的位址取到整個 32 位元指令
+                                ir_raw = if i_rdata[1:0] != 2'b11 ? {16'd0, i_rdata[15:0]} : i_rdata[31:0];
+                                state  = S_EXEC;
+                            } else {
+                                // pc 在 2 的位置、又是 32 位元指令：再取後半（可能在下一頁）
+                                ir_lo = i_rdata[15:0];
+                                state = S_FETCH2;
                             }
                             K_LOAD: {
                                 if is_lr {
@@ -969,7 +1078,7 @@ module Rv64Core #(
                                 12'h106: scounteren = csr_new[31:0];
                                 12'h10A: senv_fiom = csr_new[0];
                                 12'h140: sscratch = csr_new;
-                                12'h141: sepc = {csr_new[63:2], 2'b00};
+                                12'h141: sepc = {csr_new[63:1], 1'b0};
                                 12'h142: scause = csr_new;
                                 12'h143: stval = csr_new;
                                 12'h144: if mideleg[1] {
@@ -1008,7 +1117,7 @@ module Rv64Core #(
                                 }
                                 12'h320: mcountinh = csr_new[31:0] & 32'hffff_fffd;
                                 12'h340: mscratch = csr_new;
-                                12'h341: mepc = {csr_new[63:2], 2'b00};
+                                12'h341: mepc = {csr_new[63:1], 1'b0};
                                 12'h342: mcause = csr_new;
                                 12'h343: mtval = csr_new;
                                 12'h344: {
@@ -1030,6 +1139,30 @@ module Rv64Core #(
                         state = S_FETCH;
                     }
                     default: state = S_FETCH;
+                }
+                // 開始取指令（Fetch，或指令完成時的快速路徑）：TLB 命中或沒有分頁 → Mem，沒命中 → Walk
+                if do_fetch {
+                    // 4 位元組對齊的位址取 4 位元組，否則取 2 位元組（可能是壓縮指令）；後半時 pc 不變
+                    if state != S_FETCH2 {
+                        pc = fs_va;
+                    }
+                    fetch_hi = state == S_FETCH2;
+                    acc_kind = K_FETCH;
+                    acc_va   = fs_va;
+                    acc_size = if fs_va[1] ? 2'd1 : 2'd2;
+                    if pc_vm && th_ok {
+                        acc_pa = th_pa;
+                        state  = S_MEM;
+                    } else if pc_vm {
+                        walk_addr = {8'd0, satp_ppn, fs_va[38:30], 3'b000};
+                        walk_lvl  = 2'd2;
+                        acc_thit  = th_any;
+                        acc_tidx  = th_idx;
+                        state     = S_WALK;
+                    } else {
+                        acc_pa = fs_va;
+                        state  = S_MEM;
+                    }
                 }
             }
         }
