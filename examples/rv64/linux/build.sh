@@ -87,6 +87,8 @@ echo "busybox: $(wc -c < "$B/busybox/busybox") bytes, $(wc -l < "$B/busybox/busy
     echo "file /bin/busybox $B/busybox/busybox 0755 0 0"
     grep -v '^/bin/busybox$' "$B/busybox/busybox.links" | while read -r l; do echo "slink $l /bin/busybox 0777 0 0"; done
     echo "file /init $HERE/init.sh 0755 0 0"
+    echo "file /bin/getfiles $HERE/getfiles 0755 0 0"
+    echo "file /bin/savefiles $HERE/savefiles 0755 0 0"
 } > "$B/initramfs.list"
 "${K[@]}" -s -j8 Image > "$B/kernel.log" 2>&1 || { grep -E "error|Error" "$B/kernel.log" | head -20; exit 1; }
 echo "kernel: $(wc -c < "$B/kernel/arch/riscv/boot/Image") bytes"

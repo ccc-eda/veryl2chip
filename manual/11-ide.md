@@ -127,6 +127,10 @@ UART 接到分頁裡的終端機。
 - 快照（v2.17）：開機時，先找這個專案在瀏覽器裡存下的狀態（💾），再找內附的快照（`machine.json` 的 `"snapshot"`，建置網頁時
   由 `web/snapshot.mjs` 開到 `"prompt"` 做成 `img_snap_*.js`），都沒有才冷開機；狀態只適用於同一個編譯結果（改過 Veryl 就會冷開機）。
   RV64 開發板從快照約 10 秒就有 shell（冷開機約 1 分鐘）。
+- 檔案（v2.18）：`machine.json` 有 `"files": { "addr": "0x8F000000", "size": 16777216 }` 時，專案的檔案（Veryl、`machine.json`、
+  `.pcf` 以外）開機時放進板子的 `/root`（冷開機時 `/init` 執行 `getfiles`；從快照開機時 IDE 自動打 `getfiles`）；⇅ 檔案隨時再送一次。
+  板子上打 `savefiles` 把 `/root`（隱藏檔以外）送回專案：檔案總管裡就出現在板子上建立或改過的檔案。
+  RV64 範例附 `blink.sh`（閃 GPIO 5 的 LED）與 `button.sh`（數按鈕次數）：在板子上 `sh blink.sh`。
 - 範例「RV64 + Linux（模擬機）」開 OpenSBI + Linux 6.12 + busybox：瀏覽器裡每秒約 370 萬拍，開到 `rv64:~$` 約 1 分鐘，
   之後就可以在終端機打指令。Linux 映像（`img_linux.js`，約 2.4 MB）第一次開機時才載入。
 - 這種專案的頂層太大，▶ 測試與合成會改成提示用模擬機（裡面的 `Rv64Core` 仍然可以合成）。

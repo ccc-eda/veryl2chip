@@ -14,6 +14,7 @@ import { saveAs } from '../zip';
 import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
 import { Emulator, EmuStart } from './emu';
 import { fingerprint, MachineCfg, machineStops } from '../emu_machine';
+import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
 
@@ -853,6 +854,26 @@ function machineCfg(): MachineCfg | null {
   try { return JSON.parse(f.src) as MachineCfg; } catch { return null; }
 }
 
+/** the project's files for the board (not the hardware: Veryl, machine.json, pins) as an exchange area */
+function projectArea(): Uint8Array {
+  const fs = proj.files.filter(f => !f.name.endsWith('.veryl') && f.name !== 'machine.json' && !f.name.endsWith('.pcf'));
+  return exchangeArea(tarFiles(fs));
+}
+
+/** savefiles on the board: its /root (no hidden files) into the project */
+function filesBack(area: Uint8Array): string {
+  const t = readExchangeArea(area);
+  if (!t) return tr('板子沒有送回檔案', 'The board sent no files');
+  const got = untarFiles(t).filter(f => !f.name.split('/').some(p => p.startsWith('.')) && !f.name.includes('/'));
+  for (const f of got) {
+    const cur = file(f.name);
+    if (cur) cur.src = f.src; else proj.files.push({ name: f.name, src: f.src });
+  }
+  changed();
+  if (proj.active && file(proj.active) && !special(proj.active)) showActive();
+  return tr(`板子送回 ${got.length} 個檔案：${got.map(f => f.name).join('、')}`, `The board sent back ${got.length} file(s): ${got.map(f => f.name).join(', ')}`);
+}
+
 /** the layout of the model the emulator runs now (saved states only fit it) */
 let emuFp = '';
 
@@ -914,6 +935,8 @@ function ensureEmu(): Emulator {
     emu = new Emulator($('emuPane'));
     emu.onStart = startEmu;
     emu.getParts = () => proj.piBoard ?? null;
+    emu.getFiles = projectArea;
+    emu.onFilesBack = filesBack;
     emu.onSave = async (st) => { if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st }); };
     emu.onParts = (parts) => { proj.piBoard = parts.map(p => ({ ...p })); persist(); };
   }
@@ -948,7 +971,7 @@ async function startEmu(): Promise<EmuStart | null> {
       if (b && b.fingerprint === emuFp) snap = { data: b.data, cycle: b.cycle, log: b.log, from: 'bundled' };
     }
     $('sbTest').textContent = tr('🖥 模擬機開機', '🖥 Emulator booted');
-    return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats, snap };
+    return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats, snap, files: cfg.files ? projectArea() : undefined };
   } finally {
     setBusy(false);
   }

@@ -47,13 +47,13 @@
       return new TextDecoder().decode(new Uint8Array(this.x.memory.buffer, ptr, this.x.result_len()).slice());
     }
     call(req) {
-      const enc = new TextEncoder().encode(JSON.stringify(req));
+      const enc2 = new TextEncoder().encode(JSON.stringify(req));
       const x = this.x;
-      const p = x.alloc(enc.length);
-      new Uint8Array(x.memory.buffer, p, enc.length).set(enc);
+      const p = x.alloc(enc2.length);
+      new Uint8Array(x.memory.buffer, p, enc2.length).set(enc2);
       let out;
       try {
-        out = x.call(p, enc.length);
+        out = x.call(p, enc2.length);
       } catch (e) {
         let msg = String(e);
         try {
@@ -64,7 +64,7 @@
         throw new Error(msg);
       }
       const s = this.text(out);
-      x.dealloc(p, enc.length);
+      x.dealloc(p, enc2.length);
       const r = JSON.parse(s);
       if (!r.ok) throw new Error(r.error);
       return r;
@@ -1024,7 +1024,7 @@
     return (c ^ 4294967295) >>> 0;
   }
   function zip(files) {
-    const enc = new TextEncoder();
+    const enc2 = new TextEncoder();
     const parts = [];
     const central = [];
     let off = 0;
@@ -1032,8 +1032,8 @@
     const time = d.getHours() << 11 | d.getMinutes() << 5 | d.getSeconds() >> 1;
     const date = d.getFullYear() - 1980 << 9 | d.getMonth() + 1 << 5 | d.getDate();
     for (const f of files) {
-      const name = enc.encode(f.name);
-      const data = typeof f.data === "string" ? enc.encode(f.data) : f.data;
+      const name = enc2.encode(f.name);
+      const data = typeof f.data === "string" ? enc2.encode(f.data) : f.data;
       const crc = crc32(data);
       const loc = new DataView(new ArrayBuffer(30));
       loc.setUint32(0, 67324752, true);
@@ -4046,8 +4046,14 @@ ${lines.join("\n")}
     write(bytes) {
       for (const b of bytes) {
         const ch = String.fromCharCode(b);
+        if (this.esc.startsWith("\x1B]")) {
+          this.esc += ch;
+          if (b === 7 || this.esc.endsWith("\x1B\\") || this.esc.length > 200) this.esc = "";
+          continue;
+        }
         if (this.esc) {
           this.esc += ch;
+          if (this.esc === "\x1B]") continue;
           if (this.esc === "\x1B[" || this.esc.length > 2 && this.esc.startsWith("\x1B[") && !/[@-~]/.test(ch)) continue;
           if (this.esc.startsWith("\x1B[")) this.csi(this.esc.slice(2, -1), ch);
           this.esc = "";
@@ -4156,6 +4162,9 @@ ${lines.join("\n")}
       /** the IDE: keep a saved state (gzip of the memory, the cycle, the terminal text) */
       __publicField(this, "onSave", async () => {
       });
+      /** the IDE: the project's files as an exchange area, and the files the board sent back */
+      __publicField(this, "getFiles", () => null);
+      __publicField(this, "onFilesBack", () => "");
       /** the IDE: the project's breadboard for the development board (null: the example's), and saving it */
       __publicField(this, "getParts", () => null);
       __publicField(this, "onParts", () => {
@@ -4167,6 +4176,7 @@ ${lines.join("\n")}
         <button class="tb-btn" data-a="boot" title="${tr("\u7528 veryl-emu \u628A\u8A2D\u8A08\u7DE8\u8B6F\u6210 WebAssembly\uFF0C\u8F09\u5165\u7A0B\u5F0F\u5F8C\u958B\u6A5F", "Compile the design to WebAssembly with veryl-emu, load the programs and boot")}">${tr("\u{1F5A5} \u958B\u6A5F", "\u{1F5A5} Boot")}</button>
         <button class="tb-btn" data-a="pause" disabled>\u23F8</button>
         <button class="tb-btn" data-a="reset" disabled title="${tr("\u51B7\u958B\u6A5F\uFF08\u91CD\u65B0\u8F09\u5165\u7A0B\u5F0F\uFF0C\u5F9E\u982D\u958B\u6A5F\uFF0C\u4E0D\u7528\u5FEB\u7167\uFF09", "Cold boot (reload the programs and boot from the start, no snapshot)")}">\u27F2</button>
+        <button class="tb-btn ghost" data-a="files" disabled title="${tr("\u628A\u5C08\u6848\u7684\u6A94\u6848\uFF08Veryl \u8207 machine.json \u4EE5\u5916\uFF09\u653E\u9032\u677F\u5B50\u7684 /root\uFF08\u677F\u5B50\u4E0A\u6253 savefiles \u9001\u56DE\u5C08\u6848\uFF09", "Put the project's files (other than Veryl and machine.json) into /root on the board (savefiles on the board sends them back)")}">${tr("\u21C5 \u6A94\u6848", "\u21C5 Files")}</button>
         <button class="tb-btn ghost" data-a="save" disabled title="${tr("\u5B58\u4E0B\u76EE\u524D\u7684\u72C0\u614B\uFF08\u5B58\u5728\u9019\u500B\u700F\u89BD\u5668\uFF1B\u4E0B\u6B21\u958B\u6A5F\u5F9E\u9019\u88E1\u7E7C\u7E8C\uFF09", "Save the current state (in this browser; the next boot continues from here)")}">\u{1F4BE}</button>
         <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u81EA\u5DF1\u7684\u7A0B\u5F0F\uFF08ELF \u6216\u4E8C\u9032\u4F4D\u6A94\uFF0C\u653E\u5728 RAM \u7684\u958B\u982D\uFF09\u518D\u958B\u6A5F", "Load your own program (ELF or a binary at the start of the RAM), then boot")}">${tr("\u{1F4C2} \u7A0B\u5F0F", "\u{1F4C2} Program")}</button>
         <input type="file" class="hidden" data-a="file">
@@ -4185,6 +4195,13 @@ ${lines.join("\n")}
           this.note(tr("\u51B7\u958B\u6A5F", "Cold boot"));
           this.set("run");
           this.inEl.focus();
+        }
+      };
+      q("files").onclick = () => {
+        const a = this.getFiles();
+        if (this.w && a) {
+          this.w.postMessage({ type: "files", area: a });
+          this.note(tr("\u5C08\u6848\u7684\u6A94\u6848\u9001\u9032\u677F\u5B50\u7684 /root", "The project's files went to /root on the board"));
         }
       };
       q("save").onclick = () => {
@@ -4247,6 +4264,7 @@ ${lines.join("\n")}
       q("pause").textContent = s === "pause" ? "\u25B6" : "\u23F8";
       q("reset").disabled = s === "off";
       q("save").disabled = s === "off" || s === "end";
+      q("files").disabled = s !== "run" || !this.last?.cfg.files;
       this.dirty = true;
     }
     render() {
@@ -4274,7 +4292,7 @@ ${lines.join("\n")}
       if (this.upload) s.images = [{ bytes: this.upload }];
       this.last = s;
       this.w?.terminate();
-      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** the whole state: the non-zero 4 KB pages of the model\'s memory ("VESN", 1, page size, count, then [index, page]...) */\n    snapshot() {\n      const P = 4096, u8 = this.u8, pages = [];\n      const w = new Uint32Array(u8.buffer, 0, u8.length / 4);\n      for (let i = 0; i < u8.length / P; i++) {\n        for (let k = i * P / 4, e = (i + 1) * P / 4; k < e; k++) if (w[k]) {\n          pages.push(i);\n          break;\n        }\n      }\n      const out = new Uint8Array(16 + pages.length * (P + 4));\n      const d = new DataView(out.buffer);\n      d.setUint32(0, 1314080086, true);\n      d.setUint32(4, 1, true);\n      d.setUint32(8, P, true);\n      d.setUint32(12, pages.length, true);\n      pages.forEach((p, k) => {\n        d.setUint32(16 + k * (P + 4), p, true);\n        out.set(u8.subarray(p * P, (p + 1) * P), 20 + k * (P + 4));\n      });\n      return out;\n    }\n    /** go back to a state made by `snapshot()` (of a model with the same layout) at `cycle` */\n    restore(data, cycle = 0) {\n      const d = new DataView(data.buffer, data.byteOffset, data.byteLength);\n      if (d.getUint32(0, true) !== 1314080086) throw new Error("not a machine snapshot");\n      const P = d.getUint32(8, true), n = d.getUint32(12, true);\n      this.u8.fill(0);\n      for (let k = 0; k < n; k++) {\n        const at = 16 + k * (P + 4);\n        const p = d.getUint32(at, true);\n        this.u8.set(data.subarray(at + 4, at + 4 + P), p * P);\n      }\n      this.rx = [];\n      this.finished = null;\n      this.cycle = cycle;\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** GPIO inputs (a bit per pin) */\n    setGpio(bits) {\n      const g = this.cfg.gpio;\n      if (!g) return;\n      this.sig(g.in).set(bits);\n      this.x.settle();\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      const g = this.cfg.gpio, n = g?.n ?? 16;\n      const go = g ? this.sig(g.out) : null, ge = g ? this.sig(g.oe) : null;\n      const high = new Array(n).fill(0);\n      let oeSeen = 0;\n      const SAMPLE = 1024;\n      const sample = (cycles) => {\n        if (!go) return;\n        const v = Number(go.get()), e = Number(ge.get());\n        oeSeen |= e;\n        for (let k = 0; k < n; k++) if ((v & e) >> k & 1) high[k] += cycles;\n      };\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : go ? Math.min(SAMPLE, max - done) : max - done;\n        const ran = single ? 0 : this.x.run(want);\n        done += ran;\n        sample(ran);\n        if (ran < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          sample(1);\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      const r = { cycles: done, out, finished: this.finished };\n      if (go) {\n        r.duty = high.map((h) => done ? h / done : 0);\n        r.oe = oeSeen;\n      }\n      return r;\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var gpio = 0;\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    m.reset();\n    m.setGpio(gpio);\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate, duty: r.duty, oe: r.oe });\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        if (d.snapshot) {\n          m.restore(d.snapshot, d.cycle ?? 0);\n          m.setGpio(gpio);\n        } else boot();\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "gpio") {\n        gpio = d.bits;\n        m?.setGpio(gpio);\n      } else if (d.type === "save") {\n        if (!m) return;\n        const data = m.snapshot();\n        post({ type: "saved", data, cycle: m.cycle });\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
+      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** write the file exchange area (machine.json "files") */\n    writeArea(bytes) {\n      if (!this.cfg.files) return;\n      if (bytes.length > this.cfg.files.size) throw new Error(`the project\'s files (${bytes.length} bytes) do not fit the exchange area`);\n      this.load(bytes, BigInt(this.cfg.files.addr));\n    }\n    /** a copy of the file exchange area */\n    readArea() {\n      const f = this.cfg.files, ram = this.cfg.ram;\n      if (!f || !ram) return null;\n      const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));\n      return this.u8.slice(off, off + f.size);\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** the whole state: the non-zero 4 KB pages of the model\'s memory ("VESN", 1, page size, count, then [index, page]...) */\n    snapshot() {\n      const P = 4096, u8 = this.u8, pages = [];\n      const w = new Uint32Array(u8.buffer, 0, u8.length / 4);\n      for (let i = 0; i < u8.length / P; i++) {\n        for (let k = i * P / 4, e = (i + 1) * P / 4; k < e; k++) if (w[k]) {\n          pages.push(i);\n          break;\n        }\n      }\n      const out = new Uint8Array(16 + pages.length * (P + 4));\n      const d = new DataView(out.buffer);\n      d.setUint32(0, 1314080086, true);\n      d.setUint32(4, 1, true);\n      d.setUint32(8, P, true);\n      d.setUint32(12, pages.length, true);\n      pages.forEach((p, k) => {\n        d.setUint32(16 + k * (P + 4), p, true);\n        out.set(u8.subarray(p * P, (p + 1) * P), 20 + k * (P + 4));\n      });\n      return out;\n    }\n    /** go back to a state made by `snapshot()` (of a model with the same layout) at `cycle` */\n    restore(data, cycle = 0) {\n      const d = new DataView(data.buffer, data.byteOffset, data.byteLength);\n      if (d.getUint32(0, true) !== 1314080086) throw new Error("not a machine snapshot");\n      const P = d.getUint32(8, true), n = d.getUint32(12, true);\n      this.u8.fill(0);\n      for (let k = 0; k < n; k++) {\n        const at = 16 + k * (P + 4);\n        const p = d.getUint32(at, true);\n        this.u8.set(data.subarray(at + 4, at + 4 + P), p * P);\n      }\n      this.rx = [];\n      this.finished = null;\n      this.cycle = cycle;\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** GPIO inputs (a bit per pin) */\n    setGpio(bits) {\n      const g = this.cfg.gpio;\n      if (!g) return;\n      this.sig(g.in).set(bits);\n      this.x.settle();\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      const g = this.cfg.gpio, n = g?.n ?? 16;\n      const go = g ? this.sig(g.out) : null, ge = g ? this.sig(g.oe) : null;\n      const high = new Array(n).fill(0);\n      let oeSeen = 0;\n      const SAMPLE = 1024;\n      const sample = (cycles) => {\n        if (!go) return;\n        const v = Number(go.get()), e = Number(ge.get());\n        oeSeen |= e;\n        for (let k = 0; k < n; k++) if ((v & e) >> k & 1) high[k] += cycles;\n      };\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : go ? Math.min(SAMPLE, max - done) : max - done;\n        const ran = single ? 0 : this.x.run(want);\n        done += ran;\n        sample(ran);\n        if (ran < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          sample(1);\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      const r = { cycles: done, out, finished: this.finished };\n      if (go) {\n        r.duty = high.map((h) => done ? h / done : 0);\n        r.oe = oeSeen;\n      }\n      return r;\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var gpio = 0;\n  var files = null;\n  var tail = "";\n  var NOTICE = "\\x1B]1337;veryl-save\\x07";\n  var typeLine = (s) => m.input([...s].map((c) => c.charCodeAt(0)));\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    if (files) m.writeArea(files);\n    m.reset();\n    m.setGpio(gpio);\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate, duty: r.duty, oe: r.oe });\n      if (r.out.length) {\n        tail = (tail + String.fromCharCode(...r.out)).slice(-200);\n        const k = tail.lastIndexOf(NOTICE);\n        if (k >= 0) {\n          tail = tail.slice(k + NOTICE.length);\n          const area = m.readArea();\n          if (area) post({ type: "files-back", area });\n        }\n      }\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        files = d.files ?? null;\n        if (d.snapshot) {\n          m.restore(d.snapshot, d.cycle ?? 0);\n          m.setGpio(gpio);\n          if (files) {\n            m.writeArea(files);\n            typeLine("getfiles\\r");\n          }\n        } else boot();\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "gpio") {\n        gpio = d.bits;\n        m?.setGpio(gpio);\n      } else if (d.type === "files") {\n        files = d.area;\n        if (m && files) {\n          m.writeArea(files);\n          typeLine("getfiles\\r");\n        }\n      } else if (d.type === "save") {\n        if (!m) return;\n        const data = m.snapshot();\n        post({ type: "saved", data, cycle: m.cycle });\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
       this.w = new Worker(url);
       this.w.onmessage = (e) => this.msg(e.data);
       this.w.onerror = (e) => {
@@ -4297,7 +4315,7 @@ ${lines.join("\n")}
         this.pi.setParts(this.getParts() ?? PI_DEFAULT_BB);
         bh.classList.remove("hidden");
       } else bh.classList.add("hidden");
-      this.w.postMessage({ type: "start", wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle });
+      this.w.postMessage({ type: "start", wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle, files: s.files });
       this.set("run");
       this.inEl.focus();
     }
@@ -4316,6 +4334,8 @@ ${lines.join("\n")}
 [${d.pass ? tr("\u7D50\u675F\uFF08\u6B63\u5E38\uFF09", "finished (pass)") : tr("\u7D50\u675F\uFF0C\u4EE3\u78BC", "finished, code")} 0x${d.code.toString(16)}]\r
 `].map((c) => c.charCodeAt(0)));
         this.set("end");
+      } else if (d.type === "files-back") {
+        this.note(this.onFilesBack(d.area));
       } else if (d.type === "saved") {
         const data = d.data;
         gzip(data).then((gz2) => this.onSave({ data: gz2, cycle: d.cycle, log: this.term.text() })).then(() => this.note(tr(`\u72C0\u614B\u5B58\u597D\u4E86\uFF08${(this.stat.cycle / 1e6).toFixed(0)} M \u62CD\uFF09\uFF1A\u4E0B\u6B21\u958B\u6A5F\u5F9E\u9019\u88E1\u7E7C\u7E8C`, `State saved (${(this.stat.cycle / 1e6).toFixed(0)} M cycles): the next boot continues from here`))).catch((e) => this.note(String(e.message ?? e)));
@@ -4371,6 +4391,74 @@ ${lines.join("\n")}
   }
   function machineStops(cfg) {
     return [cfg.uart?.tx_valid, cfg.finish?.valid].filter((s) => !!s);
+  }
+
+  // src/tar.ts
+  var enc = new TextEncoder();
+  var dec = new TextDecoder();
+  function octal(n, len) {
+    return n.toString(8).padStart(len - 1, "0") + "\0";
+  }
+  function tarFiles(files) {
+    const parts = [];
+    for (const f of files) {
+      const body = enc.encode(f.src);
+      const h = new Uint8Array(512);
+      const put = (s, at2) => h.set(enc.encode(s).subarray(0, s.length), at2);
+      put(f.name.slice(0, 99), 0);
+      put(octal(420, 8), 100);
+      put(octal(0, 8), 108);
+      put(octal(0, 8), 116);
+      put(octal(body.length, 12), 124);
+      put(octal(Math.floor(Date.now() / 1e3), 12), 136);
+      put("        ", 148);
+      h[156] = 48;
+      put("ustar\0", 257);
+      put("00", 263);
+      let sum = 0;
+      for (const b of h) sum += b;
+      put(octal(sum, 7) + " ", 148);
+      parts.push(h, body, new Uint8Array((512 - body.length % 512) % 512));
+    }
+    parts.push(new Uint8Array(1024));
+    const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+    let at = 0;
+    for (const p of parts) {
+      out.set(p, at);
+      at += p.length;
+    }
+    return out;
+  }
+  function untarFiles(t) {
+    const out = [];
+    for (let at = 0; at + 512 <= t.length; ) {
+      const h = t.subarray(at, at + 512);
+      if (h.every((b) => b === 0)) break;
+      const str = (a, n) => dec.decode(h.subarray(a, a + n)).replace(/\0.*$/s, "");
+      let name = str(0, 100);
+      const prefix = str(257, 6).startsWith("ustar") ? str(345, 155) : "";
+      if (prefix) name = prefix + "/" + name;
+      const size = parseInt(str(124, 12).trim() || "0", 8);
+      const type = String.fromCharCode(h[156] || 48);
+      at += 512;
+      if (type === "0" || type === "\0") out.push({ name: name.replace(/^\.\//, ""), src: dec.decode(t.subarray(at, at + size)) });
+      at += Math.ceil(size / 512) * 512;
+    }
+    return out;
+  }
+  function exchangeArea(tar) {
+    const head = enc.encode(`VERYLFS ${tar.length}
+`);
+    const out = new Uint8Array(512 + tar.length);
+    out.set(head);
+    out.set(tar, 512);
+    return out;
+  }
+  function readExchangeArea(area) {
+    const line = dec.decode(area.subarray(0, 64)).split("\n")[0];
+    const m = /^VERYLFS (\d+)$/.exec(line);
+    if (!m) return null;
+    return area.slice(512, 512 + Number(m[1]));
   }
 
   // src/ide/highlight.ts
@@ -5506,6 +5594,23 @@ int main(void) {
       return null;
     }
   }
+  function projectArea() {
+    const fs = proj.files.filter((f) => !f.name.endsWith(".veryl") && f.name !== "machine.json" && !f.name.endsWith(".pcf"));
+    return exchangeArea(tarFiles(fs));
+  }
+  function filesBack(area) {
+    const t = readExchangeArea(area);
+    if (!t) return tr("\u677F\u5B50\u6C92\u6709\u9001\u56DE\u6A94\u6848", "The board sent no files");
+    const got = untarFiles(t).filter((f) => !f.name.split("/").some((p) => p.startsWith(".")) && !f.name.includes("/"));
+    for (const f of got) {
+      const cur2 = file(f.name);
+      if (cur2) cur2.src = f.src;
+      else proj.files.push({ name: f.name, src: f.src });
+    }
+    changed();
+    if (proj.active && file(proj.active) && !special(proj.active)) showActive();
+    return tr(`\u677F\u5B50\u9001\u56DE ${got.length} \u500B\u6A94\u6848\uFF1A${got.map((f) => f.name).join("\u3001")}`, `The board sent back ${got.length} file(s): ${got.map((f) => f.name).join(", ")}`);
+  }
   var emuFp = "";
   function idb() {
     return new Promise((ok, fail) => {
@@ -5570,6 +5675,8 @@ int main(void) {
       emu = new Emulator($2("emuPane"));
       emu.onStart = startEmu;
       emu.getParts = () => proj.piBoard ?? null;
+      emu.getFiles = projectArea;
+      emu.onFilesBack = filesBack;
       emu.onSave = async (st) => {
         if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st });
       };
@@ -5610,7 +5717,7 @@ int main(void) {
         if (b && b.fingerprint === emuFp) snap = { data: b.data, cycle: b.cycle, log: b.log, from: "bundled" };
       }
       $2("sbTest").textContent = tr("\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "\u{1F5A5} Emulator booted");
-      return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats, snap };
+      return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats, snap, files: cfg.files ? projectArea() : void 0 };
     } finally {
       setBusy(false);
     }

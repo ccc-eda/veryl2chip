@@ -1,9 +1,11 @@
 // The emulator's worker: runs a Machine (emu_machine.ts) in slices of about 50 ms,
 // sends the UART output and the speed, takes typed bytes and pause / resume / reset.
-//   in:  {type: 'start', wasm, meta, cfg, images: [{bytes, addr?}], snapshot?, cycle?} | {type: 'input', bytes}
+//   in:  {type: 'start', wasm, meta, cfg, images: [{bytes, addr?}], snapshot?, cycle?, files?} | {type: 'input', bytes}
+//        {type: 'files', area} (the project's files into the exchange area, then getfiles is typed)
 //        {type: 'pause'} | {type: 'resume'} | {type: 'reset'} (a cold boot) | {type: 'gpio', bits} | {type: 'save'}
 //   out: {type: 'out', bytes, cycle, rate, duty?, oe?} | {type: 'finished', code, pass, cycle} | {type: 'error', msg}
 //        {type: 'saved', data, cycle} (the state, Machine.snapshot())
+//        {type: 'files-back', area} (savefiles on the board: ESC ] 1337 ; veryl-save BEL seen)
 
 import { Machine } from './emu_machine';
 
@@ -13,11 +15,18 @@ let running = false;
 let gen = 0;
 /** the GPIO inputs (kept across resets) */
 let gpio = 0;
+/** the exchange area for the next cold boot */
+let files: Uint8Array | null = null;
+/** the end of the output so far (the savefiles notice may span two slices) */
+let tail = '';
+const NOTICE = '\x1b]1337;veryl-save\x07';
+const typeLine = (s: string) => m!.input([...s].map((c) => c.charCodeAt(0)));
 const post = (msg: object) => (self as unknown as Worker).postMessage(msg);
 
 function boot(): void {
   m!.clear();
   for (const im of images) m!.load(im.bytes, im.addr ? BigInt(im.addr) : undefined);
+  if (files) m!.writeArea(files);
   m!.reset();
   m!.setGpio(gpio);
 }
@@ -34,6 +43,11 @@ async function loop(my: number): Promise<void> {
     const now = performance.now();
     if (now - t > 500) { rate = (m!.cycle - c0) / ((now - t) / 1000); t = now; c0 = m!.cycle; }
     post({ type: 'out', bytes: r.out, cycle: m!.cycle, rate, duty: r.duty, oe: r.oe });
+    if (r.out.length) {
+      tail = (tail + String.fromCharCode(...r.out)).slice(-200);
+      const k = tail.lastIndexOf(NOTICE);
+      if (k >= 0) { tail = tail.slice(k + NOTICE.length); const area = m!.readArea(); if (area) post({ type: 'files-back', area }); }
+    }
     if (r.finished) { running = false; post({ type: 'finished', ...r.finished, cycle: m!.cycle }); break; }
     await new Promise((ok) => setTimeout(ok, 0));
   }
@@ -47,8 +61,13 @@ self.onmessage = async (e: MessageEvent) => {
       running = false;
       m = await Machine.create(d.wasm, d.meta, d.cfg);
       images = d.images;
-      // from a snapshot (the booted machine), else a cold boot
-      if (d.snapshot) { m.restore(d.snapshot, d.cycle ?? 0); m.setGpio(gpio); } else boot();
+      files = d.files ?? null;
+      // from a snapshot (the booted machine: getfiles is typed), else a cold boot (/init runs getfiles)
+      if (d.snapshot) {
+        m.restore(d.snapshot, d.cycle ?? 0);
+        m.setGpio(gpio);
+        if (files) { m.writeArea(files); typeLine('getfiles\r'); }
+      } else boot();
       running = true;
       loop(gen);
     } else if (d.type === 'input') {
@@ -56,6 +75,9 @@ self.onmessage = async (e: MessageEvent) => {
     } else if (d.type === 'gpio') {
       gpio = d.bits;
       m?.setGpio(gpio);
+    } else if (d.type === 'files') {
+      files = d.area;
+      if (m && files) { m.writeArea(files); typeLine('getfiles\r'); }
     } else if (d.type === 'save') {
       if (!m) return;
       const data = m.snapshot();

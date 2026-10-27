@@ -1,0 +1,11 @@
+#!/bin/sh
+# /root back to the IDE: a tar of it into the exchange area (see getfiles), then the
+# escape sequence ESC ] 1337 ; veryl-save BEL tells the IDE to read it into the project.
+B=$((0x8F000000 / 512))
+cd /root && tar cf /tmp/.save.tar . || exit 1
+n=$(wc -c < /tmp/.save.tar)
+{ printf 'VERYLFS %d\n' "$n"; dd if=/dev/zero bs=1 count=$((512 - 9 - ${#n})) 2>/dev/null; cat /tmp/.save.tar; } \
+    | dd of=/dev/mem bs=512 seek=$B conv=notrunc 2>/dev/null
+rm -f /tmp/.save.tar
+printf '\033]1337;veryl-save\007'
+echo "savefiles: $n bytes back to the IDE"

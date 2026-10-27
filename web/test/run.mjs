@@ -494,6 +494,8 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   // the breadboard model and the development board's default breadboard (bundled for Node)
   const esb = await import('esbuild');
   const bbPath = path.join(tmp, 'bbmodel.cjs');
+  const tarPath = path.join(tmp, 'tar.cjs');
+  fs.writeFileSync(tarPath, esb.buildSync({ entryPoints: [path.join(dist, '../src/tar.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text);
   fs.writeFileSync(bbPath, esb.buildSync({ entryPoints: [path.join(dist, '../src/ide/bbmodel.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text);
   ctx.PI_PARTS = [
     { id: 3, kind: 'wire', a: 'p:5', b: 'h:3:a' }, { id: 4, kind: 'led', a: 'h:3:c', b: 'h:4:c' }, { id: 5, kind: 'res', a: 'h:4:e', b: 'r:top-:4' },
@@ -544,6 +546,19 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
           const same = cold.trim() === warm.trim();
           ok = fpOk && same;
           what += `; snapshot (${(sn.data.length * 0.75 / 1e6).toFixed(1)} MB) ${fpOk ? '' : 'fingerprint differs, '}${same ? 'gives the same output' : 'differs: ' + JSON.stringify([cold, warm])} in ${Date.now() - t1} ms`;
+          // files: into /root (getfiles), changed on the board, back (savefiles)
+          if (ok && cfg.files) {
+            const T = createRequire(import.meta.url)(tarPath);
+            m2.writeArea(T.exchangeArea(T.tarFiles([{ name: 'hello.txt', src: 'hi from the IDE\n' }])));
+            const cmd3 = 'getfiles; cat /root/hello.txt; echo made-here > /root/new.txt; savefiles; echo F$((2+2))IN\r';
+            let o = '';
+            m2.input([...cmd3].map((c) => c.charCodeAt(0)));
+            while (!o.includes('F4IN')) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const back = T.untarFiles(T.readExchangeArea(m2.readArea()));
+            const fOk = o.includes('hi from the IDE') && o.includes('\x1b]1337;veryl-save\x07') && back.some((f) => f.name === 'new.txt' && f.src === 'made-here\n') && back.some((f) => f.name === 'hello.txt');
+            ok = fOk;
+            what += `; files ${fOk ? 'in and back' : 'FAILED ' + JSON.stringify(o.slice(-300))}`;
+          }
         }
       }
       if (!ok) bad++;

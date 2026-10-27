@@ -17,6 +17,8 @@ export interface EmuStart {
   cfg: MachineCfg;
   images: { bytes: Uint8Array; addr?: string }[];
   stats: string;
+  /** the project's files for the exchange area (machine.json "files") */
+  files?: Uint8Array;
   /** start from this state instead of a cold boot (memory, cycle, the terminal so far; where it comes from) */
   snap?: { data: Uint8Array; cycle: number; log: string; from: 'saved' | 'bundled' };
 }
@@ -31,8 +33,15 @@ class Term {
   write(bytes: number[]): void {
     for (const b of bytes) {
       const ch = String.fromCharCode(b);
+      if (this.esc.startsWith('\x1b]')) {
+        // an operating system command (ESC ] ... BEL or ESC \): not shown
+        this.esc += ch;
+        if (b === 7 || this.esc.endsWith('\x1b\\') || this.esc.length > 200) this.esc = '';
+        continue;
+      }
       if (this.esc) {
         this.esc += ch;
+        if (this.esc === '\x1b]') continue;
         if (this.esc === '\x1b[' || (this.esc.length > 2 && this.esc.startsWith('\x1b[') && !/[@-~]/.test(ch))) continue;
         if (this.esc.startsWith('\x1b[')) this.csi(this.esc.slice(2, -1), ch);
         this.esc = '';
@@ -103,6 +112,9 @@ export class Emulator {
   onStart: (() => Promise<EmuStart | null>) | null = null;
   /** the IDE: keep a saved state (gzip of the memory, the cycle, the terminal text) */
   onSave: (s: { data: Uint8Array; cycle: number; log: string }) => Promise<void> = async () => {};
+  /** the IDE: the project's files as an exchange area, and the files the board sent back */
+  getFiles: () => Uint8Array | null = () => null;
+  onFilesBack: (area: Uint8Array) => string = () => '';
   /** the IDE: the project's breadboard for the development board (null: the example's), and saving it */
   getParts: () => Part[] | null = () => null;
   onParts: (parts: Part[]) => void = () => {};
@@ -113,6 +125,7 @@ export class Emulator {
         <button class="tb-btn" data-a="boot" title="${tr('用 veryl-emu 把設計編譯成 WebAssembly，載入程式後開機', 'Compile the design to WebAssembly with veryl-emu, load the programs and boot')}">${tr('🖥 開機', '🖥 Boot')}</button>
         <button class="tb-btn" data-a="pause" disabled>⏸</button>
         <button class="tb-btn" data-a="reset" disabled title="${tr('冷開機（重新載入程式，從頭開機，不用快照）', 'Cold boot (reload the programs and boot from the start, no snapshot)')}">⟲</button>
+        <button class="tb-btn ghost" data-a="files" disabled title="${tr('把專案的檔案（Veryl 與 machine.json 以外）放進板子的 /root（板子上打 savefiles 送回專案）', 'Put the project\'s files (other than Veryl and machine.json) into /root on the board (savefiles on the board sends them back)')}">${tr('⇅ 檔案', '⇅ Files')}</button>
         <button class="tb-btn ghost" data-a="save" disabled title="${tr('存下目前的狀態（存在這個瀏覽器；下次開機從這裡繼續）', 'Save the current state (in this browser; the next boot continues from here)')}">💾</button>
         <button class="tb-btn ghost" data-a="upload" title="${tr('載入自己的程式（ELF 或二進位檔，放在 RAM 的開頭）再開機', 'Load your own program (ELF or a binary at the start of the RAM), then boot')}">${tr('📂 程式', '📂 Program')}</button>
         <input type="file" class="hidden" data-a="file">
@@ -124,6 +137,7 @@ export class Emulator {
     q('boot').onclick = () => this.boot();
     q('pause').onclick = () => this.pauseResume();
     q('reset').onclick = () => { if (this.w && this.last) { this.term = new Term(); this.dirty = true; this.w.postMessage({ type: 'reset' }); this.note(tr('冷開機', 'Cold boot')); this.set('run'); this.inEl.focus(); } };
+    q('files').onclick = () => { const a = this.getFiles(); if (this.w && a) { this.w.postMessage({ type: 'files', area: a }); this.note(tr('專案的檔案送進板子的 /root', 'The project\'s files went to /root on the board')); } };
     q('save').onclick = () => { if (this.w) { this.w.postMessage({ type: 'save' }); this.note(tr('存狀態中…', 'Saving the state…')); } };
     q('upload').onclick = () => q<HTMLInputElement>('file').click();
     q<HTMLInputElement>('file').onchange = async () => {
@@ -166,6 +180,7 @@ export class Emulator {
     q('pause').textContent = s === 'pause' ? '▶' : '⏸';
     q('reset').disabled = s === 'off';
     q('save').disabled = s === 'off' || s === 'end';
+    q('files').disabled = s !== 'run' || !this.last?.cfg.files;
     this.dirty = true;
   }
 
@@ -211,7 +226,7 @@ export class Emulator {
       this.pi.setParts(this.getParts() ?? PI_DEFAULT_BB);
       bh.classList.remove('hidden');
     } else bh.classList.add('hidden');
-    this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle });
+    this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle, files: s.files });
     this.set('run');
     this.inEl.focus();
   }
@@ -227,6 +242,8 @@ export class Emulator {
       this.stat.cycle = d.cycle!;
       this.term.write([...`\r\n[${d.pass ? tr('結束（正常）', 'finished (pass)') : tr('結束，代碼', 'finished, code')} 0x${d.code!.toString(16)}]\r\n`].map((c) => c.charCodeAt(0)));
       this.set('end');
+    } else if (d.type === 'files-back') {
+      this.note(this.onFilesBack((d as unknown as { area: Uint8Array }).area));
     } else if (d.type === 'saved') {
       const data = (d as unknown as { data: Uint8Array }).data;
       gzip(data).then((gz) => this.onSave({ data: gz, cycle: d.cycle!, log: this.term.text() }))

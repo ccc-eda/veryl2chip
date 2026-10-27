@@ -13,6 +13,8 @@
 //   - GPIO: a change of the outputs (pins with output enable) prints "[gpio] out=…" on stderr
 //   - -t: a line per retired instruction, as `spike -l --log-commits` prints it
 //   - -m CYCLES: at most this many cycles (default 100 M; 0 = no limit)
+//   - -d ADDR:LEN:FILE: at the end, write LEN bytes of the RAM from ADDR to FILE (e.g. the file
+//     exchange area 0x8F000000 after savefiles)
 // Exit code: 0 pass, 1 fail, 2 out of cycles.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,13 +26,14 @@ const RAM_BASE = 0x80000000n;
 
 const args = process.argv.slice(2);
 let maxCycles = 100_000_000, prog = null, script = null, trace = false;
-const extra = [];
+const extra = [], dumps = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '-m') maxCycles = Number(args[++i]);
   else if (a === '-l') { const [ad, f] = args[++i].split(/:(.*)/s); extra.push([BigInt(ad), f]); }
   else if (a === '-s') script = fs.readFileSync(args[++i], 'utf8').split('\n').filter((l, k, all) => k < all.length - 1 || l !== '');
   else if (a === '-t') trace = true;
+  else if (a === '-d') { const [ad, len, f] = args[++i].split(':'); dumps.push([BigInt(ad), Number(len), f]); }
   else prog = a;
 }
 if (!prog) { console.error('usage: rv64emu [-m CYCLES] [-l ADDR:FILE]... [-s SCRIPT] PROG.elf'); process.exit(2); }
@@ -169,6 +172,7 @@ while (cyc < maxCycles && !done) {
   if (!scripted && process.stdin.isTTY) await new Promise((r) => setImmediate(r));
 }
 flush();
+for (const [a, len, f] of dumps) fs.writeFileSync(f, emu.u8.subarray(ramInfo.off + Number(a - RAM_BASE), ramInfo.off + Number(a - RAM_BASE) + len));
 if (!scripted && process.stdin.isTTY) process.stdin.setRawMode(false);
 const sec = (performance.now() - t0) / 1000;
 const speed = `${sec.toFixed(1)} s, ${(cyc / sec / 1e6).toFixed(2)} MHz`;

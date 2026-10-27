@@ -23,6 +23,8 @@ export interface MachineCfg {
   /** a bundled snapshot of the booted machine (img_snap_NAME.js, made by web/snapshot.mjs) and the prompt it stops at */
   snapshot?: string;
   prompt?: string;
+  /** the file exchange area in the RAM (getfiles / savefiles on the board): address, size */
+  files?: { addr: string; size: number };
 }
 
 /** a bundled or saved machine state: the memory (gzip of `Machine.snapshot()`), the cycle, the terminal so far */
@@ -111,6 +113,20 @@ export class Machine {
       p.set(r.active ? 0 : 1);
     }
     this.x.settle();
+  }
+
+  /** write the file exchange area (machine.json "files") */
+  writeArea(bytes: Uint8Array): void {
+    if (!this.cfg.files) return;
+    if (bytes.length > this.cfg.files.size) throw new Error(`the project's files (${bytes.length} bytes) do not fit the exchange area`);
+    this.load(bytes, BigInt(this.cfg.files.addr));
+  }
+  /** a copy of the file exchange area */
+  readArea(): Uint8Array | null {
+    const f = this.cfg.files, ram = this.cfg.ram;
+    if (!f || !ram) return null;
+    const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));
+    return this.u8.slice(off, off + f.size);
   }
 
   /** clear every signal and memory (power off) */

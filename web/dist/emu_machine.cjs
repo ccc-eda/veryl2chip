@@ -109,6 +109,19 @@ var Machine = class _Machine {
     }
     this.x.settle();
   }
+  /** write the file exchange area (machine.json "files") */
+  writeArea(bytes) {
+    if (!this.cfg.files) return;
+    if (bytes.length > this.cfg.files.size) throw new Error(`the project's files (${bytes.length} bytes) do not fit the exchange area`);
+    this.load(bytes, BigInt(this.cfg.files.addr));
+  }
+  /** a copy of the file exchange area */
+  readArea() {
+    const f = this.cfg.files, ram = this.cfg.ram;
+    if (!f || !ram) return null;
+    const off = this.meta.signals[ram.array].off + Number(BigInt(f.addr) - BigInt(ram.base));
+    return this.u8.slice(off, off + f.size);
+  }
   /** clear every signal and memory (power off) */
   clear() {
     this.u8.fill(0);

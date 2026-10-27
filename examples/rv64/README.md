@@ -292,5 +292,10 @@ echo $((B+2)) > /sys/class/gpio/export            # GPIO 2 是按鈕
 cat /sys/class/gpio/gpio$((B+2))/value
 ```
 
+檔案（v2.18）：RAM 最後 16 MB（0x8F00_0000）在裝置樹裡是 reserved-memory，作為和 IDE 交換檔案的區域（開頭 512 位元組是一行
+`VERYLFS <大小>`，後面接 tar）：`getfiles`（`/init` 開機時執行）解到 `/root`，`savefiles` 把 `/root` 打包寫回，並送出 `ESC ] 1337 ; veryl-save BEL`
+通知 IDE。RISC-V 的 `/dev/mem` 只能讀寫 Linux 記憶體範圍內的位址，所以不能把這塊排除在 RAM 之外。測試平台用 `-l 0x8F000000:檔案` 放進去，
+`emu/rv64emu -d 0x8F000000:長度:檔案` 結束時存出來；`board/blink.sh`、`board/button.sh` 是開發板的範例腳本。
+
 測試平台（`sim/main.cpp`、`emu/rv64emu.mjs`）在輸出改變時印出 `[gpio] out=…`；`-s` 腳本裡的 `!gpio N=V` 是「把輸入腳 N 設成 V」
 （按下按鈕），不會送進終端機。`linux/test.sh` 用它檢查 LED、輸出腳、按鈕與邊緣中斷（`/proc/interrupts`）。

@@ -69,6 +69,18 @@
 		reg = <0x0 0x80000000 0x0 0x10000000>;
 	};
 
+	// the last 16 MB of the RAM (0x8F00_0000) is the exchange area for files from / to the IDE
+	// (getfiles / savefiles through /dev/mem): reserved, so Linux never allocates it, but still
+	// in its memory, so /dev/mem can read and write it
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		exchange@8f000000 {
+			reg = <0x0 0x8f000000 0x0 0x1000000>;
+		};
+	};
+
 	soc {
 		#address-cells = <2>;
 		#size-cells = <2>;

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Project files from the IDE (or a test bench) into /root. The exchange area is the last
+# 16 MB of the RAM (0x8F00_0000, a reserved-memory region in the device tree): its first
+# 512-byte block starts with the line "VERYLFS <bytes>", a tar of that size follows.
+B=$((0x8F000000 / 512))
+set -- $(dd if=/dev/mem bs=512 skip=$B count=1 2>/dev/null | head -n 1)
+[ "$1" = VERYLFS ] || { echo "getfiles: no files from the IDE"; exit 0; }
+dd if=/dev/mem bs=512 skip=$((B + 1)) count=$((($2 + 511) / 512)) 2>/dev/null | tar xf - -C /root \
+    && echo "getfiles: $(ls /root | wc -w) file(s) into /root"

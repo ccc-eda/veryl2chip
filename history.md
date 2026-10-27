@@ -37,7 +37,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.14 | 2026-10-27 | `e4b757c` | 2.14.0：veryl-emu 加速約 1.9 倍 | |
 | v2.15 | 2026-10-27 | `2283ee7` | 2.15.0：開發板 1：GPIO（Veryl 控制器 + Linux 驅動） | |
 | v2.16 | 2026-10-27 | `9bb24bb` | 2.16.0：開發板 2：IDE 裡的虛擬開發板 | |
-| v2.17 | 2026-10-27 | （本版） | 2.17.0：開發板 3：快照開機、存狀態 | |
+| v2.17 | 2026-10-27 | `ac29810` | 2.17.0：開發板 3：快照開機、存狀態 | |
+| v2.18 | 2026-10-27 | （本版） | 2.18.0：開發板 4：檔案進出板子 | |
 
 ---
 
@@ -408,6 +409,17 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - IDE：開機先找瀏覽器裡存下的狀態（💾，IndexedDB，依專案），再找內附的快照，都沒有才冷開機；開機訊息重新顯示在終端機；⟲ 是冷開機。
   瀏覽器實測：從快照約 10 秒有 shell（冷開機約 60 秒），存狀態後重新開機，`/tmp` 裡的檔案還在。
 - npm test：冷開機的機器與從快照還原的機器打同樣的指令（`uname -a`、算術、`/proc/cpuinfo`），輸出相同。
+
+### v2.18：開發板 4，檔案進出板子
+
+- RAM 最後 16 MB（0x8F00_0000）是交換區：開頭一行 `VERYLFS <大小>`，後面接 tar。第一版把它排除在 Linux 的記憶體之外，結果 `/dev/mem` 讀到
+  `Bad address`：RISC-V 的 `/dev/mem` 只允許 Linux 記憶體範圍內的位址；改成裝置樹的 reserved-memory（Linux 不配置它，但仍在記憶體裡）。
+  kernel 開 DEVMEM、關 STRICT_DEVMEM。
+- 板子上的 `getfiles`（`/init` 開機時執行）與 `savefiles`（busybox 的 dd + tar；寫完送出 `ESC ] 1337 ; veryl-save BEL`）。
+- IDE：`machine.json` 的 `files`；專案的檔案（Veryl、machine.json、.pcf 以外）用 `tar.ts`（ustar）打包放進交換區（冷開機由 `/init` 讀，
+  從快照開機時自動打 `getfiles`，⇅ 隨時再送）；worker 在輸出裡看到通知就讀回交換區，IDE 把檔案寫進專案（隱藏檔不要）。終端機不顯示 OSC 序列。
+- 範例加上 `board/blink.sh`、`button.sh`。瀏覽器實測：開機後 `/root` 有兩個腳本、`sh blink.sh` 閃 5 次，板子上建的 `notes.txt` 經 `savefiles` 出現在專案。
+  `linux/test.sh`（Verilator 與 veryl-emu）用 `-l` 放一個檔案進去檢查 `getfiles`；npm test 在從快照還原的機器上做一次來回。
 
 ---
 
