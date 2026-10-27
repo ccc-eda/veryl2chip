@@ -8,7 +8,7 @@
 An EDA for Veryl HDL: simulation, logic synthesis, an FPGA flow (iCE40UP5K, down to a
 bitstream) and an ASIC flow (standard cells, placement, routing, timing), all written in Rust.
 Since v2.0 the ASIC flow also runs on SkyWater's open **SKY130** PDK (`sky130_fd_sc_hd`) all the way to a
-DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk)). Since v2.2 the FPGA flow also maps to Lattice **ECP5** (ULX3S), placed and routed by nextpnr-ecp5 (`v2c fpga --arch ecp5`). Version history: [history.md](history.md) (Traditional Chinese). User manual: [manual/](manual/README.md) (Traditional Chinese, every command with `v2c`).
+DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk)). Since v2.2 the FPGA flow also maps to Lattice **ECP5** (ULX3S), placed and routed by nextpnr-ecp5 (`v2c fpga --arch ecp5`). [`examples/rv64/`](examples/rv64/README.md) is an RV64IMAC processor written in Veryl (M/S/U modes, SV39) that boots **xv6** and **Linux** (verified with the official `veryl build` + Verilator). Version history: [history.md](history.md) (Traditional Chinese). User manual: [manual/](manual/README.md) (Traditional Chinese, every command with `v2c`).
 
 | | |
 |---|---|

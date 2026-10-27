@@ -25,7 +25,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.2 | 2026-10-27 | `1b57624` | 2.2.0：Lattice ECP5 對應 + nextpnr-ecp5 | |
 | v2.3 | 2026-10-27 | `225f9b3` | 2.3.0：RV64 處理器 `Rv64Core`（Veryl），通過 riscv-tests | |
 | v2.4 | 2026-10-27 | `0527a57` | 2.4.0：xv6 在 `Rv64Core` 上開到 shell | |
-| v2.5 | 2026-10-27 | （本版） | 2.5.0：C 擴充（壓縮指令）、每個指令 2 拍 | |
+| v2.5 | 2026-10-27 | `02a22ef` | 2.5.0：C 擴充（壓縮指令）、每個指令 2 拍 | |
+| v2.6 | 2026-10-27 | （本版） | 2.6.0：Linux 在 `Rv64Core` 上開機 | |
 
 ---
 
@@ -247,6 +248,17 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - riscv-tests 加上 rv64uc，196 支全過；和 spike 逐指令比對多一個已知差異（spike 的 `misa` 可以寫入關掉 C，
   ma_fetch 測試因此走另一條路）。
 - xv6 改用 `rv64imac` 編譯（kernel 有 5000 多個壓縮指令），開機加 `xv6/test.sh` 的指令從 6 分 33 秒變 3 分 19 秒。
+
+### v2.6：Linux
+
+- OpenSBI（官方，`fw_payload`：韌體 + 裝置樹 + kernel 一個檔案）在 `Rv64Core` 上偵測到 RV64IMAC、Sstc、Zicntr、Svadu、16 組 PMP，
+  切到 S 模式；Linux 6.12（官方，tinyconfig 加上 `examples/rv64/linux/rv64soc.config`：沒有 FPU、單一 hart、只有 initramfs）
+  第一次就開到 `/init`。`linux/init.c` 不用 C 函式庫，印出 `/proc/version`、`/proc/cpuinfo` 後關機。
+- SoC 加上 QEMU 的關機裝置（0x0010_0000，寫 0x5555 結束模擬），OpenSBI 的 shutdown 與 Linux 的 poweroff 都經過它。
+- 建置：kernel 用 sparse checkout（只取 Kconfig / Makefile 與用得到的驅動，約 300 MB，這台機器磁碟只剩幾 GB）；
+  要用 LLVM（GNU 的 riscv64-unknown-elf-ld 做不出 vDSO 的共享物件與 OpenSBI 的 PIE）；在 macOS 上編 kernel 的主機工具
+  要補 `<elf.h>`（RISC-V 工具鏈附的 musl 版）、`<byteswap.h>` 與 `-D_UUID_T`。`linux/build.sh` 從頭建完約 1.5 分鐘。
+- 開機到關機約 4200 萬個指令、1.2 億拍，Verilator 上約 20 秒；`linux/test.sh` 檢查輸出。
 
 ---
 

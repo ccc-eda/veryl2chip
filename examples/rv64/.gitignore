@@ -6,3 +6,4 @@
 # Verilator
 /sim/obj*
 /xv6/build
+/linux/build

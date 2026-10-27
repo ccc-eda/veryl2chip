@@ -1,6 +1,7 @@
 // ==========================================
 // Rv64Soc：Rv64Core + RAM + CLINT + PLIC + UART（QEMU virt 機器的記憶體映射）
 // ==========================================
+//   0x0010_0000  關機 ：寫 0x5555 = 結束（通過）、0x3333 = 結束（失敗，高 16 位元是代碼）（QEMU 的 sifive,test0）
 //   0x0200_0000  CLINT：msip（+0）、mtimecmp（+0x4000）、mtime（+0xBFF8，每拍加一）
 //   0x0C00_0000  PLIC ：來源 1..31 的優先權（+4 × id）、pending（+0x1000）、
 //                       致能（context 0 = M：+0x2000，context 1 = S：+0x2080）、
@@ -23,6 +24,9 @@ module Rv64Soc #(
     i_ld_we   : input  logic    ,
     i_ld_addr : input  logic<32>,
     i_ld_data : input  logic<64>,
+    // 程式要求結束（寫 0x0010_0000）
+    o_finish     : output logic    ,
+    o_finish_code: output logic<32>,
     // UART 的另一端
     o_tx_valid: output logic    ,
     o_tx_data : output logic<8> ,
@@ -93,6 +97,7 @@ module Rv64Soc #(
     let sel_clint: logic = addr[63:16] == 48'h0000_0000_0200;
     let sel_plic : logic = addr[63:26] == 38'h00_0000_0003; // 0x0C00_0000 .. 0x0FFF_FFFF
     let sel_uart : logic = addr[63:8] == 56'h00_0000_0010_0000;
+    let sel_test : logic = addr[63:12] == 52'h0_0000_0000_0100;
 
     // RAM 在請求的同一拍回應（組合讀取）；周邊與錯誤在下一拍回應：
     // go = 周邊存取的那一拍（還沒 ack）
@@ -372,7 +377,7 @@ module Rv64Soc #(
             dev_r = 64'd0;
         } else {
             ack_r = go;
-            err_r = go && !(sel_clint || sel_plic || sel_uart);
+            err_r = go && !(sel_clint || sel_plic || sel_uart || sel_test);
             dev_r = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : 64'd0;
         }
     }
@@ -381,6 +386,10 @@ module Rv64Soc #(
     assign rdata = if ram_go ? (mem[widx] >> lane) & bmask : dev_r;
 
     assign o_dbg_wr    = (ram_go || go) && we;
+
+    // 關機裝置：0x5555 通過、0x3333 失敗；其他值（例如 0x7777 重新開機）也結束模擬
+    assign o_finish      = go && sel_test && we && addr[11:0] == 12'h000 && wdata[15:0] != 16'h0000;
+    assign o_finish_code = wdata[31:0];
     assign o_dbg_addr  = addr;
     assign o_dbg_wdata = wdata;
 }

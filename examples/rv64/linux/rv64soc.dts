@@ -1,0 +1,94 @@
+// Device tree of Rv64Soc (examples/rv64/src/rv64soc.veryl) for OpenSBI and Linux.
+// The addresses are those of QEMU's virt machine; mtime counts clock cycles, and
+// timebase-frequency says how many make a second (any value works in simulation).
+/dts-v1/;
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	compatible = "veryl2chip,rv64soc";
+	model = "veryl2chip Rv64Soc";
+
+	chosen {
+		bootargs = "console=ttyS0 earlycon=sbi";
+		stdout-path = "/soc/serial@10000000";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <10000000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imac_zicntr_zicsr_zifencei_sstc_svadu";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "c", "zicntr", "zicsr", "zifencei", "sstc", "svadu";
+			mmu-type = "riscv,sv39";
+
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	poweroff {
+		compatible = "syscon-poweroff";
+		regmap = <&test>;
+		offset = <0x0>;
+		value = <0x5555>;
+	};
+
+	reboot {
+		compatible = "syscon-reboot";
+		regmap = <&test>;
+		offset = <0x0>;
+		value = <0x7777>;
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x10000000>;
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		compatible = "simple-bus";
+		ranges;
+
+		test: test@100000 {
+			compatible = "sifive,test1", "sifive,test0", "syscon";
+			reg = <0x0 0x100000 0x0 0x1000>;
+		};
+
+		clint@2000000 {
+			compatible = "sifive,clint0", "riscv,clint0";
+			reg = <0x0 0x2000000 0x0 0x10000>;
+			interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+		};
+
+		plic: interrupt-controller@c000000 {
+			compatible = "sifive,plic-1.0.0", "riscv,plic0";
+			reg = <0x0 0xc000000 0x0 0x4000000>;
+			#address-cells = <0>;
+			#interrupt-cells = <1>;
+			interrupt-controller;
+			interrupts-extended = <&cpu0_intc 11>, <&cpu0_intc 9>;
+			riscv,ndev = <31>;
+		};
+
+		serial@10000000 {
+			compatible = "ns16550a";
+			reg = <0x0 0x10000000 0x0 0x100>;
+			clock-frequency = <3686400>;
+			interrupt-parent = <&plic>;
+			interrupts = <10>;
+		};
+	};
+};

@@ -1,6 +1,6 @@
 # Rv64：用 Veryl 寫的 RV64 處理器
 
-目標是跑起 **xv6-riscv**（之後是 Linux）。這個目錄是獨立的 Veryl 專案；驗證用官方工具鏈，
+跑得起 **xv6-riscv** 與 **Linux** 的 RISC-V 處理器。這個目錄是獨立的 Veryl 專案；驗證用官方工具鏈，
 不靠 veryl2chip 自己的模擬器：`veryl build`（Veryl 0.22 → SystemVerilog）＋ **Verilator**（→ C++）。
 
 | 檔案 | 內容 |
@@ -13,6 +13,8 @@
 | `sim/spike_diff.sh` | 逐指令和 spike 比對 |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
+| `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.c` | OpenSBI + Linux 6.12 + 只有一個程式的 initramfs |
+| `linux/test.sh` | 開 Linux、檢查輸出（init 最後關機，模擬結束） |
 
 ## 處理器
 
@@ -46,6 +48,7 @@
 
 | 位址 | 裝置 |
 |---|---|
+| `0x0010_0000` | 關機裝置（QEMU 的 `sifive,test0`）：寫 0x5555 結束模擬（Linux 的 poweroff） |
 | `0x0200_0000` | CLINT：`msip`、`mtimecmp`（+0x4000）、`mtime`（+0xBFF8，每拍加一） |
 | `0x0C00_0000` | PLIC：31 個來源、M / S 兩個 context（UART 是來源 10） |
 | `0x1000_0000` | UART 16550（位元組暫存器；送出的字直接交給測試平台） |
@@ -104,3 +107,42 @@ xv6/test.sh                                                                     
 開機到 `$` 約 4.5 億個指令、13 億拍（Verilator 每秒約 6–7 百萬拍，約 3 分鐘）；
 其中九成是 `kinit` 把 128 MB 的每一頁逐位元組填過一遍。`usertests -q` 一開始就用 `sbrk` 要完全部記憶體再放掉，
 在模擬裡要跑一兩個小時。
+
+## Linux
+
+**OpenSBI**（M 模式韌體）+ **Linux 6.12**，都是官方原始碼、不用改：
+
+- `linux/rv64soc.dts`：描述這台機器的裝置樹（CPU 的 ISA 與 sv39、CLINT、PLIC、16550、記憶體、關機裝置）。
+- `linux/rv64soc.config`：加在 `tinyconfig` 上的設定：RV64IMAC、沒有 FPU、單一 hart、只有 initramfs（沒有區塊裝置、網路、模組）、
+  8250 序列埠、syscon 關機。
+- `linux/init.c`：initramfs 裡唯一的程式，不用 C 函式庫（直接 `ecall`）：掛上 `/proc`，印出 `/proc/version`、`/proc/cpuinfo`，然後關機。
+- OpenSBI 建成 `fw_payload`：韌體、裝置樹、kernel 包成一個檔案，從 0x8000_0000 載入（`rv64sim` 遇到不是 ELF 的檔案就整個載入那裡）。
+
+```sh
+git clone --depth 1 https://github.com/riscv-software-src/opensbi /Users/Shared/ccc/opensbi
+git clone --depth 1 --branch v6.12 --filter=blob:none --no-checkout https://github.com/torvalds/linux /Users/Shared/ccc/linux
+cd /Users/Shared/ccc/linux && git sparse-checkout init --no-cone && cp <本目錄>/linux/sparse-checkout .git/info/ && git checkout v6.12
+linux/build.sh            # → linux/build/opensbi/platform/generic/firmware/fw_payload.bin（約 1.5 分鐘）
+linux/test.sh             # 開機、檢查輸出
+```
+
+- sparse checkout 只取每個 Kconfig / Makefile 和用得到的驅動，kernel 原始碼約 300 MB。
+- 要用 **LLVM**（clang + ld.lld）：GNU 的 `riscv64-unknown-elf-ld` 做不出共享物件（vDSO）和 PIE（OpenSBI）。
+- 在 macOS 上編 kernel：GNU make / sed / coreutils、bison 3（Homebrew），kernel 的主機工具還要 `<elf.h>`（用 RISC-V 工具鏈附的 musl 版）、
+  `<byteswap.h>`（腳本自己寫）與 `-D_UUID_T`；`build.sh` 都處理好了。
+
+開機到 init 印完、關機：約 4200 萬個指令、1.2 億拍，Verilator 上約 20 秒。
+
+```
+OpenSBI v1.x … Boot HART ISA Extensions : sstc,zicntr,sdtrig,svadu … Boot HART MIDELEG : 0x0000000000000222
+[    0.000000] Linux version 6.12.0 … riscv-timer: Timer interrupt in S-mode is available via sstc extension …
+[    8.281802] 10000000.serial: ttyS0 at MMIO 0x10000000 (irq = 1, base_baud = 230400) is a 16550A
+[    8.548652] Run /init as init process
+
+Hello from user space on Rv64Core, a RISC-V processor written in Veryl!
+…
+isa		: rv64imac_zicntr_zicsr_zifencei_zca_sstc
+mmu		: sv39
+…
+[    8.672239] reboot: Power down
+```

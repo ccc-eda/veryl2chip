@@ -8,7 +8,7 @@
 Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一路到位元流）與 ASIC 流程
 （標準元件、佈局、繞線、時序分析），全部用 Rust 寫成。
 從 v2.0 起，ASIC 流程也能用 SkyWater 的開源 **SKY130** PDK（`sky130_fd_sc_hd`），一路做到通過 DRC 的 GDSII 版圖
-（[說明](veryl-eda/README.tw.md)）。v2.2 起 FPGA 流程也能對應到 Lattice **ECP5**（ULX3S），佈局繞線交給 nextpnr-ecp5（`v2c fpga --arch ecp5`）。各版本的歷史：[history.md](history.md)。使用手冊：[manual/](manual/README.md)（命令列一律用 `v2c`）。
+（[說明](veryl-eda/README.tw.md)）。v2.2 起 FPGA 流程也能對應到 Lattice **ECP5**（ULX3S），佈局繞線交給 nextpnr-ecp5（`v2c fpga --arch ecp5`）。[`examples/rv64/`](examples/rv64/README.md) 是用 Veryl 寫的 RV64IMAC 處理器（M / S / U 模式、SV39），能開 **xv6** 與 **Linux**（用官方 `veryl build` + Verilator 驗證）。各版本的歷史：[history.md](history.md)。使用手冊：[manual/](manual/README.md)（命令列一律用 `v2c`）。
 
 | | |
 |---|---|

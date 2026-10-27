@@ -2,9 +2,10 @@
 //
 //   rv64sim [-t] [-m CYCLES] [-l ADDR:FILE]... [-s SCRIPT] PROG.elf
 //
-// 把 ELF 的程式段載入 RAM（0x8000_0000 起），放開重設，一拍一拍跑：
+// 把 ELF 的程式段載入 RAM（不是 ELF 的檔案從 0x8000_0000 整個載入），放開重設，一拍一拍跑：
 //   - UART 送出的位元組印到 stdout；stdin 的輸入送進 UART（xv6 的 console）
 //   - 程式寫入 ELF 裡的 tohost 符號（riscv-tests 的慣例）：1 = 通過，其他 = 失敗（值 >> 1 是測試編號）
+//   - 程式寫入關機裝置（0x0010_0000）：0x5555 = 通過，其他 = 失敗
 //   - -t：每個完成的指令印一行，和 `spike -l --log-commits` 的格式相同（可以 diff）
 //   - -l ADDR:FILE：另外把一個二進位檔載入 ADDR（例如 xv6 的檔案系統映像）
 //   - -m CYCLES：最多跑幾拍（預設 1 億；0 = 不限）
@@ -55,7 +56,12 @@ struct Image {
 
 static void load_elf(const char *path, Image &img) {
     std::vector<uint8_t> f = read_file(path);
-    if (f.size() < sizeof(Elf64Ehdr) || memcmp(f.data(), "\x7f" "ELF", 4) || f[4] != 2) { fprintf(stderr, "%s: not an ELF64 file\n", path); exit(1); }
+    if (f.size() < 4 || memcmp(f.data(), "\x7f" "ELF", 4)) {
+        // 不是 ELF：當成二進位檔，從 RAM 的開頭載入（例如 OpenSBI 的 fw_payload.bin）
+        img.parts.push_back({RAM_BASE, f});
+        return;
+    }
+    if (f.size() < sizeof(Elf64Ehdr) || f[4] != 2) { fprintf(stderr, "%s: not an ELF64 file\n", path); exit(1); }
     Elf64Ehdr eh;
     memcpy(&eh, f.data(), sizeof eh);
     for (int i = 0; i < eh.phnum; i++) {
@@ -221,6 +227,13 @@ int main(int argc, char **argv) {
                 }
             }
             last = c;
+        }
+        if (top->o_finish) {
+            // 關機裝置（Linux 的 poweroff、OpenSBI 的 shutdown）：0x5555 = 通過
+            uint32_t v = top->o_finish_code;
+            code = (v & 0xffff) == 0x5555 ? 0 : 1;
+            if (code) fprintf(stderr, "finisher: 0x%08x\n", v);
+            done = true;
         }
         if (top->o_dbg_wr && img.tohost && top->o_dbg_addr == img.tohost) {
             uint64_t v = top->o_dbg_wdata;
