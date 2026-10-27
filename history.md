@@ -31,7 +31,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.8 | 2026-10-27 | `70cf899` | 2.8.0：veryl-eda 合成 `Rv64Core`，閘級網表在 Verilator 上通過測試 | |
 | v2.9 | 2026-10-27 | `fcfa73b` | 2.9.0：ECP5 block RAM，`Rv64Fpga` 經 nextpnr-ecp5 佈局繞線，繞線後的網表通過測試 | |
 | v2.10 | 2026-10-27 | `8dbe56c` | 2.10.0：大設計的全域佈局，`Rv64Core` 在 vlib 上自己佈局繞線，繞線後的網表通過測試 | |
-| v2.11 | 2026-10-27 | （本版） | 2.11.0：Linux 跑 busybox，有 shell 可以互動 | |
+| v2.11 | 2026-10-27 | `f0ce858` | 2.11.0：Linux 跑 busybox，有 shell 可以互動 | |
+| v2.12 | 2026-10-27 | （本版） | 2.12.0：veryl-emu，把設計編譯成 WebAssembly 的模擬器 | |
 
 ---
 
@@ -331,6 +332,19 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   `linux/init.c` 拿掉。kernel 設定加上 `BINFMT_SCRIPT`、`MULTIUSER`、`FUTEX`、`POSIX_TIMERS`、`SHMEM` / `TMPFS`。
 - 結果：開機到 shell 約 8000 萬個指令、2.3 億拍，Verilator 上約 30 秒；鍵盤輸入經 UART 收字中斷（PLIC）進來，`ps`、`free`、`ls`、
   算術都正常；`linux/test.sh` 用 `rv64sim -s` 打幾個指令，最後 `poweroff -f` 結束模擬。
+
+### v2.12：veryl-emu（編譯成 WebAssembly 的模擬器）
+
+- 動機：veryl-sim 是 4 態的解譯器，組合邏輯每次都整個重跑，比 Verilator 慢上千倍，Rv64 的 256 MB RAM 也放不進它的訊號表。
+  使用者要求 veryl-sim 保持原樣，另外做一個 veryl-emu。
+- `veryl-emu/`（新 crate，不發布）：展開用 veryl-sim 的 `elab.rs` 複製一份，只改陣列（一個訊號、一塊記憶體）與拿掉閘級網表；
+  `ir.rs` 依 veryl-sim `Sim::eval` 的規則在編譯時決定每個運算式的寬度與正負號；`gen.rs` 排序組合邏輯、處理非阻塞寫入
+  （只有 always_ff 也會讀的暫存器走影子區、陣列走寫入佇列，Rv64Soc 只有 30 個、240 位元組）、產生 i64 字組的程式碼；
+  `wasm.rs` 是自寫的 WebAssembly 編碼器。命令列 `veryl-emu --top M --stop SIG -o out.wasm`，`js/emu.mjs` 是 Node / 瀏覽器的測試平台。
+- 驗證：`tests/check.sh` 和 veryl-sim 差分比對（第一次就抓到多字組變數移位的 select 順序錯誤）；Rv64Soc 編成 86 KB 的 wasm，
+  196 支 riscv-tests、120 支隨機程式與 spike 逐指令相同、中斷測試、Linux 開到 busybox 的 shell。
+- 速度：Linux 開機 2.3 億拍，Node 24 上 104 秒（220 萬拍 / 秒），Verilator 32 秒（720 萬拍 / 秒）。
+- 網頁暫時不重建，所以 veryl-emu 還沒有進 IDE（v2.13）。
 
 ---
 

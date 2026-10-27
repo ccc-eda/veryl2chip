@@ -14,6 +14,7 @@ Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一
 |---|---|
 | [`veryl-sim/`](veryl-sim/) | Veryl testbench 的事件驅動模擬器（`$tb::clock_gen`、`$assert`、VCD） |
 | [`veryl-eda/`](veryl-eda/) | 合成成閘級網表、iCE40 與 ECP5 對應、自製佈局繞線 + 位元流（iCE40）、ASIC 後端（`--asic`） |
+| [`veryl-emu/`](veryl-emu/) | 把設計編譯成 WebAssembly 做快速的週期模擬（像 Verilator，在 Node 或瀏覽器裡跑）：RV64 SoC 在它上面約 2 MHz 開 Linux |
 | [`veryl-wasm/`](veryl-wasm/) | 兩個 crate 編譯成 WebAssembly，以 JSON API 呼叫 |
 | [`web/`](web/) | 純前端的網頁環境（TypeScript） |
 | [`examples/`](examples/) | 範例設計的 Veryl 專案，含一顆單週期 RV32I CPU |

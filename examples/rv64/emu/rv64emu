@@ -1,0 +1,3 @@
+#!/bin/sh
+# Rv64Soc on veryl-emu (build/emu/rv64soc.wasm, made by emu/build.sh): same options as sim/obj/rv64sim
+exec node "$(dirname "$0")/rv64emu.mjs" "$@"

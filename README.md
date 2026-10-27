@@ -14,6 +14,7 @@ DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk
 |---|---|
 | [`veryl-sim/`](veryl-sim/) | event-driven simulator for Veryl testbenches (`$tb::clock_gen`, `$assert`, VCD) |
 | [`veryl-eda/`](veryl-eda/) | synthesis to a gate netlist, iCE40 and ECP5 mapping, own place & route + bitstream (iCE40), ASIC back end (`--asic`) |
+| [`veryl-emu/`](veryl-emu/) | compiles a design to WebAssembly for fast cycle-based simulation (like Verilator; runs in Node or a browser): the RV64 SoC boots Linux in it at ~2 MHz |
 | [`veryl-wasm/`](veryl-wasm/) | both crates compiled to WebAssembly behind a JSON API |
 | [`web/`](web/) | front-end-only web environment (TypeScript) |
 | [`examples/`](examples/) | Veryl project with the example designs, incl. a single-cycle RV32I CPU |

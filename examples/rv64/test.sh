@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Rv64Core regression on Verilator: riscv-tests, random tests vs spike, the interrupt tests,
+# riscv-tests on veryl-emu (the design compiled to WebAssembly, run in Node),
 # Linux (when linux/build exists), the FPGA system Rv64Fpga (RTL; with --fpga also its ECP5 netlist and,
 # after nextpnr-ecp5, the routed netlist: about 20 minutes more) and, with --xv6, xv6 (a few minutes more).
 #   ./test.sh [--xv6] [--fpga] [--seeds N]
@@ -21,6 +22,7 @@ irq() {
     ./sim/obj/rv64sim -m 20000000 sim/obj/irq.elf 2>&1 | tail -1 | tee /dev/stderr | grep -q PASS
 }
 step "interrupt tests" irq
+step "veryl-emu (WebAssembly): build + riscv-tests" bash -c 'set -o pipefail; ./emu/build.sh 2>&1 | tail -1 && SIM=emu/rv64emu ./sim/riscv_tests.sh | tail -1'
 if [ -f linux/build/opensbi/platform/generic/firmware/fw_payload.bin ]; then
     step "Linux" bash -c 'set -o pipefail; ./linux/test.sh | tail -2'
 else

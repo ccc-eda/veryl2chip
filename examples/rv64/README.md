@@ -14,6 +14,7 @@
 | `sim/build_gates.sh` | veryl-eda 合成 `Rv64Core`，網表（通用閘、ECP5、vlib、SKY130，以及 vlib 佈局繞線之後）放回同一個測試平台 |
 | `src/rv64fpga.veryl`、`sim/fpga.cpp`、`sim/build_fpga.sh` | `Rv64Fpga`：放得進 ECP5 的系統（block RAM、序列 UART），只用腳位的測試平台 |
 | `fpga/ecp5.sh`、`fpga/ulx3s.lpf` | `Rv64Fpga` → nextpnr-ecp5 佈局繞線 → 位元流（ULX3S 85F） |
+| `emu/build.sh`、`emu/rv64emu.mjs`、`emu/rv64emu` | Rv64Soc 用 veryl-emu 編成 WebAssembly，在 Node 上跑（和 `sim/obj/rv64sim` 同樣的選項） |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
 | `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.sh`、`musl.mak`、`musl-cc` | OpenSBI + Linux 6.12 + busybox（musl）的 initramfs |
@@ -145,6 +146,25 @@ OBJ=sim/obj_ecp5 verify/random.sh 1 100       # 隨機測試（和 spike 比）
 
 四種對應後的網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
 乘除法原本是組合邏輯（64 位元的乘法器與除法器，網表 13 萬個元件），改成 64 拍的反覆式後剩 6 萬個。
+
+## veryl-emu：編譯成 WebAssembly
+
+[veryl-emu](../../veryl-emu/README.tw.md) 是我們自己的編譯式模擬器（像 Verilator，但產生 WebAssembly）：
+`emu/build.sh` 把 Rv64Soc 編成 `build/emu/rv64soc.wasm`（86 KB，編譯不到 0.1 秒），`emu/rv64emu` 是和 `sim/main.cpp`
+同樣的測試平台（JavaScript），選項也一樣，所以現有的腳本都能直接用：
+
+```sh
+emu/build.sh                                            # cargo build veryl-emu + 編譯 Rv64Soc
+SIM=emu/rv64emu sim/riscv_tests.sh                      # 196 支 riscv-tests
+SIM=emu/rv64emu verify/random.sh 1 30                   # 隨機程式，和 spike 逐指令比對（-t 印每個指令）
+emu/rv64emu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開 Linux，直接打字
+```
+
+| | Verilator | veryl-emu（Node 24） |
+|---|---|---|
+| riscv-tests | 196 / 196 | 196 / 196 |
+| 隨機程式（和 spike 相同） | 900 | 120 |
+| Linux 開到 busybox shell（2.3 億拍） | 32 秒（720 萬拍 / 秒） | 104 秒（220 萬拍 / 秒） |
 
 ## FPGA：佈局繞線之後再模擬
 

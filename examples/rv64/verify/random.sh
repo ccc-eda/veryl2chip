@@ -4,6 +4,7 @@
 #   verify/random.sh [FIRST_SEED] [COUNT] [N] [MODES]   default: seeds 1..50, 2000 instructions,
 #                                                       modes "m s u" (M mode; S / U on Sv39)
 # A failing seed keeps its files in verify/out/ (prog.S, the two logs).
+# OBJ: the Verilator build (default sim/obj); SIM: another simulator (e.g. SIM=emu/rv64emu).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 [ -d /Users/Shared/ccc/oss-cad-suite/bin ] && export PATH=/Users/Shared/ccc/oss-cad-suite/bin:$PATH
@@ -22,7 +23,7 @@ for ((s = FIRST; s < FIRST + COUNT; s++)); do
     timeout 60 spike -l --log-commits --isa=rv64imac_zicsr_zicntr_zifencei_sstc_svadu "$D/prog.elf" 2>&1 | head -n $((N * 40 + 10000)) \
         | grep -E '^core +0: [0-3] 0x' | awk 'go || $4 ~ /^0x000000008/ { go = 1; print }' \
         | sed -E 's/^(core +0: [0-3] 0x[0-9a-f]+ \(0x[0-9a-f]+\))( x[0-9 ]+ 0x[0-9a-f]+)?.*/\1\2/' > "$D/spike.log"
-    "$OBJ"/rv64sim -t -m $((N * 200)) "$D/prog.elf" 2> "$D/rtl.err" | head -n $((N * 40 + 10000)) | grep -E '^core' > "$D/rtl.log"
+    ${SIM:-$OBJ/rv64sim} -t -m $((N * 200)) "$D/prog.elf" 2> "$D/rtl.err" | head -n $((N * 40 + 10000)) | grep -E '^core' > "$D/rtl.log"
     grep -q PASS "$D/rtl.err" || echo "seed $s$mode: did not finish ($(tail -1 "$D/rtl.err"))"
     n=$(wc -l < "$D/rtl.log")
     if [ "$n" -gt 100 ] && cmp -s "$D/rtl.log" <(head -n "$n" "$D/spike.log"); then

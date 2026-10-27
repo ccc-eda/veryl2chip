@@ -1,0 +1,201 @@
+// Differential test of veryl-emu against veryl-sim: ExprCheck exercises what the
+// compiler must get right (context widths, signed operations, 128-bit values, variable
+// shifts and part selects, functions, case ranges, loops, registers an always_ff reads,
+// an array written and read by always_ff). TestExprCheck feeds it xorshift inputs and
+// prints every output once a cycle (veryl-sim); tests/check.mjs does the same with the
+// compiled model; tests/check.sh compares the two outputs line by line.
+
+module ExprCheck (
+    i_clk: input  clock     ,
+    i_rst: input  reset     ,
+    i_a  : input  logic<64> ,
+    i_b  : input  logic<64> ,
+    i_s  : input  logic<8>  ,
+    o_add: output logic<64> ,
+    o_w  : output logic<128>,
+    o_shr: output logic<128>,
+    o_shl: output logic<128>,
+    o_sar: output logic<64> ,
+    o_cmp: output logic<8>  ,
+    o_mul: output logic<64> ,
+    o_div: output logic<64> ,
+    o_sdv: output logic<64> ,
+    o_rem: output logic<64> ,
+    o_fn : output logic<64> ,
+    o_cs : output logic<4>  ,
+    o_red: output logic<8>  ,
+    o_ps : output logic<8>  ,
+    o_ins: output logic<64> ,
+    o_pop: output logic<7>  ,
+    o_neg: output logic<64> ,
+    o_ter: output logic<128>,
+    o_acc: output logic<64> ,
+    o_mem: output logic<64> ,
+    o_sw : output logic<16> ,
+) {
+    function absdiff (
+        x: input logic<64>,
+        y: input logic<64>,
+    ) -> logic<64> {
+        if x >: y {
+            return x - y;
+        }
+        return y - x;
+    }
+
+    let wa : logic<128> = {i_a, i_b};
+    let wb : logic<128> = {i_b, i_a};
+
+    assign o_add = i_a + i_b;
+    assign o_w   = wa + wb - {64'd0, i_s};
+    assign o_shr = wa >> i_s[6:0];
+    assign o_shl = wa << i_s;
+    assign o_sar = $signed(i_a) >>> i_s[5:0];
+    assign o_cmp = {$signed(i_a) <: $signed(i_b), i_a <: i_b, wa >: wb, wa >= wa, $signed(i_a[7:0]) <: $signed(i_b[15:0]), i_a == i_b, i_a[3:0] != i_b[3:0], $signed(wa) <: $signed(wb)};
+    assign o_mul = i_a * i_b;
+    assign o_div = i_a / {48'd0, i_b[15:0] | 16'd1};
+    assign o_sdv = $signed(i_a) / $signed({i_b[7] repeat 56, i_b[7:0] | 8'd1});
+    assign o_rem = i_a % (i_b | 64'd1);
+    assign o_fn  = absdiff(i_a, i_b) ^ absdiff(i_b[31:0], i_a[31:0]);
+    assign o_red = {&i_a[3:0], |i_b, ^i_a, ~^i_b, ~&i_s, ~|i_s[1:0], !i_a[0], &i_s[7:6]};
+    assign o_ps  = i_a[i_s[5:0] +: 8];
+    assign o_neg = -i_b ^ ~i_a;
+    assign o_ter = if i_s[0] ? wa : {64'd0, i_b};
+
+    always_comb {
+        case i_s {
+            0..64    : o_cs = 4'd1;
+            64..=127 : o_cs = 4'd2;
+            200, 201 : o_cs = 4'd3;
+            default  : o_cs = 4'd4;
+        }
+    }
+
+    always_comb {
+        o_ins          = i_a;
+        o_ins[7:0]     = i_b[15:8];
+        o_ins[i_s[5:0]] = ~i_a[i_s[5:0]];
+        o_ins[40 +: 4] = i_s[3:0];
+    }
+
+    always_comb {
+        o_pop = 0;
+        for i in 0..64 {
+            o_pop += i_a[i];
+        }
+    }
+
+    always_comb {
+        switch {
+            i_s[7]           : o_sw = i_a[15:0];
+            i_s[6:5] == 2'b11: o_sw = i_b[15:0];
+            default          : o_sw = 16'hbeef;
+        }
+    }
+
+    // a register the always_ff reads (non-blocking), an array written and read there
+    var acc: logic<64>;
+    var mem: logic<64> [16];
+    var rd : logic<64>;
+    always_ff {
+        if_reset {
+            acc = 0;
+            rd  = 0;
+            for i in 0..16 {
+                mem[i] = 0;
+            }
+        } else {
+            acc          = acc + i_a;
+            mem[i_s[3:0]] = acc ^ i_b;
+            rd           = mem[i_b[3:0]];
+        }
+    }
+    assign o_acc = acc;
+    assign o_mem = rd;
+}
+
+#[test(expr_check)]
+module TestExprCheck {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var a: logic<64>;
+    var b: logic<64>;
+    let s: logic<8> = a[7:0] ^ b[15:8];
+
+    var o_add: logic<64> ;
+    var o_w  : logic<128>;
+    var o_shr: logic<128>;
+    var o_shl: logic<128>;
+    var o_sar: logic<64> ;
+    var o_cmp: logic<8>  ;
+    var o_mul: logic<64> ;
+    var o_div: logic<64> ;
+    var o_sdv: logic<64> ;
+    var o_rem: logic<64> ;
+    var o_fn : logic<64> ;
+    var o_cs : logic<4>  ;
+    var o_red: logic<8>  ;
+    var o_ps : logic<8>  ;
+    var o_ins: logic<64> ;
+    var o_pop: logic<7>  ;
+    var o_neg: logic<64> ;
+    var o_ter: logic<128>;
+    var o_acc: logic<64> ;
+    var o_mem: logic<64> ;
+    var o_sw : logic<16> ;
+
+    inst u: ExprCheck (
+        i_clk: clk,
+        i_rst: rst,
+        i_a  : a,
+        i_b  : b,
+        i_s  : s,
+        o_add,
+        o_w  ,
+        o_shr,
+        o_shl,
+        o_sar,
+        o_cmp,
+        o_mul,
+        o_div,
+        o_sdv,
+        o_rem,
+        o_fn ,
+        o_cs ,
+        o_red,
+        o_ps ,
+        o_ins,
+        o_pop,
+        o_neg,
+        o_ter,
+        o_acc,
+        o_mem,
+        o_sw ,
+    );
+
+    // xorshift64 inputs, one step a cycle
+    let a1: logic<64> = a ^ (a << 13);
+    let a2: logic<64> = a1 ^ (a1 >> 7);
+    let a3: logic<64> = a2 ^ (a2 << 17);
+    let b1: logic<64> = b ^ (b << 13);
+    let b2: logic<64> = b1 ^ (b1 >> 7);
+    let b3: logic<64> = b2 ^ (b2 << 17);
+
+    always_ff (clk, rst) {
+        if_reset {
+            a = 64'h0123_4567_89ab_cdef;
+            b = 64'hfedc_ba98_7654_3210;
+        } else {
+            $display("%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h", o_add, o_w, o_shr, o_shl, o_sar, o_cmp, o_mul, o_div, o_sdv, o_rem, o_fn, o_cs, o_red, o_ps, o_ins, o_pop, o_neg, o_ter, o_acc, o_mem, o_sw);
+            a = a3;
+            b = b3;
+        }
+    }
+
+    initial {
+        rst.assert();
+        clk.next(300);
+        $finish();
+    }
+}

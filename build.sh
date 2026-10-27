@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the whole project:
-#   veryl-sim, veryl-eda   release binaries (target/release/veryl-sim, veryl-eda)
+#   veryl-sim, veryl-eda, veryl-emu   release binaries (target/release/veryl-sim, veryl-eda, veryl-emu)
 #   web/dist               the web pages (veryl-wasm compiled to wasm32 + TypeScript)
 #
 #   ./build.sh            everything
@@ -28,6 +28,9 @@ step "veryl-sim"
 step "veryl-eda"
 (cd veryl-eda && cargo build --release)
 
+step "veryl-emu"
+(cd veryl-emu && cargo build --release)
+
 if $WEB; then
     need node "install Node.js: https://nodejs.org"
     need npm "install Node.js: https://nodejs.org"
@@ -46,5 +49,6 @@ echo
 echo "== built in $((SECONDS - t0)) s:"
 echo "   veryl-sim/target/release/veryl-sim"
 echo "   veryl-eda/target/release/veryl-eda, veryl-eda/target/release/v2c"
+echo "   veryl-emu/target/release/veryl-emu"
 $WEB && echo "   web/dist/index.html (IDE), web/dist/demo.html"
 exit 0
