@@ -13,7 +13,8 @@ Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https:
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
-              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic] [--program PROG.bin]
+              [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf pins.lpf] [--config out.config] [--bit out.bit]]
+              [--asic [--seed N] [-v]] [--gatesim opt|ice40|ecp5|asic|sky130] [--program PROG.bin]
               a.veryl b.veryl ...
     veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
 
@@ -22,7 +23,8 @@ In the source tree, `cargo run --release -- ...` works too. The own place & rout
 - By default the last **non**-`#[test]` module is synthesized; `--top` picks one. Ports and cell statistics are printed (like yosys `stat`).
 - `-o` writes yosys JSON (readable by `read_json`); `--verilog` writes gate-level Verilog (simulates in iverilog).
 - `--ice40` maps to iCE40 cells; with `--asc` / `--bin` it also places, routes (`nextpnr-ice40` by default, failing if timing does not close; `--pnr veryl` for the own one) and packs (`icepack`).
-- `--gatesim opt|ice40|asic`: **post-synthesis simulation**. The `--top` module is replaced by its generic-gate / iCE40 / standard-cell netlist (`src/gatesim.rs` → veryl-sim's gate models)
+- `--ecp5` maps to Lattice ECP5 cells (below); with `--config` / `--bit` it also runs `nextpnr-ecp5` and `ecppack`.
+- `--gatesim opt|ice40|ecp5|asic|sky130`: **post-synthesis simulation**. The `--top` module is replaced by its generic-gate / iCE40 / ECP5 / standard-cell netlist (`src/gatesim.rs` → veryl-sim's gate models)
   and the original `#[test]` testbenches run on it (`test.sh` runs 15 designs × 3 netlists; the results must equal the RTL's).
 - `--asic` runs the ASIC back end (below); `--verilog` then writes the standard-cell netlist (with the vlib cells' Verilog models), `-v` prints the critical path.
 - `./test.sh`: unit tests + synthesis of every example + yosys `read_json; check -assert` + the FPGA flow +
@@ -57,6 +59,30 @@ the bitstream therefore only proves the instructions this program uses.
 | timing | about 17 MHz (the board clock is 12 MHz: passes) |
 | simulation of the mapped netlist (yosys iCE40 cell models) | LED = 55 at cycle 70 |
 | simulation of the **routed bitstream** (converted back to Verilog by `icebox_vlog`) | LED = 55 at cycle 70 |
+
+## ECP5 (`--ecp5`, `src/ecp5.rs`)
+Since v2.2 the same netlist can be mapped to Lattice **ECP5** (LFE5U-12F / 25F / 45F / 85F, the chip of the open ULX3S board).
+The output is yosys JSON for nextpnr-ecp5; placement, routing and the bitstream are done by **nextpnr-ecp5 + ecppack** (Project Trellis, part of OSS CAD Suite):
+
+    v2c fpga --arch ecp5 --lpf pins.lpf --bit top.bit top.veryl       # = veryl-eda --ecp5 ...
+    v2c gatesim ecp5 top.veryl                                        # the testbenches on the ECP5 netlist
+
+| Cell | Where it comes from |
+|---|---|
+| `LUT4` | the same cut-based 4-LUT covering as for iCE40 (depth first, area-flow recovery); bit `{D,C,B,A}` of `INIT` is the output |
+| `CCU2C` | full-adder carry chains. A CCU2C has two halves: two neighbouring bits whose carry only goes to the next bit share one (bit i in the first half, bit i+1 in the second, `INIT = 0x96AA` as yosys uses); otherwise the second half only passes the carry on (`INIT1 = 0xFFFF`) so the carry can leave the chain. The sums (`S0` / `S1`) come from the CCU2C too; a COUT feeds at most one CIN, others get it through a buffer LUT (nextpnr adds the feed-in / feed-out) |
+| `TRELLIS_FF` | clock polarity (`CLKMUX`), reset polarity (`LSRMUX`), synchronous / asynchronous (`SRMODE`) and the reset value (`REGSET`) are muxes in the slice: no inverting LUTs |
+
+- `--device` defaults to `85k` and `--package` to `CABGA381` (ULX3S); `--lpf` is the pin file (`LOCATE COMP "port" SITE "pin";`, `IOBUF PORT ... IO_TYPE=LVCMOS33;`);
+  without one nextpnr places the IOs itself (`--lpf-allow-unconstrained`). `--config` is the routed Trellis text configuration, `--bit` the bitstream (for `openFPGALoader` / `ecpprog`).
+- The final utilisation from nextpnr (`TRELLIS_COMB` = LUTs and carries, `TRELLIS_FF`, `TRELLIS_IO`) and each clock's Fmax are printed (`-v` adds the critical path).
+- **Power-up**: ECP5 flip-flops power up at their `REGSET` value, so a flip-flop with reset value 1 starts at 1 (on iCE40 everything starts at 0); this only differs before the first reset.
+- Not yet: block RAM (`DP16KD`; memories are flip-flops for now), multipliers (`MULT18X18D`), `PFUMX` / `L6MUX21` (5- and 6-input functions), an own ECP5 place & route.
+
+Verification: `cargo test` runs every example's testbench scenarios on the ECP5 netlists (netsim models `CCU2C` and `TRELLIS_FF` after yosys's `cells_sim.v`);
+`test.sh` runs `--gatesim ecp5` and nextpnr-ecp5 + ecppack on every design, and proves the ECP5 netlist equivalent to `veryl build` with yosys's ECP5 cell models;
+`fpga/ecp5_routed.sh` also proves nextpnr's routed netlist (`--write`, packed into `TRELLIS_COMB` / `TRELLIS_FF`) equivalent to the mapped one (15 designs;
+yosys's `TRELLIS_COMB` model leaves `FCO` undriven, fixed in `fpga/ecp5_comb.v`, and unconnected LUT inputs read 1).
 
 ## A RISC-V SoC with C programs (`examples/src/rvsoc.veryl`, `src/rv/`)
 `RvCore` is a **multi-cycle** RV32IMA + Zicsr (Decode → Exec, plus Mem for loads / LR / AMOs; 2 cycles per instruction, 3 per load, 35 per
@@ -236,8 +262,9 @@ Tests: `bin → asc → bin` is identity; the decoded bitstreams of 11 designs (
 | `elab.rs`    | syntax tree → name-based statement IR → **symbolic execution** into gates: if becomes a mux chain, case with constant labels a parallel one-hot, for loops unrolled, functions inlined, always_ff to DFF/reset, hierarchy flattened |
 | `netlist.rs` | bit-level builder (constant folding, structural hashing, simplifications like `x & !x`, balanced reduction trees), add/sub/mul, compare, barrel shifts, dynamic indexing; `optimize` resolves aliases, detects combinational loops, rebuilds, sweeps dead logic, and repeats: **proving constant nodes** (candidates from random simulation, exhaustive proof over supports of ≤ 16 inputs) and **removing registers stuck at 0** |
 | `ice40.rs`   | iCE40 mapping: full-adder carries → `SB_CARRY` chains; the rest covered by cut-based 4-LUTs (depth first, then area flow); DFF → `SB_DFF[N][S]{R,S}`, active-low resets get an inverting LUT |
+| `ecp5.rs`    | ECP5 mapping: the same LUT covering → `LUT4`; carries and sums → `CCU2C` (two bits per cell); DFF → `TRELLIS_FF` |
 | `output.rs`  | yosys JSON, structural Verilog (with iCE40 primitive instances) |
-| `netsim.rs`  | a 2-state gate-level simulator (for the tests; generic gates and iCE40 cells) |
+| `netsim.rs`  | a 2-state gate-level simulator (for the tests; generic gates, iCE40, ECP5 and standard cells) |
 
 Every declared signal gets placeholder wires up front, and drivers are recorded as aliases (placeholder bit → driving bit) resolved at the end in `optimize`;
 so the order of items in a module does not matter, and connecting a submodule's ports is just aliasing.
@@ -249,6 +276,7 @@ Registers start at 0 (iCE40 flip-flops power up at 0): for example, with a const
 - generic (`-o`): `$_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_` (Y = S ? B : A), `$_DFF_P_ / $_DFF_N_`,
   asynchronous reset `$_DFF_{P,N}{P,N}{0,1}_`, synchronous reset `$_SDFF_{P,N}{P,N}{0,1}_`.
 - iCE40 (`--ice40`): `SB_LUT4`, `SB_CARRY`, `SB_DFF`, `SB_DFFN`, `SB_DFF[N]{R,S}`, `SB_DFF[N]S{R,S}`, `SB_RAM40_4K`.
+- ECP5 (`--ecp5`): `LUT4`, `CCU2C`, `TRELLIS_FF`.
 
 ## Block RAM inference (iCE40, `src/bram.rs`)
 An array written as whole elements from **one** always_ff (at most once per cycle) and read only as whole elements is recorded by elab as a memory
@@ -298,5 +326,5 @@ the GDS check (`tools/gds_check.py`) uses KLayout's width / spacing rules, not t
 | SyncRam / Bram2048x2 / BramMix / Fifo (block RAM) | bounded model checking, 4 / 4 / 12 / 6 cycles |
 | UartLoop / VgaTiming | bounded model checking, 24 / 8 cycles |
 
-Every design above is proven twice: the gate-level netlist (`gate`) and the vlib standard-cell netlist (`asic`); the designs with block RAM also the iCE40 netlist (`fpga`, with yosys's `SB_RAM40_4K` model).
+Every design above is proven four times: the gate-level netlist (`gate`), the vlib standard-cell netlist (`asic`), the SKY130 netlist and the ECP5 netlist (`ecp5`, with yosys's ECP5 cell models); the designs with block RAM also the iCE40 netlist (`fpga`, with yosys's `SB_RAM40_4K` model).
 In addition, `cargo test` runs each example's testbench scenarios on the gate-level, iCE40-mapped and standard-cell netlists (RiscvCore runs the complete RV32I test program and compares 41 results, the ALU every operation against a Rust reference, RiscvSoc shows 55 on the LEDs).

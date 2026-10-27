@@ -1,5 +1,5 @@
 //! Synthesize the examples and run their testbench scenarios on the
-//! gate-level netlist, on its iCE40 (LUT4 / SB_DFF) mapping and on its vlib
+//! gate-level netlist, on its iCE40 (LUT4 / SB_DFF) and ECP5 mappings and on its vlib
 //! standard-cell mapping (`cargo test --release`).
 
 use crate::elab::{synthesize, Lib};
@@ -7,7 +7,7 @@ use crate::netsim::NetSim;
 use veryl_parser::Parser;
 
 /// synthesize `top` from the given files, then run `check` on the gate
-/// netlist, the iCE40-mapped netlist and the standard-cell netlist
+/// netlist, the iCE40- and ECP5-mapped netlists and the standard-cell netlist
 fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     let mut parsers = vec![];
     for f in files {
@@ -23,6 +23,9 @@ fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     let mapped = crate::ice40::map(&nl).unwrap();
     assert!(mapped.cells.iter().all(|c| c.typ.starts_with("SB_")));
     check(&mut NetSim::new(&mapped));
+    let ecp5 = crate::ecp5::map(&nl).unwrap();
+    assert!(ecp5.cells.iter().all(|c| matches!(c.typ.as_str(), "LUT4" | "CCU2C" | "TRELLIS_FF")));
+    check(&mut NetSim::new(&ecp5));
     let cells = crate::asic::map::map(&nl).unwrap();
     assert!(cells.cells.iter().all(|c| c.typ == "SRAM" || crate::asic::lib::LIB.iter().any(|l| l.name == c.typ)));
     check(&mut NetSim::new(&cells));

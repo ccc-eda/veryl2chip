@@ -34,6 +34,7 @@ cd veryl2chip
 |---|---|---|
 | `iceprog` | 把 `.bin` 燒進實體 iCEBreaker | [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build/releases) |
 | `nextpnr-ice40`、`icepack` | `v2c fpga` 預設的佈局繞線工具（用 `--pnr veryl` 就不需要） | OSS CAD Suite |
+| `nextpnr-ecp5`、`ecppack`、`openFPGALoader` | ECP5（`v2c fpga --arch ecp5`）的佈局繞線、位元流、燒錄 | OSS CAD Suite |
 | IceStorm 的 `chipdb-5k.txt` | `--pnr veryl`（自己的佈局繞線）需要的晶片資料庫 | OSS CAD Suite 的 `share/icebox/`；或用 `VERYL_EDA_CHIPDB` 指定 |
 | `gtkwave` | 看 `v2c sim --vcd` 產生的波形 | OSS CAD Suite 或系統套件 |
 | 官方 `veryl` | `veryl check` / `veryl test` / `veryl build`（語法的標準答案） | `cargo install veryl` |

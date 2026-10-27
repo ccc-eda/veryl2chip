@@ -1,7 +1,7 @@
 # 8. 合成後模擬：`v2c gatesim`
 
 ```
-v2c gatesim opt|ice40|asic|sky130 [--top MODULE] FILE.veryl...
+v2c gatesim opt|ice40|ecp5|asic|sky130 [--top MODULE] FILE.veryl...
 ```
 
 合成器會不會把電路做錯？最直接的檢查：**用同一個 testbench**，把被測的 module 換成它合成後的網表，再模擬一次。
@@ -17,6 +17,7 @@ gate-level simulation: Counter as 10 cells (ice40)
 |---|---|
 | `opt` | 最佳化後的通用閘（`v2c synth` 的結果） |
 | `ice40` | iCE40 對應後：`SB_LUT4`、`SB_CARRY`、`SB_DFF*`、`SB_RAM40_4K` |
+| `ecp5` | ECP5 對應後：`LUT4`、`CCU2C`、`TRELLIS_FF` |
 | `asic` | vlib 標準元件（含 SRAM 巨集） |
 | `sky130` | SkyWater SKY130 標準元件 |
 

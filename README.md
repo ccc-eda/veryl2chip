@@ -8,12 +8,12 @@
 An EDA for Veryl HDL: simulation, logic synthesis, an FPGA flow (iCE40UP5K, down to a
 bitstream) and an ASIC flow (standard cells, placement, routing, timing), all written in Rust.
 Since v2.0 the ASIC flow also runs on SkyWater's open **SKY130** PDK (`sky130_fd_sc_hd`) all the way to a
-DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk)). Version history: [history.md](history.md) (Traditional Chinese). User manual: [manual/](manual/README.md) (Traditional Chinese, every command with `v2c`).
+DRC-clean GDSII layout ([details](veryl-eda/README.md#sky130---pdk-sky130-srcpdk)). Since v2.2 the FPGA flow also maps to Lattice **ECP5** (ULX3S), placed and routed by nextpnr-ecp5 (`v2c fpga --arch ecp5`). Version history: [history.md](history.md) (Traditional Chinese). User manual: [manual/](manual/README.md) (Traditional Chinese, every command with `v2c`).
 
 | | |
 |---|---|
 | [`veryl-sim/`](veryl-sim/) | event-driven simulator for Veryl testbenches (`$tb::clock_gen`, `$assert`, VCD) |
-| [`veryl-eda/`](veryl-eda/) | synthesis to a gate netlist, iCE40 mapping, own place & route + bitstream, ASIC back end (`--asic`) |
+| [`veryl-eda/`](veryl-eda/) | synthesis to a gate netlist, iCE40 and ECP5 mapping, own place & route + bitstream (iCE40), ASIC back end (`--asic`) |
 | [`veryl-wasm/`](veryl-wasm/) | both crates compiled to WebAssembly behind a JSON API |
 | [`web/`](web/) | front-end-only web environment (TypeScript) |
 | [`examples/`](examples/) | Veryl project with the example designs, incl. a single-cycle RV32I CPU |
@@ -90,7 +90,8 @@ One command for everything, git style (`v2c help`, `v2c help <subcommand>` or `v
 | `v2c synth [-o OUT.json] [--verilog OUT.v] FILE...` | gate netlist (yosys JSON, Verilog) and its statistics |
 | `v2c fpga [--pcf P] [--asc A] [--bin B] [--pnr veryl] FILE...` | iCE40UP5K: LUT mapping, place & route, bitstream |
 | `v2c asic [--pdk vlib\|sky130] [--def D] [--gds G] FILE...` | standard cells, placement, routing, timing, power, DRC (SKY130), GDSII |
-| `v2c gatesim opt\|ice40\|asic\|sky130 FILE...` | the testbenches on the synthesized netlist |
+| `v2c fpga --arch ecp5 [--lpf L] [--bit B] FILE...` | ECP5: LUT4 / CCU2C mapping, nextpnr-ecp5 + ecppack |
+| `v2c gatesim opt\|ice40\|ecp5\|asic\|sky130 FILE...` | the testbenches on the synthesized netlist |
 | `v2c cc PROG.c [-o PROG.bin] [--run]` | C (or assembly) for the RISC-V SoC; `--run` on the instruction-set simulator |
 | `v2c pdk [DIR]` | check a full SKY130 PDK directory |
 

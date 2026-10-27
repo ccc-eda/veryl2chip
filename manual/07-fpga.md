@@ -85,7 +85,42 @@ iceprog soc.bin
 
 只換程式的話不需要重新合成與佈局繞線（網頁 IDE 換 C 程式時就是直接改寫位元流裡的記憶體內容）。
 
+## Lattice ECP5（`--arch ecp5`）
+
+```
+v2c fpga --arch ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf]
+         [--config OUT.config] [--bit OUT.bit] [--seed N] [-o OUT.json] [-v] FILE.veryl...
+```
+
+ECP5 是比 iCE40 大得多的 FPGA（25F 約 2.4 萬、85F 約 8.4 萬個 LUT，還有 SDRAM 介面的開發板，例如開源的 **ULX3S**）。
+對應由 `v2c` 做（`LUT4`、進位鏈 `CCU2C`、正反器 `TRELLIS_FF`），佈局繞線與位元流交給 OSS CAD Suite 的 **nextpnr-ecp5** 與 **ecppack**：
+
+```sh
+$ v2c fpga --arch ecp5 --bit counter.bit counter.veryl
+=== Counter ===
+  ...
+  cells: 9
+    LUT4           5
+    TRELLIS_FF     4
+  TRELLIS_IO:       7/    365     1%
+  TRELLIS_FF:       4/  83640     0%
+  TRELLIS_COMB:       6/  83640     0%
+  Max frequency for clock 'i_clk$TRELLIS_IO_IN': 371.89 MHz (PASS at 12.00 MHz)
+wrote counter.bit
+```
+
+`TRELLIS_COMB` 是 LUT 加上進位鏈的用量；`PASS at 12.00 MHz` 是 nextpnr 預設的時脈目標，要指定別的頻率，在 `.lpf` 裡寫
+`FREQUENCY PORT "i_clk" 25 MHZ;`。
+
+- 預設 `--device 85k --package CABGA381`（ULX3S 85F）；其他型號用 `--device 12k|25k|45k`。
+- 腳位檔是 Lattice 的 `.lpf`：`LOCATE COMP "o_led[0]" SITE "B2";`、`IOBUF PORT "o_led[0]" IO_TYPE=LVCMOS33;`。
+  沒給 `--lpf` 時 nextpnr 自己放 IO。
+- `--config` 是繞好的文字設定（Project Trellis 格式），`--bit` 是位元流，用 `openFPGALoader -b ulx3s counter.bit` 燒錄。
+- `v2c gatesim ecp5` 用原本的 testbench 跑 ECP5 網表（第 8 章）。
+- 和 iCE40 不同：reset 值是 1 的正反器，上電時就是 1（iCE40 全部上電為 0）。
+- 目前還沒有：block RAM（記憶體會變成正反器，所以 RvBoard 的 8 KB 記憶體還放不進去）、乘法器、自己的 ECP5 佈局繞線、虛擬板。
+
 ## 限制
 
-只支援 UP5K；沒有 SPRAM（`SB_SPRAM256KA`）、PLL、`inout`；非同步讀取的記憶體不會變成 block RAM；
+iCE40 只支援 UP5K；沒有 SPRAM（`SB_SPRAM256KA`）、PLL、`inout`；非同步讀取的記憶體不會變成 block RAM；
 自己的佈局繞線不做 LUT 輸入腳交換。

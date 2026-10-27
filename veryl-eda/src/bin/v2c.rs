@@ -28,13 +28,16 @@ of yosys internal cells, optimizes it and prints its statistics.
   -o OUT.json       yosys JSON (alias --json)
   --verilog OUT.v   structural Verilog
 example: v2c synth -o adder.json adder.veryl"),
-    ("fpga", "iCE40UP5K flow: LUT mapping, place & route, bitstream", "\
+    ("fpga", "FPGA flow (iCE40UP5K, ECP5): LUT mapping, place & route, bitstream", "\
 usage: v2c fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
                 [--pnr veryl|nextpnr] [--seed N] [--no-timing-driven] [--program PROG.bin]
                 [-o OUT.json] [--verilog OUT.v] FILE.veryl...
+       v2c fpga --arch ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf]
+                [--config OUT.config] [--bit OUT.bit] [--seed N] [-o OUT.json] [-v] FILE.veryl...
 
-Maps to SB_LUT4 / SB_CARRY / SB_DFF* / SB_RAM40_4K; with --asc or --bin, places and routes
-(nextpnr-ice40, or veryl-eda's own with --pnr veryl) and writes the bitstream.
+iCE40 (the default, --arch ice40): maps to SB_LUT4 / SB_CARRY / SB_DFF* / SB_RAM40_4K; with
+--asc or --bin, places and routes (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and
+writes the bitstream.
   --pcf PINS.pcf          pin constraints (iCEBreaker pins)
   --asc OUT.asc           routed configuration (IceStorm text format)
   --bin OUT.bin           bitstream for iceprog (the own P&R writes it without icepack)
@@ -43,7 +46,14 @@ Maps to SB_LUT4 / SB_CARRY / SB_DFF* / SB_RAM40_4K; with --asc or --bin, places 
   --no-timing-driven      wirelength-only placement and routing (own P&R)
   --program PROG.bin      put a program into the block RAMs (e.g. RvBoard, see v2c cc)
   --device up5k --package sg48   (the defaults)
-example: v2c fpga --pnr veryl --pcf icebreaker.pcf --bin blinky.bin blinky.veryl"),
+ECP5 (--arch ecp5): maps to LUT4 / CCU2C / TRELLIS_FF; with --config or --bit, places and
+routes with nextpnr-ecp5 (default --device 85k --package CABGA381: the ULX3S) and packs the
+bitstream with ecppack.
+  --lpf PINS.lpf          pin constraints (LOCATE COMP / IOBUF PORT)
+  --config OUT.config     routed configuration (Trellis text format)
+  --bit OUT.bit           bitstream (openFPGALoader / ecpprog)
+examples: v2c fpga --pnr veryl --pcf icebreaker.pcf --bin blinky.bin blinky.veryl
+          v2c fpga --arch ecp5 --lpf ulx3s.lpf --bit blinky.bit blinky.veryl"),
     ("asic", "ASIC flow: standard cells, place, route, timing, power (vlib or SKY130)", "\
 usage: v2c asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
                 [--verilog OUT.v] [--def OUT.def] [--gds OUT.gds] [--map-only] [-v] FILE.veryl...
@@ -60,11 +70,11 @@ Maps to standard cells, places them in rows, builds the clock tree and power gri
   -v                      details (critical path, DRC examples)
 example: v2c asic --pdk sky130 --gds alu.gds --def alu.def alu.veryl"),
     ("gatesim", "run the testbenches on the synthesized netlist", "\
-usage: v2c gatesim opt|ice40|asic|sky130 [--top MODULE] FILE.veryl...
+usage: v2c gatesim opt|ice40|ecp5|asic|sky130 [--top MODULE] FILE.veryl...
 
 Post-synthesis simulation: MODULE (default: the last non-#[test] module) is replaced by its
-synthesized netlist (opt: generic gates, ice40: LUTs / block RAM, asic: vlib cells,
-sky130: SKY130 cells) and its #[test] testbenches run against it.
+synthesized netlist (opt: generic gates, ice40: LUTs / block RAM, ecp5: ECP5 LUTs / carries,
+asic: vlib cells, sky130: SKY130 cells) and its #[test] testbenches run against it.
 example: v2c gatesim ice40 fifo.veryl"),
     ("cc", "compile C (or assemble .s) for the RISC-V SoC, run it", "\
 usage: v2c cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
@@ -118,11 +128,22 @@ fn main() {
         "sim" | "test" => veryl_sim::cli::main(&rest),
         "list" => veryl_sim::cli::main(&with(&["--list"])),
         "synth" => veryl_eda::cli::main(rest),
-        "fpga" => veryl_eda::cli::main(with(&["--ice40"])),
+        "fpga" => {
+            // --arch ice40 (default) | ecp5
+            let mut arch = "ice40".to_string();
+            let mut a = vec![];
+            let mut it = rest.iter();
+            while let Some(x) = it.next() {
+                if x == "--arch" { arch = it.next().cloned().unwrap_or_default(); } else { a.push(x.clone()); }
+            }
+            let flag = match arch.as_str() { "ice40" => "--ice40", "ecp5" => "--ecp5", o => { eprintln!("v2c fpga: --arch is ice40 or ecp5, not '{}'", o); std::process::exit(2) } };
+            a.insert(0, flag.to_string());
+            veryl_eda::cli::main(a)
+        }
         "asic" => veryl_eda::cli::main(with(&["--asic"])),
         "gatesim" => {
             let Some(kind) = rest.first() else { help(Some("gatesim")) };
-            if !matches!(kind.as_str(), "opt" | "ice40" | "asic" | "sky130") { eprintln!("v2c gatesim: the netlist is opt, ice40, asic or sky130, not '{}'", kind); std::process::exit(2); }
+            if !matches!(kind.as_str(), "opt" | "ice40" | "ecp5" | "asic" | "sky130") { eprintln!("v2c gatesim: the netlist is opt, ice40, ecp5, asic or sky130, not '{}'", kind); std::process::exit(2); }
             let mut a = vec!["--gatesim".to_string(), kind.clone()];
             a.extend(rest[1..].iter().cloned());
             veryl_eda::cli::main(a)

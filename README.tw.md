@@ -8,12 +8,12 @@
 Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一路到位元流）與 ASIC 流程
 （標準元件、佈局、繞線、時序分析），全部用 Rust 寫成。
 從 v2.0 起，ASIC 流程也能用 SkyWater 的開源 **SKY130** PDK（`sky130_fd_sc_hd`），一路做到通過 DRC 的 GDSII 版圖
-（[說明](veryl-eda/README.tw.md)）。各版本的歷史：[history.md](history.md)。使用手冊：[manual/](manual/README.md)（命令列一律用 `v2c`）。
+（[說明](veryl-eda/README.tw.md)）。v2.2 起 FPGA 流程也能對應到 Lattice **ECP5**（ULX3S），佈局繞線交給 nextpnr-ecp5（`v2c fpga --arch ecp5`）。各版本的歷史：[history.md](history.md)。使用手冊：[manual/](manual/README.md)（命令列一律用 `v2c`）。
 
 | | |
 |---|---|
 | [`veryl-sim/`](veryl-sim/) | Veryl testbench 的事件驅動模擬器（`$tb::clock_gen`、`$assert`、VCD） |
-| [`veryl-eda/`](veryl-eda/) | 合成成閘級網表、iCE40 對應、自製佈局繞線 + 位元流、ASIC 後端（`--asic`） |
+| [`veryl-eda/`](veryl-eda/) | 合成成閘級網表、iCE40 與 ECP5 對應、自製佈局繞線 + 位元流（iCE40）、ASIC 後端（`--asic`） |
 | [`veryl-wasm/`](veryl-wasm/) | 兩個 crate 編譯成 WebAssembly，以 JSON API 呼叫 |
 | [`web/`](web/) | 純前端的網頁環境（TypeScript） |
 | [`examples/`](examples/) | 範例設計的 Veryl 專案，含一顆單週期 RV32I CPU |
@@ -92,7 +92,8 @@ npm test
 | `v2c synth [-o OUT.json] [--verilog OUT.v] 檔案...` | 閘級網表（yosys JSON、Verilog）與統計 |
 | `v2c fpga [--pcf P] [--asc A] [--bin B] [--pnr veryl] 檔案...` | iCE40UP5K：LUT 對應、佈局繞線、位元流 |
 | `v2c asic [--pdk vlib\|sky130] [--def D] [--gds G] 檔案...` | 標準元件、佈局、繞線、時序、功耗、DRC（SKY130）、GDSII |
-| `v2c gatesim opt\|ice40\|asic\|sky130 檔案...` | 在合成後的網表上跑 testbench |
+| `v2c fpga --arch ecp5 [--lpf L] [--bit B] 檔案...` | ECP5：LUT4 / CCU2C 對應，nextpnr-ecp5 + ecppack |
+| `v2c gatesim opt\|ice40\|ecp5\|asic\|sky130 檔案...` | 在合成後的網表上跑 testbench |
 | `v2c cc PROG.c [-o PROG.bin] [--run]` | 給 RISC-V SoC 的 C（或組合語言）；`--run` 在指令集模擬器上執行 |
 | `v2c pdk [目錄]` | 檢查完整的 SKY130 PDK 目錄 |
 

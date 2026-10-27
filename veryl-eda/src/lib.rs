@@ -1,4 +1,4 @@
-//! veryl-eda as a library: synthesis (Veryl -> gate netlist), iCE40
+//! veryl-eda as a library: synthesis (Veryl -> gate netlist), iCE40 and ECP5
 //! technology mapping, place & route, netlist writers.
 //! Used by the command line (`main.rs`) and the WebAssembly build.
 
@@ -7,6 +7,7 @@ pub mod board;
 pub mod bram;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+pub mod ecp5;
 pub mod elab;
 pub mod expr;
 pub mod gatesim;

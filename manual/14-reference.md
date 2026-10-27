@@ -13,7 +13,7 @@ v2c <子指令> [選項] FILE.veryl...
 | `sim`（別名 `test`） | 執行 testbench | 5 |
 | `list` | 列出模組，標出 `#[test]` | 5 |
 | `synth` | 合成成閘級網表 | 6 |
-| `fpga` | iCE40UP5K：對應、佈局繞線、位元流 | 7 |
+| `fpga` | iCE40UP5K（預設）或 ECP5（`--arch ecp5`）：對應、佈局繞線、位元流 | 7 |
 | `gatesim` | 在合成後的網表上跑 testbench | 8 |
 | `asic` | 標準元件流程（vlib / SKY130） | 9 |
 | `cc` | 編譯 C（或組譯 `.s`）給 RISC-V SoC，可直接執行 | 10 |
@@ -57,9 +57,12 @@ v2c <子指令> [選項] FILE.veryl...
 | `--program P.bin` | 把程式放進 block RAM |
 | `-o F.json`、`--verilog F.v` | 對應後的網表 |
 | `-v` | 關鍵路徑細節 |
-| `--device up5k --package sg48` | 預設值（目前只支援這個） |
+| `--device up5k --package sg48` | 預設值（iCE40 目前只支援這個） |
+| `--arch ice40\|ecp5` | 目標 FPGA（預設 ice40） |
+| `--lpf F.lpf`、`--config F.config`、`--bit F.bit` | ECP5 的腳位檔、繞好的設定、位元流（nextpnr-ecp5 + ecppack） |
+| `--device 12k\|25k\|45k\|85k --package CABGA381` | ECP5 的型號（預設 85k、CABGA381） |
 
-### `v2c gatesim opt|ice40|asic|sky130`
+### `v2c gatesim opt|ice40|ecp5|asic|sky130`
 
 只有 `--top`。
 
@@ -98,6 +101,7 @@ DIR 預設依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。
 | `v2c sim ...` | `veryl-sim ...` |
 | `v2c synth ...` | `veryl-eda ...` |
 | `v2c fpga ...` | `veryl-eda --ice40 ...` |
+| `v2c fpga --arch ecp5 ...` | `veryl-eda --ecp5 ...` |
 | `v2c asic ...` | `veryl-eda --asic ...` |
 | `v2c gatesim K ...` | `veryl-eda --gatesim K ...` |
 | `v2c cc P.c ...` | `veryl-eda --cc P.c ...` |
@@ -123,6 +127,8 @@ DIR 預設依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。
 | `.v` | 結構化 Verilog | `--verilog`；iverilog、yosys |
 | `.asc` | iCE40 設定（文字） | `fpga --asc`；IceStorm 工具 |
 | `.bin` | iCE40 位元流 | `fpga --bin`；iceprog、虛擬板 |
+| `.lpf` | ECP5 腳位 | 你；`fpga --arch ecp5 --lpf` |
+| `.config`、`.bit` | ECP5 繞好的設定、位元流 | `fpga --arch ecp5`；ecppack、openFPGALoader |
 | `.def` | 佈局繞線 | `asic --def`；OpenROAD、KLayout |
 | `.gds` | 晶片版圖 | `asic --gds`；KLayout、Magic |
 | `.c`、`.s` | RISC-V 程式 | 你；`cc` |

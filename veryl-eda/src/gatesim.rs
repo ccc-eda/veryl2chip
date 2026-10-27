@@ -22,7 +22,7 @@ pub fn to_gates(nl: &Netlist) -> GateNetlist {
 }
 
 /// the netlist of `top` for a gate-level simulation of the given kind:
-/// "opt" (generic gates), "ice40" (LUTs, carries, block RAM), "asic" (vlib cells)
+/// "opt" (generic gates), "ice40" (LUTs, carries, block RAM), "ecp5", "asic" (vlib cells), "sky130"
 pub fn netlist_for(lib: &crate::elab::Lib, top: &str, kind: &str) -> Result<Netlist, String> {
     netlist_with(lib, top, &HashMap::new(), kind)
 }
@@ -33,10 +33,11 @@ pub fn netlist_with(lib: &crate::elab::Lib, top: &str, ov: &HashMap<String, Val>
     match kind {
         "opt" | "gate" => Ok(nl),
         "ice40" => crate::ice40::map(&nl),
+        "ecp5" => crate::ecp5::map(&nl),
         "asic" => crate::asic::map::map(&nl),
         // SKY130 mapping (no SRAM macros, negative-edge flip-flops with a clock inverter)
         "sky130" => crate::pdk::with_tech(crate::pdk::sky130_builtin()?, || crate::asic::map::map(&nl)),
-        k => Err(format!("unknown netlist kind '{}' (opt, ice40, asic, sky130)", k)),
+        k => Err(format!("unknown netlist kind '{}' (opt, ice40, ecp5, asic, sky130)", k)),
     }
 }
 

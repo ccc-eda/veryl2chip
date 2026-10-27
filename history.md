@@ -21,7 +21,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v1.8 | 2026-10-27 | `54be6be` | 對應用更多 SKY130 元件，速度與面積改善 | `v1.8` |
 | v1.9 | 2026-10-27 | `285be7f` | IDE 裡可選 SKY130 | `v1.9` |
 | v2.0 | 2026-10-27 | `85fe18e` | 2.0.0：接上 SkyWater SKY130 | `v2.0`（= `d70d279`） |
-| v2.1 | 2026-10-27 | （本版） | 2.1.0：`v2c` 單一指令、使用手冊 | （發布時由 `publish.sh` 打） |
+| v2.1 | 2026-10-27 | `c864946` 起 | 2.1.0：`v2c` 單一指令、使用手冊、手機版 IDE | （發布時由 `publish.sh` 打） |
+| v2.2 | 2026-10-27 | （本版） | 2.2.0：Lattice ECP5 對應 + nextpnr-ecp5 | |
 
 ---
 
@@ -184,6 +185,28 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - `3fa558a` 使用手冊 `manual/`（繁體中文，14 章）：命令列一律用 `v2c`，手冊裡的指令都實際跑過。
 - 2.1.0：兩個 crate 升版，讓 `cargo install veryl2chip-eda` 裝到 `v2c`。
 - 網頁 IDE 在手機上可以用（responsive）：窄螢幕時側欄變成抽屜、標題列的選單收進 ⋯、編輯器字放大，合成流程與虛擬板改成直向排列；桌面版不變。
+
+---
+
+## 往 v3.0：RV64 + SV39 與 ECP5（規劃在 `web/PLAN.md`）
+
+目標是一顆用 Veryl 寫、有 SV39 虛擬記憶體的 RV64 CPU，放進 ECP5（ULX3S）跑 xv6。iCE40UP5K 放不下
+（RV32IMA 的 `RvCore` 已經用掉 3817 / 5280 個 LUT4），所以先接上更大的 FPGA。
+
+### v2.2：ECP5 對應（M29）
+
+- `veryl-eda/src/ecp5.rs`：`LUT4`（和 iCE40 共用切割式 LUT 覆蓋，iCE40 的輸出逐位元組不變）、`CCU2C` 進位鏈
+  （兩個位元一顆；進位要離開進位鏈或分岔時，後半只傳遞進位，或經過緩衝 LUT——nextpnr-ecp5 不接受分岔的進位鏈）、
+  `TRELLIS_FF`（時脈與 reset 極性、同步 / 非同步、reset 值都是 slice 的多工器）。
+- `v2c fpga --arch ecp5 [--lpf] [--config] [--bit]`：呼叫 nextpnr-ecp5 與 ecppack，印出最後的用量與 Fmax；`v2c gatesim ecp5`。
+- netsim 與 veryl-sim 的閘級模型加上三種 ECP5 元件（依 yosys 的 `cells_sim.v`）。
+- 驗證：`cargo test` 的所有情境在 ECP5 網表上通過；`test.sh` 對每個設計做 ECP5 閘級模擬、nextpnr-ecp5 + ecppack，
+  並用 yosys 的 ECP5 模型證明與 `veryl build` 等價。ECP5 的正反器上電值是 `REGSET`（reset 值為 1 的上電就是 1），
+  所以這項證明拿掉初值，只比邏輯。
+- `fpga/ecp5_routed.sh`：nextpnr 繞好的網表（`--write`）與對應出的網表做形式等價，15 個設計通過。途中發現 yosys 的
+  `TRELLIS_COMB` 模型在 generate 區塊裡寫 `wire FCO = ...`，真正的 `FCO` 沒被驅動（改用 `fpga/ecp5_comb.v`）；
+  nextpnr 把常數輸入併進真值表，靠的是沒接的 LUT 輸入讀成 1。
+- 之後的方向調整：先做 RV64 處理器（用官方 `veryl build` + Verilator 驗證，跑 xv6、Linux），ECP5 的 block RAM 等等之後再做。
 
 ---
 

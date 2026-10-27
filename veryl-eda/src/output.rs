@@ -48,7 +48,11 @@ pub fn to_json(nl: &Netlist) -> String {
         for g in &mut groups { g.1.sort_by_key(|x| x.0); }
         let dirs: Vec<String> = groups.iter().map(|(p, _)| format!("\"{}\": \"{}\"", p, port_dir(p))).collect();
         let conns: Vec<String> = groups.iter().map(|(p, v)| format!("\"{}\": [{}]", p, v.iter().map(|x| bit(x.1)).collect::<Vec<_>>().join(", "))).collect();
-        let params: Vec<String> = c.params.iter().filter(|(k, _)| *k != crate::bram::SLOT).map(|(k, v)| format!("\"{}\": \"{}\"", k, v)).collect();
+        // a string parameter of only 0 / 1 gets a trailing space (yosys' JSON convention), or it would read as bits
+        let params: Vec<String> = c.params.iter().filter(|(k, _)| *k != crate::bram::SLOT).map(|(k, v)| {
+            let sp = if crate::ecp5::is_string_param(&c.typ, k) && v.chars().all(|ch| ch == '0' || ch == '1') { " " } else { "" };
+            format!("\"{}\": \"{}{}\"", k, v, sp)
+        }).collect();
         let attrs: Vec<String> = c.params.iter().filter(|(k, _)| *k == crate::bram::SLOT).map(|(_, v)| format!("\"veryl_mem\": \"{}\"", v)).collect();
         format!("        \"$veryl${}\": {{ \"hide_name\": 1, \"type\": \"{}\", \"parameters\": {{ {} }}, \"attributes\": {{ {} }}, \"port_directions\": {{ {} }}, \"connections\": {{ {} }} }}",
             i, c.typ, params.join(", "), attrs.join(", "), dirs.join(", "), conns.join(", "))
@@ -97,9 +101,11 @@ pub fn to_verilog(nl: &Netlist) -> String {
             "$_XOR_" => writeln!(s, "  assign {} = {} ^ {};", y, g("A"), g("B")),
             "$_MUX_" => writeln!(s, "  assign {} = {} ? {} : {};", y, g("S"), g("B"), g("A")),
             t if !t.starts_with("$_") => {
-                // iCE40 primitive (models: yosys techlibs/ice40/cells_sim.v) or vlib
+                // iCE40 / ECP5 primitive (models: yosys techlibs/{ice40,ecp5}/cells_sim.v) or vlib
                 // standard cell / SRAM macro (models: asic::lib::verilog_models)
-                let params: Vec<String> = c.params.iter().filter(|(k, _)| *k != crate::bram::SLOT).map(|(k, v)| format!(".{}({}'b{})", k, v.len(), v)).collect();
+                let params: Vec<String> = c.params.iter().filter(|(k, _)| *k != crate::bram::SLOT).map(|(k, v)| {
+                    if crate::ecp5::is_string_param(&c.typ, k) { format!(".{}(\"{}\")", k, v) } else { format!(".{}({}'b{})", k, v.len(), v) }
+                }).collect();
                 // indexed pins "NAME[i]" form one bus port (missing input bits read 0)
                 let mut groups: Vec<(&str, Vec<(usize, Bit)>)> = vec![];
                 for (p, b) in &c.conns {

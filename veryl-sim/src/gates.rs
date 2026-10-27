@@ -5,8 +5,8 @@
 //! flip-flops `always_ff` processes, RAMs arrays with synchronous ports.
 //!
 //! Cells: yosys internal gates ($_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_, $_DFF_*,
-//! $_SDFF_*), iCE40 (SB_LUT4 SB_CARRY SB_DFF* SB_RAM40_4K) and the vlib
-//! standard cells of veryl-eda (INV ... DFFNS, SRAM macros).
+//! $_SDFF_*), iCE40 (SB_LUT4 SB_CARRY SB_DFF* SB_RAM40_4K), ECP5 (LUT4 CCU2C
+//! TRELLIS_FF) and the vlib standard cells of veryl-eda (INV ... DFFNS, SRAM macros).
 
 use crate::elab::{Dir, Elab, Scope};
 use crate::expr::{Expr, LValue, Sel};
@@ -64,6 +64,17 @@ impl<'a> Elab<'a> {
                 }
             }
         }
+        // a mux tree over a truth table (not an indexed read): an x input
+        // then only matters where the table really depends on it, as in RTL
+        fn tree(init: u128, ins: &[Expr], k: usize, base: usize) -> Expr {
+            if k == 0 { return Expr::Num(Val::new(1, (init >> base) & 1)); }
+            let half = 1usize << (k - 1);
+            let part = |b: usize| (init >> b) & ((1u128 << half) - 1);
+            // input k-1 does not matter here: one subtree
+            if part(base) == part(base + half) { return tree(init, ins, k - 1, base); }
+            let (lo, hi) = (tree(init, ins, k - 1, base), tree(init, ins, k - 1, base + half));
+            Expr::Tern(Box::new(ins[k - 1].clone()), Box::new(hi), Box::new(lo))
+        }
         for c in &g.cells {
             let pin = |p: &str| c.conns.iter().find(|x| x.0 == p).map(|x| x.1).unwrap_or(Pin::C0);
             macro_rules! i { ($e:expr, $p:expr) => { $e.gw(&mut wires, prefix, pin($p)) } }
@@ -97,20 +108,14 @@ impl<'a> Elab<'a> {
                     Some(("CO", bin("|", bin("&", a.clone(), b.clone()), bin("&", bin("|", a, b), ci))))
                 }
                 "SB_LUT4" => {
-                    // a mux tree over the truth table (not an indexed read): an x input
-                    // then only matters where the table really depends on it, as in RTL
                     let init = u128::from_str_radix(&param("LUT_INIT"), 2).unwrap_or(0);
                     let ins: Vec<Expr> = ["I0", "I1", "I2", "I3"].iter().map(|p| i!(self, *p)).collect();
-                    fn tree(init: u128, ins: &[Expr], k: usize, base: usize) -> Expr {
-                        if k == 0 { return Expr::Num(Val::new(1, (init >> base) & 1)); }
-                        let half = 1usize << (k - 1);
-                        let part = |b: usize| (init >> b) & ((1u128 << half) - 1);
-                        // input k-1 does not matter here: one subtree
-                        if part(base) == part(base + half) { return tree(init, ins, k - 1, base); }
-                        let (lo, hi) = (tree(init, ins, k - 1, base), tree(init, ins, k - 1, base + half));
-                        Expr::Tern(Box::new(ins[k - 1].clone()), Box::new(hi), Box::new(lo))
-                    }
                     Some(("O", tree(init, &ins, 4, 0)))
+                }
+                "LUT4" => {
+                    let init = u128::from_str_radix(param("INIT").trim(), 2).unwrap_or(0);
+                    let ins: Vec<Expr> = ["A", "B", "C", "D"].iter().map(|p| i!(self, *p)).collect();
+                    Some(("Z", tree(init, &ins, 4, 0)))
                 }
                 _ => None,
             };
@@ -119,8 +124,40 @@ impl<'a> Elab<'a> {
                 self.procs.push(Proc::Comb(vec![Stmt::Assign(lv(sig_of(&o)), e)]));
                 continue;
             }
+            if t == "CCU2C" {
+                // two carry-chain halves (yosys techlibs/ecp5/cells_sim.v): S = LUT4 ^ CIN,
+                // COUT = LUT4 ? CIN : LUT2 (INJECT1 = "YES" gates CIN and LUT2 off)
+                let zero = || Expr::Num(Val::new(1, 0));
+                let mut cin = i!(self, "CIN");
+                let mut outs = vec![];
+                for (h, init_p, inj_p) in [(0, "INIT0", "INJECT1_0"), (1, "INIT1", "INJECT1_1")] {
+                    let init = u128::from_str_radix(param(init_p).trim(), 2).unwrap_or(0);
+                    let inject = param(inj_p).trim() != "NO";
+                    let ins: Vec<Expr> = ["A", "B", "C", "D"].iter().map(|p| i!(self, &format!("{}{}", p, h))).collect();
+                    let l4 = tree(init, &ins, 4, 0);
+                    let l2 = tree(init & 0xf, &ins[..2], 2, 0);
+                    let s = bin("^", l4.clone(), if inject { zero() } else { cin.clone() });
+                    let co = bin("|", bin("&", not(l4.clone()), if inject { zero() } else { l2 }), bin("&", l4, cin.clone()));
+                    outs.push((if h == 0 { "S0" } else { "S1" }, s));
+                    cin = co;
+                }
+                outs.push(("COUT", cin));
+                for (p, e) in outs {
+                    if let Pin::W(_) = pin(p) {
+                        let o = i!(self, p);
+                        self.procs.push(Proc::Comb(vec![Stmt::Assign(lv(sig_of(&o)), e)]));
+                    }
+                }
+                continue;
+            }
             // flip-flops: (clock pin, rising, D, Q, reset: (pin, active-high, async, value))
-            let ff: Option<(&str, bool, Option<(&str, bool, bool, bool)>)> = if let Some(k) = t.strip_prefix("SB_DFF") {
+            let mut dpin = "D";
+            let ff: Option<(&str, bool, Option<(&str, bool, bool, bool)>)> = if t == "TRELLIS_FF" {
+                // ECP5: clock and LSR polarity muxes, REGSET value, SRMODE ASYNC or synchronous
+                dpin = "DI";
+                let r = c.conns.iter().any(|x| x.0 == "LSR").then(|| ("LSR", param("LSRMUX") != "INV", param("SRMODE") == "ASYNC", param("REGSET") == "SET"));
+                Some(("CLK", param("CLKMUX") != "INV", r))
+            } else if let Some(k) = t.strip_prefix("SB_DFF") {
                 let neg = k.starts_with('N');
                 let k = k.trim_start_matches('N');
                 let (sync, k) = if k.len() == 2 { (true, &k[1..]) } else { (false, k) };
@@ -142,7 +179,7 @@ impl<'a> Elab<'a> {
                 }
             };
             if let Some((ck, rising, rst)) = ff {
-                let (clk, d, q) = (sig_of(&i!(self, ck)), i!(self, "D"), sig_of(&i!(self, "Q")));
+                let (clk, d, q) = (sig_of(&i!(self, ck)), i!(self, dpin), sig_of(&i!(self, "Q")));
                 let mut body = vec![Stmt::Assign(lv(q), d)];
                 let mut rinfo = None;
                 if let Some((rp, high, asynch, val)) = rst {

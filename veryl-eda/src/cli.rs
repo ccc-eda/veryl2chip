@@ -1,6 +1,6 @@
 //! The `veryl-eda` command line, also behind `v2c synth / fpga / asic / gatesim / cc / pdk`.
 
-use crate::{asic, bram, elab, ice40, netlist, output, pnr, rv};
+use crate::{asic, bram, ecp5, elab, ice40, netlist, output, pnr, rv};
 use std::sync::OnceLock;
 
 /// set by `v2c` to its subcommand: argument errors point to `v2c help <subcommand>`
@@ -15,6 +15,7 @@ fn usage() -> ! {
     eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc; PROG.s: assemble)");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
+    eprintln!("                 [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf] [--config OUT.config] [--bit OUT.bit]]");
     eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [--gds OUT.gds] [-v]] [--gatesim opt|ice40|asic|sky130]");
     eprintln!("                 FILE.veryl...");
     eprintln!("       veryl-eda --pdk-check [DIR]   (read a SKY130 Liberty + LEF directory, check the cell bindings)");
@@ -22,6 +23,7 @@ fn usage() -> ! {
     eprintln!("  gate-level netlist of yosys internal cells and prints its statistics.");
     eprintln!("  --ice40 maps it to SB_LUT4/SB_DFF* cells; --asc/--bin then run");
     eprintln!("  place & route (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and icepack.");
+    eprintln!("  --ecp5 maps to LUT4/CCU2C/TRELLIS_FF cells; --config/--bit then run nextpnr-ecp5 and ecppack.");
     eprintln!("  --program puts a binary (from address 0) into the block RAMs of a byte-lane");
     eprintln!("  program memory (*.b0.mem .. *.b3.mem, e.g. RvBoard in examples/src/rvsoc.veryl).");
     eprintln!("  --asic maps to standard cells (vlib, or SkyWater SKY130 sky130_fd_sc_hd with --pdk sky130),");
@@ -104,7 +106,8 @@ pub fn main(all: Vec<String>) {
     if all.first().map(|a| a == "--pdk-check") == Some(true) { pdk_check(all.get(1)); }
     let (mut top, mut json, mut verilog, mut list) = (None::<String>, None::<String>, None::<String>, false);
     let (mut ice40, mut pcf, mut asc, mut bin) = (false, None::<String>, None::<String>, None::<String>);
-    let (mut device, mut package) = ("up5k".to_string(), "sg48".to_string());
+    let (mut device, mut package) = (None::<String>, None::<String>);
+    let (mut ecp5, mut lpf, mut config, mut bit) = (false, None::<String>, None::<String>, None::<String>);
     let (mut pnr_tool, mut seed, mut verbose) = ("nextpnr".to_string(), 1u64, false);
     let mut asic_flow = false;
     let mut pdk_name = "vlib".to_string();
@@ -123,6 +126,10 @@ pub fn main(all: Vec<String>) {
             "--verilog" => verilog = a.next(),
             "--list" => list = true,
             "--ice40" => ice40 = true,
+            "--ecp5" => ecp5 = true,
+            "--lpf" => lpf = a.next(),
+            "--config" => config = a.next(),
+            "--bit" => bit = a.next(),
             "--asic" => asic_flow = true,
             "--pdk" => pdk_name = a.next().unwrap_or_else(|| usage()),
             "--def" => def_out = a.next(),
@@ -134,8 +141,8 @@ pub fn main(all: Vec<String>) {
             "--asc" => asc = a.next(),
             "--bin" => bin = a.next(),
             "--program" => program = a.next(),
-            "--device" => device = a.next().unwrap_or_else(|| usage()),
-            "--package" => package = a.next().unwrap_or_else(|| usage()),
+            "--device" => device = Some(a.next().unwrap_or_else(|| usage())),
+            "--package" => package = Some(a.next().unwrap_or_else(|| usage())),
             "--pnr" => pnr_tool = a.next().unwrap_or_else(|| usage()),
             "--seed" => seed = a.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage()),
             "-v" | "--verbose" => verbose = true,
@@ -182,11 +189,15 @@ pub fn main(all: Vec<String>) {
         Ok(r) => r,
         Err(e) => { eprintln!("synthesis error in '{}': {}", top, e); std::process::exit(1) }
     };
-    if asc.is_some() || bin.is_some() { ice40 = true; }
+    if ecp5 && ice40 { eprintln!("--ecp5 and --ice40 exclude each other"); std::process::exit(2); }
+    if !ecp5 && (asc.is_some() || bin.is_some()) { ice40 = true; }
+    if ecp5 && (asc.is_some() || bin.is_some() || pcf.is_some()) { eprintln!("ECP5: the outputs are --config / --bit, the pins --lpf"); std::process::exit(2); }
+    let device = device.unwrap_or_else(|| if ecp5 { "85k" } else { "up5k" }.to_string());
+    let package = package.unwrap_or_else(|| if ecp5 { "CABGA381" } else { "sg48" }.to_string());
     let mut asic_out = None;
     let mut asic_models = false;
     if asic_flow {
-        if ice40 { eprintln!("--asic and --ice40 exclude each other"); std::process::exit(2); }
+        if ice40 || ecp5 { eprintln!("--asic and an FPGA exclude each other"); std::process::exit(2); }
         if !tech.is_vlib() { println!("asic: technology {} ({} µm rows, {} µm sites)", tech.name, tech.row_h, tech.site_w); }
         if map_only {
             // technology mapping only (no place & route): for the netlist
@@ -207,6 +218,9 @@ pub fn main(all: Vec<String>) {
             for (m, words) in lanes { bram::set_mem_init(&mut nl, &m, &words); }
             println!("program: {} bytes in the block RAMs", bytes.len());
         }
+    } else if ecp5 {
+        nl = ecp5::map(&nl).unwrap_or_else(|e| { eprintln!("ECP5 mapping error: {}", e); std::process::exit(1) });
+        if program.is_some() { eprintln!("--program: ECP5 block RAMs come in a later version"); std::process::exit(2); }
     } else if program.is_some() {
         eprintln!("--program needs --ice40"); std::process::exit(2);
     }
@@ -299,6 +313,43 @@ pub fn main(all: Vec<String>) {
             let st = std::process::Command::new("icepack").arg(&asc_path).arg(b).status()
                 .unwrap_or_else(|e| { eprintln!("cannot run icepack: {}", e); std::process::exit(1) });
             if !st.success() { eprintln!("icepack failed"); std::process::exit(1); }
+            println!("wrote {}", b);
+        }
+    }
+    if ecp5 && (config.is_some() || bit.is_some()) {
+        let dir = std::env::temp_dir().join(format!("veryl-eda-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mapped = json.clone().map(PathBuf::from).unwrap_or_else(|| dir.join("mapped.json"));
+        std::fs::write(&mapped, output::to_json(&nl)).unwrap();
+        let cfg = config.clone().map(PathBuf::from).unwrap_or_else(|| dir.join("out.config"));
+        let mut cmd = std::process::Command::new("nextpnr-ecp5");
+        cmd.arg(format!("--{}", device)).args(["--package", &package, "--seed", &seed.to_string(), "--json"]).arg(&mapped).arg("--textcfg").arg(&cfg);
+        match &lpf { Some(p) => { cmd.args(["--lpf", p]); } None => { cmd.arg("--lpf-allow-unconstrained"); } }
+        println!("running {:?}", cmd);
+        let out = cmd.output().unwrap_or_else(|e| { eprintln!("cannot run nextpnr-ecp5: {}", e); std::process::exit(1) });
+        let log = String::from_utf8_lossy(&out.stderr);
+        // utilisation of the final placement, the clocks' Fmax, errors
+        let util: Vec<&str> = log.lines().filter(|l| l.contains("Device utilisation")).collect();
+        let tail = log.rsplit("Device utilisation").next().unwrap_or("");
+        if !util.is_empty() {
+            for l in tail.lines().skip(1).take_while(|l| l.contains('/')).filter(|l| !l.contains(" 0/")) { println!("  {}", l.trim_start_matches("Info:").trim()); }
+        }
+        // nextpnr reports Fmax after placement and after routing: the last report of each clock
+        let mut fmax: Vec<(String, String)> = vec![];
+        for l in log.lines().filter(|l| l.contains("Max frequency for clock")) {
+            let l = l.trim_start_matches("Info:").trim().to_string();
+            let clk = l.split(':').next().unwrap_or("").to_string();
+            match fmax.iter_mut().find(|x| x.0 == clk) { Some(x) => x.1 = l, None => fmax.push((clk, l)) }
+        }
+        for (_, l) in &fmax { println!("  {}", l); }
+        for l in log.lines().filter(|l| l.contains("ERROR")) { println!("  {}", l.trim_start_matches("Info:").trim()); }
+        if verbose { for l in log.lines().filter(|l| l.contains("Critical path") || l.contains("ns logic") || l.contains("ns routing")) { println!("  {}", l.trim_start_matches("Info:").trim()); } }
+        if !out.status.success() { eprintln!("nextpnr-ecp5 failed"); std::process::exit(1); }
+        if config.is_some() { println!("wrote {}", cfg.display()); }
+        if let Some(b) = &bit {
+            let st = std::process::Command::new("ecppack").arg(&cfg).arg("--bit").arg(b).status()
+                .unwrap_or_else(|e| { eprintln!("cannot run ecppack: {}", e); std::process::exit(1) });
+            if !st.success() { eprintln!("ecppack failed"); std::process::exit(1); }
             println!("wrote {}", b);
         }
     }

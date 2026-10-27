@@ -60,6 +60,12 @@ impl<'n> NetSim<'n> {
     /// (reset pin, active-high, async, value) of a flip-flop with reset/set
     fn reset_of(c: &Cell) -> Option<(&'static str, bool, bool, bool)> {
         let t = c.typ.as_str();
+        if t == "TRELLIS_FF" {
+            // ECP5: LSR through LSRMUX, value from REGSET, SRMODE ASYNC or synchronous
+            c.port("LSR")?;
+            let p = |k: &str| c.params.iter().find(|x| x.0 == k).map(|x| x.1.as_str()).unwrap_or("");
+            return Some(("LSR", p("LSRMUX") != "INV", p("SRMODE") == "ASYNC", p("REGSET") == "SET"));
+        }
         // vlib flip-flops: active-low asynchronous reset / set
         match t {
             "DFFR" | "DFFNR" => return Some(("RN", false, true, false)),
@@ -84,6 +90,13 @@ impl<'n> NetSim<'n> {
         for _ in 0..4 {
             for c in &self.nl.cells {
                 if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" { continue; }
+                if c.typ == "CCU2C" {
+                    let (s0, s1, co) = crate::ecp5::ccu2c(c, |p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
+                    for (p, v) in [("S0", s0), ("S1", s1), ("COUT", co)] {
+                        if let Some(Bit::W(w)) = c.port(p) { self.v.insert(w, v); }
+                    }
+                    continue;
+                }
                 let g = |p: &str, s: &Self| s.get_bit(c.port(p).unwrap());
                 let y = match c.typ.as_str() {
                     "$_NOT_" => !g("A", self),
@@ -113,6 +126,11 @@ impl<'n> NetSim<'n> {
                     "TIEL" => false,
                     "TIEH" => true,
                     "SB_CARRY" => { let (a, b, ci) = (g("I0", self), g("I1", self), g("CI", self)); (a & b) | ((a | b) & ci) }
+                    "LUT4" => {
+                        let idx = ["A", "B", "C", "D"].iter().enumerate().fold(0, |a, (i, p)| a | ((g(p, self) as usize) << i));
+                        let init = &c.params.iter().find(|p| p.0 == "INIT").unwrap().1;
+                        init.as_bytes()[15 - idx] == b'1'
+                    }
                     "SB_LUT4" => {
                         let idx = ["I0", "I1", "I2", "I3"].iter().enumerate().fold(0, |a, (i, p)| a | ((g(p, self) as usize) << i));
                         let init = &c.params.iter().find(|p| p.0 == "LUT_INIT").unwrap().1;
@@ -140,8 +158,9 @@ impl<'n> NetSim<'n> {
     /// clock pin and active edge (true = rising) of a sequential cell
     fn clock_of(c: &Cell) -> Option<(Bit, bool)> {
         let t = c.typ.as_str();
-        let pin = ["C", "CK", "RCLK"].iter().find_map(|p| c.port(p))?;
+        let pin = ["C", "CK", "RCLK", "CLK"].iter().find_map(|p| c.port(p))?;
         let rising = match t {
+            "TRELLIS_FF" => c.params.iter().all(|x| !(x.0 == "CLKMUX" && x.1 == "INV")),
             "SB_RAM40_4K" | "SRAM" => true,
             _ if t.starts_with("SB_DFFN") || t.starts_with("DFFN") => false,
             _ if t.starts_with("$_DFF_N") || t.starts_with("$_SDFF_N") => false,
@@ -171,7 +190,7 @@ impl<'n> NetSim<'n> {
     fn capture(&mut self, sel: &[bool]) {
         let mut next = vec![];
         for (_, c) in self.nl.cells.iter().enumerate().filter(|(i, c)| c.is_ff() && sel[*i]) {
-            let mut d = self.get_bit(c.port("D").unwrap());
+            let mut d = self.get_bit(c.port("D").or(c.port("DI")).unwrap());
             if let Some((pin, hi, _, val)) = Self::reset_of(c) {
                 if self.get_bit(c.port(pin).unwrap()) == hi { d = val; }
             }

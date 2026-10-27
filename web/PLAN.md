@@ -60,7 +60,7 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 
 每個 M 完成就 commit。
 
-### 往 v3.0：RV64 + SV39 與 ECP5（規劃中）
+### 往 v3.0：RV64 + SV39 與 ECP5（進行中：v2.2 完成）
 
 目標：一顆用 Veryl 寫的 **RV64IMA + Zicsr、M / S / U 三種模式、SV39 虛擬記憶體**的 CPU，
 放進 Lattice **ECP5** FPGA，跑 **xv6-riscv**（有分頁、行程、檔案系統的教學作業系統）。
@@ -89,7 +89,7 @@ FTDI USB 序列埠、SD 卡、HDMI 接頭；開源硬體）。核心的目標是
 
 | 版本 | M | 內容 | 驗證 |
 |---|---|---|---|
-| v2.2 | M29 | **ECP5 對應**（`veryl-eda/src/ecp5.rs`）：`LUT4`（沿用 iCE40 的切割式 LUT 對應）、`PFUMX` / `L6MUX21`（5、6 輸入）、`CCU2C`（進位鏈，兩位元一組）、`TRELLIS_FF`（同步 / 非同步 reset、致能）、`TRELLIS_IO`；輸出 nextpnr-ecp5 讀得懂的 JSON；CLI `v2c fpga --arch ecp5 [--device 25k\|45k\|85k] [--lpf PINS.lpf] [--bit OUT.bit]`（呼叫 nextpnr-ecp5 + ecppack）；`v2c gatesim ecp5`；netsim 加 ECP5 元件 | 所有範例：ECP5 網表跑原本的 testbench；yosys 用 `cells_sim.v` 證明與 `veryl build` 等價；nextpnr-ecp5 繞得完、`ecppack` 產生 `.bit`；nextpnr 繞好的網表（`--write`）再模擬一次 |
+| v2.2 ✓ | M29 | **ECP5 對應**（`veryl-eda/src/ecp5.rs`）：`LUT4`（沿用 iCE40 的切割式 LUT 對應）、`PFUMX` / `L6MUX21`（5、6 輸入）、`CCU2C`（進位鏈，兩位元一組）、`TRELLIS_FF`（同步 / 非同步 reset、致能）、`TRELLIS_IO`；輸出 nextpnr-ecp5 讀得懂的 JSON；CLI `v2c fpga --arch ecp5 [--device 25k\|45k\|85k] [--lpf PINS.lpf] [--bit OUT.bit]`（呼叫 nextpnr-ecp5 + ecppack）；`v2c gatesim ecp5`；netsim 加 ECP5 元件 | 所有範例：ECP5 網表跑原本的 testbench；yosys 用 `cells_sim.v` 證明與 `veryl build` 等價；nextpnr-ecp5 繞得完、`ecppack` 產生 `.bit`；nextpnr 繞好的網表（`--write`）再模擬一次 |
 | v2.3 | M30 | **ECP5 資源與板子**：同步讀取的記憶體 → `DP16KD`（18 Kbit block RAM，含程式初值 `--program`）、乘法 → `MULT18X18D`；ULX3S 腳位檔 `examples/ulx3s.lpf`（25 MHz、LED、按鈕、序列埠）；Blinky、跑馬燈與 `RvBoard`（RV32 SoC + C 程式）移植到 ULX3S（`RvUlx3s`，25 MHz）；nextpnr 的時序報告（Fmax）接到 `v2c` 的輸出 | 記憶體設計的 ECP5 網表與 yosys 模型等價；RvUlx3s 在 ECP5 網表上跑完 rv32ima_test 與 C 程式；`.bit` 實際燒進 ULX3S（有板子時） |
 | v2.4 | M31 | **RV64 參考模型**（`veryl-eda/src/rv/iss64.rs`）：RV64IMA + Zicsr、M / S / U 模式、陷阱委派（medeleg / mideleg）、`mret` / `sret`、`wfi`、**SV39**（三層分頁表、A / D 位元由硬體設定、page fault、`sfence.vma`、SUM / MXR）、**Sstc**（`stimecmp`，新版 xv6 用它做計時器）；組譯器支援 RV64（`ld` / `sd`、`*w` 指令）；SoC 記憶體映射：開機 ROM、SDRAM、UART（16550 相容的子集，xv6 的驅動可以直接用）、CLINT、PLIC（只接 UART） | spike 的 commit log 逐指令比對：自己寫的測試（每類指令、例外、委派、各種分頁表與 page fault）；有網路時再加官方 riscv-tests（rv64ui / um / ua / si / mi） |
 | v2.5 | M32 | **`Rv64Core`**（`examples/src/rv64.veryl`）：多週期 RV64IMA + Zicsr + M / S / U，暫存器檔在 block RAM，還沒有 MMU；指令與 ISS 逐週期相同的時序模型；`TestRv64Core` | 同一組測試在 veryl-sim、官方 veryl test、ECP5 閘級模擬上與 ISS 相同；ECP5 上的 LUT 數與 Fmax 記錄在案 |

@@ -4,10 +4,12 @@
 #   2. synthesize every example design and load the JSON back into yosys (check -assert)
 #   3. FPGA flow (fpga/flow.sh): iCE40 mapping, nextpnr, icepack, and the
 #      RISC-V SoC simulated from the mapped netlist and from the routed bitstream
-#   4. formal equivalence against the SystemVerilog emitted by `veryl build`,
+#   4. ECP5: every design through nextpnr-ecp5 + ecppack (85k, CABGA381)
+#   5. formal equivalence against the SystemVerilog emitted by `veryl build`,
 #      for the gate netlist, its vlib standard-cell mapping (--asic), its SKY130
-#      mapping (--pdk sky130, the cells read from the PDK's Liberty file) and, for
-#      the block RAM designs, the iCE40 netlist (yosys' SB_RAM40_4K model)
+#      mapping (--pdk sky130, the cells read from the PDK's Liberty file), its
+#      ECP5 mapping (yosys' LUT4 / CCU2C / TRELLIS_FF models) and, for the block
+#      RAM designs, the iCE40 netlist (yosys' SB_RAM40_4K model)
 #      (needs a yosys with the slang frontend, e.g. oss-cad-suite; set YOSYS_SLANG)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -42,14 +44,20 @@ SKY130_SKIP=" BramMix "
 # designs whose iCE40 netlist (with SB_RAM40_4K) is also proven equivalent, using yosys' cell models
 FPGA_EQ="SyncRam Bram2048x2 BramMix Fifo"
 src() { if [ -f "$EX/src/$1.veryl" ]; then echo "$EX/src/$1.veryl"; else echo "$ROOT/examples/$1.veryl"; fi; }
+# the files of design file $1 (with what it instantiates)
+design_files() {
+    local files
+    files="$(src "$1")"
+    [ "$1" = soc ] && files="$EX/src/rv32i.veryl $files"
+    [ "$1" = bram_tests ] && files="$EX/src/sync_ram.veryl $files"
+    [ "$1" = rvsoc_small ] && files="$EX/src/rv32i.veryl $EX/src/sync_ram.veryl $EX/src/uart.veryl $EX/src/rvsoc.veryl $files"
+    echo "$files"
+}
 
 echo "== synthesis (outputs in $OUT)"
 for d in $DESIGNS; do
     IFS=: read -r f m mode <<< "$d"
-    files="$(src "$f")"
-    [ "$f" = soc ] && files="$EX/src/rv32i.veryl $files"
-    [ "$f" = bram_tests ] && files="$EX/src/sync_ram.veryl $files"
-    [ "$f" = rvsoc_small ] && files="$EX/src/rv32i.veryl $EX/src/sync_ram.veryl $EX/src/uart.veryl $EX/src/rvsoc.veryl $files"
+    files="$(design_files "$f")"
     "$BIN" --top "$m" -o "$OUT/$m.json" --verilog "$OUT/$m.v" $files | grep -E "^===|cells:" | tr '\n' ' '
     "$YOSYS" -q -p "read_json $OUT/$m.json; check -assert" && printf "| yosys read_json ok | "
     "$BIN" --asic --top "$m" --verilog "$OUT/${m}_asic.v" $files | grep -E "^timing"
@@ -67,6 +75,7 @@ for d in $DESIGNS; do
     fi
     sed -i.bak '/behavioural models from the Liberty functions/,$d' "$OUT/${m}_sky130.v" && rm -f "$OUT/${m}_sky130.v.bak"
     [[ " $FPGA_EQ " == *" $m "* ]] && "$BIN" --ice40 --top "$m" -o "$OUT/${m}_ice40.json" $files | grep -E "SB_RAM40_4K" 
+    "$BIN" --ecp5 --top "$m" -o "$OUT/${m}_ecp5.json" $files > /dev/null
 done
 
 echo "== gate-level simulation: the RTL testbenches on the synthesized netlists"
@@ -78,7 +87,7 @@ for d in $GATESIM; do
     IFS=: read -r m f <<< "$d"
     files=""
     for part in ${f//+/ }; do files="$files $(src "$part")"; done
-    for kind in opt ice40 asic sky130; do
+    for kind in opt ice40 ecp5 asic sky130; do
         [ $kind = sky130 ] && [[ "$SKY130_SKIP" == *" $m "* ]] && continue
         if r=$("$BIN" --gatesim $kind --top "$m" $files 2>&1) && ! grep -q "failure" <<< "$r"; then
             printf "%-10s %-6s PASS\n" "$m" "$kind"
@@ -98,6 +107,25 @@ else
     echo "== skipping FPGA flow: nextpnr-ice40 / icestorm not installed"
 fi
 
+if command -v nextpnr-ecp5 > /dev/null && command -v ecppack > /dev/null; then
+    echo "== FPGA flow (ECP5): nextpnr-ecp5 + ecppack"
+    for d in $DESIGNS; do
+        IFS=: read -r f m mode <<< "$d"
+        # Wide has more port bits than the chip has pins
+        [ "$m" = Wide ] && continue
+        r=$("$BIN" --ecp5 --top "$m" --bit "$OUT/${m}.bit" $(design_files "$f") 2>&1) || true
+        if [ -s "$OUT/${m}.bit" ]; then
+            printf "%-12s %s\n" "$m" "$(grep -E "TRELLIS_COMB|Max frequency" <<< "$r" | sed 's/  */ /g' | tr '\n' ' ')"
+        else
+            printf "%-12s FAILED\n" "$m"; echo "$r" | tail -5; fail=1
+        fi
+    done
+    echo "== ECP5: routed netlist (nextpnr-ecp5 --write) vs mapped netlist"
+    OUT="$OUT/ecp5_routed" ./fpga/ecp5_routed.sh || fail=1
+else
+    echo "== skipping the ECP5 flow: nextpnr-ecp5 / ecppack not installed"
+fi
+
 if ! "$YOSYS_SLANG" -m slang -p "help read_slang" > /dev/null 2>&1; then
     echo "== skipping equivalence check: no yosys with slang at $YOSYS_SLANG"
     exit $fail
@@ -108,7 +136,7 @@ mkdir -p "$OUT/gold"
 cp -r "$EX/Veryl.toml" "$EX/Veryl.lock" "$EX/src" "$OUT/gold/"
 cp "$ROOT"/examples/*.veryl "$OUT/gold/src/"
 (cd "$OUT/gold" && veryl build > /dev/null 2>&1)
-for kind in gate asic sky130 fpga; do
+for kind in gate asic sky130 ecp5 fpga; do
 for d in $DESIGNS; do
     IFS=: read -r f m mode <<< "$d"
     [ $kind = fpga ] && [[ " $FPGA_EQ " != *" $m "* ]] && continue
@@ -130,6 +158,7 @@ $(case $kind in
     (gate) echo "read_json $OUT/$m.json" ;;
     (asic) echo "read_verilog $OUT/${m}_asic.v; hierarchy -top $m; proc; flatten; memory; opt_clean" ;;
     (sky130) echo "read_liberty $ROOT/pdk/sky130hd/sky130_fd_sc_hd__tt_025C_1v80.lib; read_verilog $OUT/${m}_sky130.v; hierarchy -top $m; proc; flatten; memory; opt_clean" ;;
+    (ecp5) echo "read_json $OUT/${m}_ecp5.json; read_verilog -lib +/ecp5/cells_sim.v; read_verilog +/ecp5/cells_sim.v; hierarchy -top $m; proc; flatten; memory; opt_clean; attrmap -remove init" ;;
     (fpga) echo "read_json $OUT/${m}_ice40.json; read_verilog -lib -specify +/ice40/cells_sim.v; read_verilog -DNO_ICE40_DEFAULT_ASSIGNMENTS +/ice40/cells_sim.v; hierarchy -top $m; proc; flatten; memory; opt_clean" ;;
 esac)
 async2sync

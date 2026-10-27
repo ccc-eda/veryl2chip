@@ -13,33 +13,21 @@ const K: usize = 4;
 const CUTS: usize = 16;
 
 #[derive(Clone)]
-struct Cut {
-    leaves: Vec<u32>, // sorted wire ids
+pub(crate) struct Cut {
+    pub leaves: Vec<u32>, // sorted wire ids
     depth: u32,
     flow: f32,
 }
 
 /// truth-table patterns of LUT inputs I0..I3
-const PAT: [u16; 4] = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00];
+pub(crate) const PAT: [u16; 4] = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00];
 
-pub fn map(nl: &Netlist) -> R<Netlist> {
-    // synchronous-read memories -> SB_RAM40_4K (they take no part in LUT mapping)
-    let inf = crate::bram::infer(nl);
-    let nl = &inf.nl;
-    // combinational gates by output wire; nl.cells keeps them in topological order
-    let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
-    let mut node: HashMap<u32, usize> = HashMap::new();
-    for (i, c) in gates.iter().enumerate() {
-        if let Bit::W(w) = c.out() { node.insert(w, i); }
-    }
-    let fanins = |c: &Cell| -> Vec<Bit> { c.conns.iter().filter(|(p, _)| !is_out(p)).map(|(_, b)| *b).collect() };
-
-    // full-adder carries (a & b) | ((a ^ b) & c) go to the dedicated carry
-    // chain; their outputs are leaves for LUT mapping, their a/b/c are roots
+/// full-adder carries `(a & b) | ((a ^ b) & c)` by carry-out wire: (a, b, c, the a ^ b wire)
+pub(crate) fn find_carries(gates: &[&Cell], node: &HashMap<u32, usize>) -> HashMap<u32, (Bit, Bit, Bit, u32)> {
     let gate_of = |b: Bit| -> Option<&Cell> { if let Bit::W(w) = b { node.get(&w).map(|i| gates[*i]) } else { None } };
     let pins = |c: &Cell| (c.port("A").unwrap(), c.port("B").unwrap());
-    let mut carry: HashMap<u32, (Bit, Bit, Bit)> = HashMap::new();
-    for c in &gates {
+    let mut carry: HashMap<u32, (Bit, Bit, Bit, u32)> = HashMap::new();
+    for c in gates {
         if c.typ != "$_OR_" { continue; }
         let (u, v) = pins(c);
         for (g, t) in [(u, v), (v, u)] {
@@ -51,32 +39,39 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
                 if let Some(px) = gate_of(p).filter(|g| g.typ == "$_XOR_") {
                     let (p0, p1) = pins(px);
                     if (p0, p1) == (x, y) || (p1, p0) == (x, y) {
-                        if let Bit::W(n) = c.out() { carry.insert(n, (x, y, ci)); }
+                        if let (Bit::W(n), Bit::W(pw)) = (c.out(), p) { carry.insert(n, (x, y, ci, pw)); }
                     }
                 }
             }
         }
     }
-    for n in carry.keys() { node.remove(n); }
+    carry
+}
 
-    // roots: everything sequential logic and output ports look at
-    let mut roots: Vec<Bit> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
-    for c in nl.cells.iter().filter(|c| c.is_ff()).chain(&inf.rams) {
-        for (p, b) in &c.conns { if !is_out(p) { roots.push(*b); } }
-    }
-
+/// Cut-based LUT covering of the combinational `gates` (topological order) for `roots`.
+/// `node` maps the wires LUTs may compute to their gate; `fixed` are wires made by
+/// other cells (carry chains), with the inputs those cells need (more roots).
+/// Returns the chosen cut of every wire and the wires that become LUTs.
+pub(crate) fn lut_cover(gates: &[&Cell], node: &HashMap<u32, usize>, fixed: &HashMap<u32, Vec<Bit>>, roots: &[Bit]) -> R<(HashMap<u32, Cut>, Set, Set)> {
+    let fanins = |c: &Cell| -> Vec<Bit> { c.conns.iter().filter(|(p, _)| !is_out(p)).map(|(_, b)| *b).collect() };
     // fanout counts (for area flow)
     let mut refs: HashMap<u32, u32> = HashMap::new();
-    for c in &gates { for b in fanins(c) { if let Bit::W(w) = b { *refs.entry(w).or_default() += 1; } } }
-    for b in &roots { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } }
+    for c in gates { for b in fanins(c) { if let Bit::W(w) = b { *refs.entry(w).or_default() += 1; } } }
+    for b in roots { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } }
+    let recount = |refs: &mut HashMap<u32, u32>, best: &HashMap<u32, Cut>, used: &Set, used_fixed: &Set| {
+        refs.clear();
+        for n in used { for l in &best[n].leaves { *refs.entry(*l).or_default() += 1; } }
+        for n in used_fixed { for b in &fixed[n] { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } } }
+        for b in roots { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } }
+    };
 
     let mut best: HashMap<u32, Cut> = HashMap::new();
     let mut cuts: HashMap<u32, Vec<Cut>> = HashMap::new();
     for _pass in 0..2 {
         cuts.clear();
-        for c in &gates {
+        for c in gates {
             let Bit::W(n) = c.out() else { continue };
-            if carry.contains_key(&n) { continue; }
+            if !node.contains_key(&n) { continue; }
             // candidate cut sets of each fanin (a leaf wire only has itself)
             let mut sets: Vec<Vec<Vec<u32>>> = vec![];
             for f in fanins(c) {
@@ -130,11 +125,8 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
             cuts.insert(n, kept);
         }
         // re-estimate fanouts from the current cover for the second pass
-        let (used, used_carry) = cover(&roots, &node, &best, &carry);
-        refs.clear();
-        for n in &used { for l in &best[n].leaves { *refs.entry(*l).or_default() += 1; } }
-        for n in &used_carry { let (x, y, c) = carry[n]; for b in [x, y, c] { if let Bit::W(w) = b { *refs.entry(w).or_default() += 1; } } }
-        for b in &roots { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } }
+        let (used, used_fixed) = cover(roots, node, &best, fixed);
+        recount(&mut refs, &best, &used, &used_fixed);
     }
 
     // Area recovery: the depth-first choice copies shared logic into every cone that
@@ -143,10 +135,10 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
     let arrival = |l: &u32, best: &HashMap<u32, Cut>| best.get(l).map(|b| b.depth).unwrap_or(0);
     let dmax = roots.iter().filter_map(|b| if let Bit::W(w) = b { Some(arrival(w, &best)) } else { None }).max().unwrap_or(0);
     for _round in 0..2 {
-        let (used, used_carry) = cover(&roots, &node, &best, &carry);
+        let (used, used_fixed) = cover(roots, node, &best, fixed);
         let mut req: HashMap<u32, u32> = HashMap::new();
-        for b in &roots { if let Bit::W(w) = b { req.insert(*w, dmax); } }
-        for n in &used_carry { let (x, y, c) = carry[n]; for b in [x, y, c] { if let Bit::W(w) = b { req.entry(w).or_insert(dmax); } } }
+        for b in roots { if let Bit::W(w) = b { req.insert(*w, dmax); } }
+        for n in &used_fixed { for b in &fixed[n] { if let Bit::W(w) = b { req.entry(*w).or_insert(dmax); } } }
         for c in gates.iter().rev() {
             let Bit::W(n) = c.out() else { continue };
             if !used.contains(&n) { continue; }
@@ -156,7 +148,7 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
                 *e = (*e).min(r.saturating_sub(1));
             }
         }
-        for c in &gates {
+        for c in gates {
             let Bit::W(n) = c.out() else { continue };
             let Some(cs) = cuts.get_mut(&n) else { continue };
             let r = req.get(&n).copied().unwrap_or(u32::MAX);
@@ -175,14 +167,37 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
                 .or_else(|| cs.iter().min_by_key(|c| c.depth)).unwrap().clone();
             best.insert(n, pick);
         }
-        let (used, used_carry) = cover(&roots, &node, &best, &carry);
-        refs.clear();
-        for n in &used { for l in &best[n].leaves { *refs.entry(*l).or_default() += 1; } }
-        for n in &used_carry { let (x, y, c) = carry[n]; for b in [x, y, c] { if let Bit::W(w) = b { *refs.entry(w).or_default() += 1; } } }
-        for b in &roots { if let Bit::W(w) = b { *refs.entry(*w).or_default() += 1; } }
+        let (used, used_fixed) = cover(roots, node, &best, fixed);
+        recount(&mut refs, &best, &used, &used_fixed);
+    }
+    let (used, used_fixed) = cover(roots, node, &best, fixed);
+    Ok((best, used, used_fixed))
+}
+
+pub fn map(nl: &Netlist) -> R<Netlist> {
+    // synchronous-read memories -> SB_RAM40_4K (they take no part in LUT mapping)
+    let inf = crate::bram::infer(nl);
+    let nl = &inf.nl;
+    // combinational gates by output wire; nl.cells keeps them in topological order
+    let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
+    let mut node: HashMap<u32, usize> = HashMap::new();
+    for (i, c) in gates.iter().enumerate() {
+        if let Bit::W(w) = c.out() { node.insert(w, i); }
     }
 
-    let (used, used_carry) = cover(&roots, &node, &best, &carry);
+    // full-adder carries go to the dedicated carry chain; their outputs are
+    // leaves for LUT mapping, their a/b/c are roots
+    let carry: HashMap<u32, (Bit, Bit, Bit)> = find_carries(&gates, &node).into_iter().map(|(n, (x, y, c, _))| (n, (x, y, c))).collect();
+    for n in carry.keys() { node.remove(n); }
+    let fixed: HashMap<u32, Vec<Bit>> = carry.iter().map(|(n, (x, y, c))| (*n, vec![*x, *y, *c])).collect();
+
+    // roots: everything sequential logic and output ports look at
+    let mut roots: Vec<Bit> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
+    for c in nl.cells.iter().filter(|c| c.is_ff()).chain(&inf.rams) {
+        for (p, b) in &c.conns { if !is_out(p) { roots.push(*b); } }
+    }
+
+    let (best, used, used_carry) = lut_cover(&gates, &node, &fixed, &roots)?;
     // the full gate order (incl. carries) keeps the output topologically sorted
     let pos: HashMap<u32, usize> = gates.iter().enumerate().filter_map(|(i, c)| if let Bit::W(w) = c.out() { Some((w, i)) } else { None }).collect();
     // carry-in by (a, b) pair, to line sum LUTs up with their SB_CARRY:
@@ -264,16 +279,16 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
     Ok(Netlist { name: nl.name.clone(), ports, nets, cells })
 }
 
-type Set = std::collections::HashSet<u32>;
+pub(crate) type Set = std::collections::HashSet<u32>;
 
 /// LUT nodes and carries needed to produce `roots`
-fn cover(roots: &[Bit], node: &HashMap<u32, usize>, best: &HashMap<u32, Cut>, carry: &HashMap<u32, (Bit, Bit, Bit)>) -> (Set, Set) {
+fn cover(roots: &[Bit], node: &HashMap<u32, usize>, best: &HashMap<u32, Cut>, fixed: &HashMap<u32, Vec<Bit>>) -> (Set, Set) {
     let (mut used, mut used_carry) = (Set::new(), Set::new());
     let mut work: Vec<u32> = roots.iter().filter_map(|b| if let Bit::W(w) = b { Some(*w) } else { None }).collect();
     while let Some(w) = work.pop() {
-        if let Some((x, y, c)) = carry.get(&w) {
+        if let Some(ins) = fixed.get(&w) {
             if used_carry.insert(w) {
-                work.extend([*x, *y, *c].iter().filter_map(|b| if let Bit::W(v) = b { Some(*v) } else { None }));
+                work.extend(ins.iter().filter_map(|b| if let Bit::W(v) = b { Some(*v) } else { None }));
             }
             continue;
         }
@@ -283,7 +298,7 @@ fn cover(roots: &[Bit], node: &HashMap<u32, usize>, best: &HashMap<u32, Cut>, ca
     (used, used_carry)
 }
 
-fn truth(w: u32, gates: &[&Cell], node: &HashMap<u32, usize>, memo: &mut HashMap<u32, u16>) -> u16 {
+pub(crate) fn truth(w: u32, gates: &[&Cell], node: &HashMap<u32, usize>, memo: &mut HashMap<u32, u16>) -> u16 {
     if let Some(v) = memo.get(&w) { return *v; }
     let c = gates[node[&w]];
     let g = |p: &str, memo: &mut HashMap<u32, u16>| match c.port(p).unwrap() {

@@ -12,7 +12,8 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
-              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic] [--program PROG.bin]
+              [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf pins.lpf] [--config out.config] [--bit out.bit]]
+              [--asic [--seed N] [-v]] [--gatesim opt|ice40|ecp5|asic|sky130] [--program PROG.bin]
               a.veryl b.veryl ...
     veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
 
@@ -21,7 +22,8 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 - 預設合成最後一個**非** `#[test]` 的 module；`--top` 可指定。會印出 port 與 cell 統計（類似 yosys `stat`）。
 - `-o` 輸出 yosys JSON（`read_json` 可讀）；`--verilog` 輸出閘級 Verilog（iverilog 可模擬）。
 - `--ice40` 做 iCE40 技術映射；加 `--asc` / `--bin` 會再做佈局繞線（預設 `nextpnr-ice40`，時序不過會失敗；`--pnr veryl` 用自己的）與 `icepack`。
-- `--gatesim opt|ice40|asic`：**合成後模擬**，把 `--top` 的 module 換成它的通用閘 / iCE40 / 標準元件網表（`src/gatesim.rs` → veryl-sim 的閘級模型），
+- `--ecp5` 做 Lattice ECP5 技術映射（見下）；加 `--config` / `--bit` 會再呼叫 `nextpnr-ecp5` 與 `ecppack`。
+- `--gatesim opt|ice40|ecp5|asic|sky130`：**合成後模擬**，把 `--top` 的 module 換成它的通用閘 / iCE40 / ECP5 / 標準元件網表（`src/gatesim.rs` → veryl-sim 的閘級模型），
   直接跑原本的 `#[test]` testbench（`test.sh` 對 15 個設計 × 3 種網表都跑，結果必須和 RTL 一樣）。
 - `--asic` 做 ASIC 後端（見下）；`--verilog` 此時輸出標準元件 netlist（附 vlib 元件的 Verilog 模型），`-v` 印出關鍵路徑。
 - `./test.sh`：單元測試 + 合成全部範例 + yosys `read_json; check -assert` + FPGA 流程 +
@@ -54,6 +56,30 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 | 時序 | 約 17 MHz（板上時脈 12 MHz，通過） |
 | 映射後 netlist 模擬（yosys iCE40 cell 模型） | 第 70 個 cycle LED = 55 |
 | **繞線後位元流**模擬（`icebox_vlog` 轉回 Verilog） | 第 70 個 cycle LED = 55 |
+
+## ECP5（`--ecp5`，`src/ecp5.rs`）
+v2.2 起可以把同一份網表映射到 Lattice **ECP5**（LFE5U-12F / 25F / 45F / 85F，開源板 ULX3S 用的晶片），
+輸出 nextpnr-ecp5 讀得懂的 yosys JSON，佈局繞線與位元流交給 **nextpnr-ecp5 + ecppack**（Project Trellis，OSS CAD Suite 內附）：
+
+    v2c fpga --arch ecp5 --lpf pins.lpf --bit top.bit top.veryl       # = veryl-eda --ecp5 ...
+    v2c gatesim ecp5 top.veryl                                        # ECP5 網表跑原本的 testbench
+
+| 元件 | 怎麼來 |
+|---|---|
+| `LUT4` | 和 iCE40 相同的 cut-based 4-LUT 覆蓋（深度優先、area flow 回收）；`INIT` 的第 `{D,C,B,A}` 位元是輸出 |
+| `CCU2C` | 全加器的進位鏈。一個 CCU2C 有兩半：兩個相鄰位元的進位只接到下一位時放在同一顆（前半 bit i、後半 bit i+1，`INIT = 0x96AA`，和 yosys 一樣），否則後半只把進位往下傳（`INIT1 = 0xFFFF`），讓進位可以離開進位鏈。和（`S0` / `S1`）也由 CCU2C 直接產生；一個 COUT 只接一個 CIN，其他的經過一個緩衝 LUT（nextpnr 再自動加 feed-in / feed-out） |
+| `TRELLIS_FF` | 時脈極性（`CLKMUX`）、reset 極性（`LSRMUX`）、同步 / 非同步（`SRMODE`）、reset 值（`REGSET`）都是 slice 裡的多工器，不需要額外的反相 LUT |
+
+- `--device` 預設 `85k`、`--package` 預設 `CABGA381`（ULX3S）；`--lpf` 是腳位檔（`LOCATE COMP "埠" SITE "腳";`、`IOBUF PORT ... IO_TYPE=LVCMOS33;`），
+  沒有時 nextpnr 自己放 IO（`--lpf-allow-unconstrained`）。`--config` 是繞好的 Trellis 文字設定，`--bit` 是位元流（`openFPGALoader` / `ecpprog` 可燒）。
+- 印出 nextpnr 最後的用量（`TRELLIS_COMB` = LUT 與進位、`TRELLIS_FF`、`TRELLIS_IO`）與每個時脈的 Fmax（`-v` 加上關鍵路徑）。
+- **上電值**：ECP5 的正反器上電時等於 `REGSET`，所以 reset 值是 1 的正反器上電是 1（iCE40 全部是 0）；只有在第一次 reset 之前讀它才會不同。
+- 還沒有：block RAM（`DP16KD`，記憶體目前是正反器）、乘法器（`MULT18X18D`）、`PFUMX` / `L6MUX21`（5、6 輸入函數）、自己的 ECP5 佈局繞線。
+
+驗證：`cargo test` 在 ECP5 網表上跑所有範例的 testbench 情境（netsim 依 yosys 的 `cells_sim.v` 模擬 `CCU2C` 與 `TRELLIS_FF`）；
+`test.sh` 對每個設計做 `--gatesim ecp5`、nextpnr-ecp5 + ecppack，並用 yosys 的 ECP5 元件模型證明 ECP5 網表與 `veryl build` 等價；
+`fpga/ecp5_routed.sh` 再證明 nextpnr 繞好的網表（`--write`，打包成 `TRELLIS_COMB` / `TRELLIS_FF`）和對應出的網表等價（15 個設計；
+要修正 yosys `TRELLIS_COMB` 模型裡沒驅動的 `FCO`，見 `fpga/ecp5_comb.v`，並把沒接的 LUT 輸入當成 1）。
 
 ## RISC-V SoC 與 C 程式（`examples/src/rvsoc.veryl`、`src/rv/`）
 `RvCore` 是**多週期**的 RV32IMA + Zicsr（Decode → Exec，load / LR / AMO 多一個 Mem；一般指令 2 拍、load 3 拍、乘除法 35 拍（反覆式），
@@ -226,8 +252,9 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
 | `elab.rs`    | 走訪語法樹 → 名稱式敘述 IR → **符號執行**成閘：if 變 mux 鏈、常數標籤的 case 變平行 one-hot、for 展開、function inline、always_ff 對應 DFF/reset、階層攤平 |
 | `netlist.rs` | 位元級 Builder（常數摺疊、structural hashing、`x & !x` 等化簡、平衡的化簡樹）、加減乘/比較/桶形移位/動態索引；`optimize` 解析別名、偵測組合迴路、重建、清除無用邏輯，並反覆做：**證明常數節點**（隨機模擬找候選、對 ≤16 個輸入的支撐集窮舉證明）與**移除卡在 0 的暫存器** |
 | `ice40.rs`   | iCE40 映射：全加器進位 → `SB_CARRY` 鏈；其餘以 cut-based 4-LUT 覆蓋（深度優先、再看 area flow）；DFF → `SB_DFF[N][S]{R,S}`，低有效 reset 加反相 LUT |
+| `ecp5.rs`    | ECP5 映射：同樣的 LUT 覆蓋 → `LUT4`；進位與和 → `CCU2C`（兩位元一顆）；DFF → `TRELLIS_FF` |
 | `output.rs`  | yosys JSON、結構化 Verilog（含 iCE40 primitive 實例） |
-| `netsim.rs`  | 2 態閘級模擬器（給測試用，支援通用閘與 iCE40 cell） |
+| `netsim.rs`  | 2 態閘級模擬器（給測試用，支援通用閘、iCE40、ECP5 與標準元件） |
 
 每個宣告的訊號一開始就配置「佔位」wire，驅動者以別名 (佔位 bit → 驅動 bit) 記錄，最後在 `optimize` 統一解析；
 因此 module 內各項目的順序不影響結果，子模組的 port 連接也只是別名。
@@ -239,6 +266,7 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
 - 通用（`-o`）：`$_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_`（Y = S ? B : A）、`$_DFF_P_ / $_DFF_N_`、
   非同步 reset `$_DFF_{P,N}{P,N}{0,1}_`、同步 reset `$_SDFF_{P,N}{P,N}{0,1}_`。
 - iCE40（`--ice40`）：`SB_LUT4`、`SB_CARRY`、`SB_DFF`、`SB_DFFN`、`SB_DFF[N]{R,S}`、`SB_DFF[N]S{R,S}`、`SB_RAM40_4K`。
+- ECP5（`--ecp5`）：`LUT4`、`CCU2C`、`TRELLIS_FF`。
 
 ## Block RAM 推論（iCE40，`src/bram.rs`）
 陣列若只在**一個** always_ff 中以整個元素寫入（每拍最多一次）、只以整個元素讀取，elab 會把它記成記憶體
@@ -288,5 +316,5 @@ SKY130：沒有 SRAM macro（記憶體是正反器）、只有一個角落（典
 | SyncRam / Bram2048x2 / BramMix / Fifo（block RAM） | 有界模型檢查 4 / 4 / 12 / 6 cycles |
 | UartLoop / VgaTiming | 有界模型檢查 24 / 8 cycles |
 
-上表每個設計都驗證兩次：閘級 netlist（`gate`）與 vlib 標準元件 netlist（`asic`）；有 block RAM 的設計再驗證 iCE40 netlist（`fpga`，用 yosys 的 `SB_RAM40_4K` 模型）。
+上表每個設計都驗證四次：閘級 netlist（`gate`）、vlib 標準元件 netlist（`asic`）、SKY130 netlist 與 ECP5 netlist（`ecp5`，yosys 的 ECP5 元件模型）；有 block RAM 的設計再驗證 iCE40 netlist（`fpga`，用 yosys 的 `SB_RAM40_4K` 模型）。
 另外 `cargo test` 在閘級 netlist、iCE40 映射後與標準元件映射後的 netlist 上都跑各範例的 testbench 情境（RiscvCore 跑完整的 RV32I 測試程式並比對 41 個結果、ALU 每種運算對 Rust 參考值、RiscvSoc 在 LED 顯示 55）。

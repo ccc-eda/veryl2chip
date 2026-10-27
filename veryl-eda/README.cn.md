@@ -8,11 +8,12 @@ Veryl 的逻辑综合、FPGA 与 ASIC 流程（类似 yosys `synth` / `synth_ice
 
 [veryl2chip](https://github.com/ccc-eda/veryl2chip) 的一部分（在线 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>）。
 
-    cargo install veryl2chip-eda        # 安装 `veryl-eda` 命令
+    cargo install veryl2chip-eda        # 安装 `veryl-eda` 指令
     veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
-              [--asic [--seed N] [-v]] [--gatesim opt|ice40|asic] [--program PROG.bin]
+              [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf pins.lpf] [--config out.config] [--bit out.bit]]
+              [--asic [--seed N] [-v]] [--gatesim opt|ice40|ecp5|asic|sky130] [--program PROG.bin]
               a.veryl b.veryl ...
     veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
 
@@ -21,7 +22,8 @@ Veryl 的逻辑综合、FPGA 与 ASIC 流程（类似 yosys `synth` / `synth_ice
 - 默认综合最后一个**非** `#[test]` 的 module；`--top` 可指定。会打印 port 与 cell 统计（类似 yosys `stat`）。
 - `-o` 输出 yosys JSON（`read_json` 可读）；`--verilog` 输出门级 Verilog（iverilog 可仿真）。
 - `--ice40` 做 iCE40 技术映射；加 `--asc` / `--bin` 会再做布局布线（默认 `nextpnr-ice40`，时序不过会失败；`--pnr veryl` 用自己的）与 `icepack`。
-- `--gatesim opt|ice40|asic`：**综合后仿真**，把 `--top` 的 module 换成它的通用门 / iCE40 / 标准单元网表（`src/gatesim.rs` → veryl-sim 的门级模型），
+- `--ecp5` 做 Lattice ECP5 技术映射（见下）；加 `--config` / `--bit` 会再调用 `nextpnr-ecp5` 与 `ecppack`。
+- `--gatesim opt|ice40|ecp5|asic|sky130`：**综合后仿真**，把 `--top` 的 module 换成它的通用门 / iCE40 / ECP5 / 标准单元网表（`src/gatesim.rs` → veryl-sim 的门级模型），
   直接跑原本的 `#[test]` testbench（`test.sh` 对 15 个设计 × 3 种网表都跑，结果必须和 RTL 一样）。
 - `--asic` 做 ASIC 后端（见下）；`--verilog` 此时输出标准单元 netlist（附 vlib 单元的 Verilog 模型），`-v` 打印关键路径。
 - `./test.sh`：单元测试 + 综合全部示例 + yosys `read_json; check -assert` + FPGA 流程 +
@@ -55,37 +57,61 @@ Veryl 的逻辑综合、FPGA 与 ASIC 流程（类似 yosys `synth` / `synth_ice
 | 映射后 netlist 仿真（yosys iCE40 cell 模型） | 第 70 个 cycle LED = 55 |
 | **布线后比特流**仿真（`icebox_vlog` 转回 Verilog） | 第 70 个 cycle LED = 55 |
 
+## ECP5（`--ecp5`，`src/ecp5.rs`）
+v2.2 起可以把同一份网表映射到 Lattice **ECP5**（LFE5U-12F / 25F / 45F / 85F，开源板 ULX3S 用的芯片），
+输出 nextpnr-ecp5 读得懂的 yosys JSON，布局布线与比特流交给 **nextpnr-ecp5 + ecppack**（Project Trellis，OSS CAD Suite 内附）：
+
+    v2c fpga --arch ecp5 --lpf pins.lpf --bit top.bit top.veryl       # = veryl-eda --ecp5 ...
+    v2c gatesim ecp5 top.veryl                                        # ECP5 网表跑原本的 testbench
+
+| 单元 | 怎么来 |
+|---|---|
+| `LUT4` | 和 iCE40 相同的 cut-based 4-LUT 覆盖（深度优先、area flow 回收）；`INIT` 的第 `{D,C,B,A}` 位是输出 |
+| `CCU2C` | 全加器的进位链。一个 CCU2C 有两半：两个相邻位的进位只接到下一位时放在同一颗（前半 bit i、后半 bit i+1，`INIT = 0x96AA`，和 yosys 一样），否则后半只把进位往下传（`INIT1 = 0xFFFF`），让进位可以离开进位链。和（`S0` / `S1`）也由 CCU2C 直接产生；一个 COUT 只接一个 CIN，其他的经过一个缓冲 LUT（nextpnr 再自动加 feed-in / feed-out） |
+| `TRELLIS_FF` | 时钟极性（`CLKMUX`）、reset 极性（`LSRMUX`）、同步 / 异步（`SRMODE`）、reset 值（`REGSET`）都是 slice 里的多路选择器，不需要额外的反相 LUT |
+
+- `--device` 默认 `85k`、`--package` 默认 `CABGA381`（ULX3S）；`--lpf` 是引脚档（`LOCATE COMP "埠" SITE "腳";`、`IOBUF PORT ... IO_TYPE=LVCMOS33;`），
+  没有时 nextpnr 自己放 IO（`--lpf-allow-unconstrained`）。`--config` 是布好的 Trellis 文本设置，`--bit` 是比特流（`openFPGALoader` / `ecpprog` 可烧）。
+- 打印 nextpnr 最后的用量（`TRELLIS_COMB` = LUT 与进位、`TRELLIS_FF`、`TRELLIS_IO`）与每个时钟的 Fmax（`-v` 加上关键路径）。
+- **上电值**：ECP5 的触发器上电时等于 `REGSET`，所以 reset 值是 1 的触发器上电是 1（iCE40 全部是 0）；只有在第一次 reset 之前读它才会不同。
+- 还没有：block RAM（`DP16KD`，存储器目前是触发器）、乘法器（`MULT18X18D`）、`PFUMX` / `L6MUX21`（5、6 输入函数）、自己的 ECP5 布局布线。
+
+验证：`cargo test` 在 ECP5 网表上跑所有示例的 testbench 情境（netsim 依 yosys 的 `cells_sim.v` 仿真 `CCU2C` 与 `TRELLIS_FF`）；
+`test.sh` 对每个设计做 `--gatesim ecp5`、nextpnr-ecp5 + ecppack，并用 yosys 的 ECP5 单元模型证明 ECP5 网表与 `veryl build` 等价；
+`fpga/ecp5_routed.sh` 再证明 nextpnr 布好的网表（`--write`，打包成 `TRELLIS_COMB` / `TRELLIS_FF`）和对应出的网表等价（15 个设计；
+要修正 yosys `TRELLIS_COMB` 模型里没驱动的 `FCO`，见 `fpga/ecp5_comb.v`，并把没接的 LUT 输入当成 1）。
+
 ## RISC-V SoC 与 C 程序（`examples/src/rvsoc.veryl`、`src/rv/`）
-`RvCore` 是**多周期**的 RV32IMA + Zicsr（Decode → Exec，load / LR / AMO 多一个 Mem；一般指令 2 拍、load 3 拍、乘除法 35 拍（迭代式），
+`RvCore` 是**多周期**的 RV32IMA + Zicsr（Decode → Exec，load / LR / AMO 多一个 Mem；一般指令 2 拍、load 3 拍、乘除法 35 拍（反复式），
 machine mode 的陷阱：计时器 / 软件 / 外部中断、ecall、ebreak、非法指令、地址没对齐，`mret`、`wfi`；足够跑抢占式多线程内核），寄存器堆（两份 `SyncRam` 当两个读取端口）
-与存储器都是同步读取的 RAM，所以会变成 `SB_RAM40_4K`。`RvSoc` 加上 8 KB、四个字节通道的存储器（`RvMem`）、存储器映射的周边
+与存储器都是同步读取的 RAM，所以会变成 `SB_RAM40_4K`。`RvSoc` 加上 8 KB、四个字节信道的存储器（`RvMem`）、存储器映射的周边
 （LED 0x1000_0000、按钮 + 开关 0x…04、UART 数据 / 状态 0x…08 / 0x…0C、CLINT：`mtime` 0x…10、`mtimecmp` 0x…18、`msip` 0x…20）和给 testbench 用的加载端口；
 `RvBoard` 是 iCEBreaker 的顶层（`examples/rvsoc.pcf`）：3960 LUT + 20 个 block RAM，Fmax 约 12.8 MHz（nextpnr；板上时钟 12 MHz）。
-`VgaText`（`examples/src/rvvga.veryl`）在 SoC 的外部写入总线上加一个 40 × 30 字符的 VGA 画面（字符与字型在 block RAM，两拍流水线）；
-`RvVgaBoard` = 4072 LUT + 26 个 block RAM，约 13 MHz。Block RAM 推断也接受有些数据位没被读取、已经被删除的存储器。
+`VgaText`（`examples/src/rvvga.veryl`）在 SoC 的外部写入总线上加一个 40 × 30 字符的 VGA 画面（字符与字体在 block RAM，两拍管线）；
+`RvVgaBoard` = 4072 LUT + 26 个 block RAM，约 13 MHz。Block RAM 推断也接受有些数据位没被读、已经被删掉的存储器。
 `TestRvSoc` 加载 `rv32i_test.S`（数据在 0x300，`examples/sw/build.sh` 产生的 `examples/src/rvsoc_rom.veryl`），运行后检查 41 个结果；
 `TestRvSocIma`（`examples/src/rvsoc_ima_test.veryl`，也由 `build.sh` 产生）跑 `rv32ima_test.S`（M、A、Zicsr、陷阱），结果与 spike 比对；
 `veryl-eda/examples/rvsoc_small.veryl`（64 字节存储器）由 `test.sh` 证明与 `veryl build` 等价。
 C 编译器会产生 `mul` / `div` / `rem`，接受 `asm("...")` 语句与最外层的 `asm(...)`（函数本体只有 `asm` 时不加 prologue：naked 函数），
-函数名称就是它的地址；运行时库有 `interrupts_on/off`、`irq_save/restore`、`set_mtvec`、`set_mie`、读 CSR、`wfi`、
+函数名称就是它的地址；运行期函数库有 `interrupts_on/off`、`irq_save/restore`、`set_mtvec`、`set_mie`、读 CSR、`wfi`、
 `atomic_swap/add/and/or/xor/cas`（AMO、LR/SC）与 spinlock。`examples/c/threads.c` 是一个小小的抢占式内核：每 10 ms 的计时器中断把寄存器
 存到线程自己的堆栈、轮流切换线程，`ecall` 提供 yield / sleep / exit，互斥锁用 `amoswap`；`cargo test threads_on_rvsoc` 让它（时间片缩短）
 同时跑在门级 RvBoard 与 ISS 上：输出与 LED 相同。
 
-**程序放在 block RAM。** 每个存放存储器的 `SB_RAM40_4K` 带有 `MEM_SLOT` = `名称:区块`（JSON 里是 yosys attribute）；
-`bram::set_mem_init` 在映射后给存储器初值，`--program PROG.bin` 从地址 0 填入字节通道 `*.b0.mem … *.b3.mem`，
+**程序放在 block RAM。** 每个存放存储器的 `SB_RAM40_4K` 带有 `MEM_SLOT` = `名稱:區塊`（JSON 里是 yosys attribute）；
+`bram::set_mem_init` 在映射后给存储器初值，`--program PROG.bin` 从地址 0 填入字节信道 `*.b0.mem … *.b3.mem`，
 `pnr::patch_ram` 只改写已布局布线的 `.asc` 里那几块的 `.ram_data`：换程序不用重新综合、布局布线
 （`cargo test rvsoc_program_on_board`：改写后的比特流等于带着程序布局布线的结果，并在虚拟板上跑完 ISA 测试）。
 优化时，从来不写入的存储器（等着被填入的 ROM）会保留，不当成常数 0。
 
-**C 编译器**（`src/rv/`）：`cc.rs` 编译 C 的子集——`char`（无符号）/ `short` / `int` / `unsigned`、指针、任意维数组、
-所有 C 操作符、`if` / `while` / `do` / `for` / `switch`、有初值的全局变量、`...` 参数、小型预处理器（有参数的 `#define`、`#ifdef`）——
-成 RV32I 汇编语言：单纯的堆栈式代码，加上立即数指令、比较直接分支，并以 C 源代码行当注释。`prelude.c` 是运行时库
+**C 编译器**（`src/rv/`）：`cc.rs` 编译 C 的子集——`char`（无号）/ `short` / `int` / `unsigned`、指针、任意维数组、
+所有 C 操作符、`if` / `while` / `do` / `for` / `switch`、有初值的全局变量、`...` 参数、小型前置处理器（有参数的 `#define`、`#ifdef`）——
+成 RV32I 汇编语言：单纯的堆栈式代码，加上立即数指令、比较直接分支，并以 C 源代码行当注解。`prelude.c` 是运行期函数库
 （软件乘除法、`putchar` / `getchar` / `printf` / `puts` / `read_line`、`delay_ms` / `millis`、`rand`、`strlen` / `strcmp` / `memcpy` …，
 周边寄存器 `LED`、`BUTTONS`、`SWITCHES`、`TIMER`、`UART_DATA`、`UART_STATUS`）；只保留 `main` 用得到的部分。`asm.rs` 是两遍汇编器
 （虚拟指令、`%hi` / `%lo`、`.data` / `.rodata` / `.bss`、列表），`iss.rs` 是指令集仿真器，存储器映射与时钟数都和 RvSoc 相同。
 
-    veryl-eda --cc hello.c -o hello.bin -S hello.s --run       # 编译、写出映像文件与汇编语言、在 ISS 上运行
+    veryl-eda --cc hello.c -o hello.bin -S hello.s --run       # 编译、写出映像档与汇编语言、在 ISS 上运行
     veryl-eda --top RvBoard --ice40 --pnr veryl --pcf ../examples/rvsoc.pcf --program hello.bin --bin soc.bin ../examples/src/{rv32i,sync_ram,uart,rvsoc}.veryl
 
 测试：`src/rv/tests/*.c` 打印的内容和主机 C 编译器（`cc -funsigned-char -fwrapv`）编出来的完全相同；`cc_on_rvsoc` 把编译好的程序
@@ -226,8 +252,9 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 | `elab.rs`    | 遍历语法树 → 名称式语句 IR → **符号执行**成门：if 变 mux 链、常数标签的 case 变并行 one-hot、for 展开、function inline、always_ff 对应 DFF/reset、层次摊平 |
 | `netlist.rs` | 位级 Builder（常数折叠、structural hashing、`x & !x` 等化简、平衡的化简树）、加减乘/比较/桶形移位/动态索引；`optimize` 解析别名、检测组合环路、重建、清除无用逻辑，并反复做：**证明常数节点**（随机仿真找候选、对 ≤16 个输入的支撑集穷举证明）与**移除卡在 0 的寄存器** |
 | `ice40.rs`   | iCE40 映射：全加器进位 → `SB_CARRY` 链；其余以 cut-based 4-LUT 覆盖（深度优先、再看 area flow）；DFF → `SB_DFF[N][S]{R,S}`，低有效 reset 加反相 LUT |
+| `ecp5.rs`    | ECP5 映射：同样的 LUT 覆盖 → `LUT4`；进位与和 → `CCU2C`（两位一颗）；DFF → `TRELLIS_FF` |
 | `output.rs`  | yosys JSON、结构化 Verilog（含 iCE40 primitive 实例） |
-| `netsim.rs`  | 2 态门级仿真器（给测试用，支持通用门与 iCE40 cell） |
+| `netsim.rs`  | 2 态门级仿真器（给测试用，支持通用门、iCE40、ECP5 与标准单元） |
 
 每个声明的信号一开始就配置「占位」wire，驱动者以别名 (占位 bit → 驱动 bit) 记录，最后在 `optimize` 统一解析；
 因此 module 内各项目的顺序不影响结果，子模块的 port 连接也只是别名。
@@ -239,10 +266,11 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
 - 通用（`-o`）：`$_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_`（Y = S ? B : A）、`$_DFF_P_ / $_DFF_N_`、
   异步 reset `$_DFF_{P,N}{P,N}{0,1}_`、同步 reset `$_SDFF_{P,N}{P,N}{0,1}_`。
 - iCE40（`--ice40`）：`SB_LUT4`、`SB_CARRY`、`SB_DFF`、`SB_DFFN`、`SB_DFF[N]{R,S}`、`SB_DFF[N]S{R,S}`、`SB_RAM40_4K`。
+- ECP5（`--ecp5`）：`LUT4`、`CCU2C`、`TRELLIS_FF`。
 
 ## Block RAM 推断（iCE40，`src/bram.rs`）
 数组若只在**一个** always_ff 中以整个元素写入（每拍最多一次）、只以整个元素读取，elab 会把它记成存储器
-（写入端口 we / waddr / wdata、各读取端口的地址与数据，存成具名 net `$mem:名称:...`，其余照常展开成 DFF）。
+（写入端口 we / waddr / wdata、各读取端口的地址与数据，存成具名 net `$mem:名稱:...`，其余照常展开成 DFF）。
 映射 iCE40 时，若每个读取端口是**同步读取**（读出的数据直接进同一时钟的寄存器，可带使能）就换成 `SB_RAM40_4K`：
 元素 DFF、读取寄存器与地址解码 / 读取多路选择器都消失。模式 256×16、512×8、1024×4、2048×2，字宽超过一块就并排多块，
 每个读取端口一份拷贝。异步读取（例如 RV32I 寄存器堆、`Ram`）保留为逻辑，因为 block RAM 只有暂存式读取端口。
@@ -272,7 +300,7 @@ interface 与 modport（成员摊平成 `inst.member` 信号，modport 端口变
 （netsim 用 `tick(clk)` 仿真多个时钟域与下降沿触发器，`step()` 则是所有触发器同时一拍）
 自研布局布线：只支持 UP5K、没有 LUT 输入引脚交换；
 SKY130：没有 SRAM macro（存储器是触发器）、只有一个角落（典型）、没有宽金属间距表、天线规则与 LVS，GDS 检查
-（`tools/gds_check.py`）用的是 KLayout 的宽度 / 间距规则，不是完整的 SKY130 规则文件。
+（`tools/gds_check.py`）用的是 KLayout 的宽度 / 间距规则，不是完整的 SKY130 规则档。
 
 ## 验证结果（`./test.sh`）
 | 设计 | 对 `veryl build` 的等价验证 |
@@ -288,5 +316,5 @@ SKY130：没有 SRAM macro（存储器是触发器）、只有一个角落（典
 | SyncRam / Bram2048x2 / BramMix / Fifo（block RAM） | 有界模型检查 4 / 4 / 12 / 6 cycles |
 | UartLoop / VgaTiming | 有界模型检查 24 / 8 cycles |
 
-上表每个设计都验证两次：门级 netlist（`gate`）与 vlib 标准单元 netlist（`asic`）；有 block RAM 的设计再验证 iCE40 netlist（`fpga`，用 yosys 的 `SB_RAM40_4K` 模型）。
+上表每个设计都验证四次：门级 netlist（`gate`）、vlib 标准单元 netlist（`asic`）、SKY130 netlist 与 ECP5 netlist（`ecp5`，yosys 的 ECP5 单元模型）；有 block RAM 的设计再验证 iCE40 netlist（`fpga`，用 yosys 的 `SB_RAM40_4K` 模型）。
 另外 `cargo test` 在门级 netlist、iCE40 映射后与标准单元映射后的 netlist 上都跑各示例的 testbench 情境（RiscvCore 跑完整的 RV32I 测试程序并比对 41 个结果、ALU 每种运算对 Rust 参考值、RiscvSoc 在 LED 显示 55）。

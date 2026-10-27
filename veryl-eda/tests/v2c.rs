@@ -24,6 +24,11 @@ fn subcommands() {
     assert!(c == 0 && o.contains("=== Adder ==="), "{}", o);
     let (c, o) = v2c(&["fpga", "adder.veryl"]);
     assert!(c == 0 && o.contains("SB_LUT4"), "{}", o);
+    let (c, o) = v2c(&["fpga", "--arch", "ecp5", "adder.veryl"]);
+    assert!(c == 0 && o.contains("CCU2C") && o.contains("LUT4"), "{}", o);
+    let (c, o) = v2c(&["gatesim", "ecp5", "seq101.veryl"]);
+    assert!(c == 0 && o.contains("TestSeq101: PASS") && o.contains("(ecp5)"), "{}", o);
+    assert_eq!(v2c(&["fpga", "--arch", "xc7", "adder.veryl"]).0, 2);
     let (c, o) = v2c(&["asic", "--pdk", "sky130", "seq101.veryl"]);
     assert!(c == 0 && o.contains("sky130_fd_sc_hd__dfrtp_1") && o.contains("0 shorts, 0 spacing"), "{}", o);
     let (c, o) = v2c(&["gatesim", "asic", "seq101.veryl"]);
