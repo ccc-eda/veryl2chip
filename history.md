@@ -26,7 +26,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.3 | 2026-10-27 | `225f9b3` | 2.3.0：RV64 處理器 `Rv64Core`（Veryl），通過 riscv-tests | |
 | v2.4 | 2026-10-27 | `0527a57` | 2.4.0：xv6 在 `Rv64Core` 上開到 shell | |
 | v2.5 | 2026-10-27 | `02a22ef` | 2.5.0：C 擴充（壓縮指令）、每個指令 2 拍 | |
-| v2.6 | 2026-10-27 | （本版） | 2.6.0：Linux 在 `Rv64Core` 上開機 | |
+| v2.6 | 2026-10-27 | `c5a1723` | 2.6.0：Linux 在 `Rv64Core` 上開機 | |
+| v2.7 | 2026-10-27 | （本版） | 2.7.0：隨機指令測試與中斷測試 | |
 
 ---
 
@@ -259,6 +260,18 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   要用 LLVM（GNU 的 riscv64-unknown-elf-ld 做不出 vDSO 的共享物件與 OpenSBI 的 PIE）；在 macOS 上編 kernel 的主機工具
   要補 `<elf.h>`（RISC-V 工具鏈附的 musl 版）、`<byteswap.h>` 與 `-D_UUID_T`。`linux/build.sh` 從頭建完約 1.5 分鐘。
 - 開機到關機約 4200 萬個指令、1.2 億拍，Verilator 上約 20 秒；`linux/test.sh` 檢查輸出。
+
+### v2.7：驗證處理器的正確性
+
+- 方向：最重要的是 Rv64 處理器的正確性，以及它能在我們的 EDA 上正確合成與佈局繞線；模擬一律用 Verilator
+  （v2c / veryl-sim 的改進先擱著，做到一半的修補檔另外存著）。
+- `examples/rv64/verify/randgen.py`：隨機程式（RV64IMAC + Zicsr 全部指令、邊界值、沒對齊、非法編碼、不存在的 CSR、
+  ecall / ebreak），M 模式，或在 S / U 模式跑在 Sv39 上（資料頁的權限、A / D、ADUE、SUM、MXR 都隨機）。
+  `verify/random.sh` 和 spike 逐指令比對：300 個種子 × 三種模式共 900 支、每支 2000 個指令，全部相同。
+  過程中修了產生器自己的問題（分支跳過 `la`）、spike 停不下來時把磁碟寫滿（加上時間與行數上限），
+  以及三個和 spike 不同的地方（計數器致能位元、`mcountinhibit`、陷阱清掉 LR 保留）。
+- `verify/irq.S`：中斷的定向測試 10 項（M / S 計時器、軟體中斷、wfi、U 模式下的 M 中斷、PLIC 兩個 context、優先順序）。
+- `examples/rv64/test.sh`：建置、riscv-tests、隨機測試、中斷測試、Linux（`--xv6` 加上 xv6）。
 
 ---
 

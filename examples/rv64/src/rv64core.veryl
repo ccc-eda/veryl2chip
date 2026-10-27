@@ -360,7 +360,6 @@ module Rv64Core #(
     var stval     : logic<64>;
     var mcounteren: logic<32>;
     var scounteren: logic<32>;
-    var mcountinh : logic<32>;
     var menv_stce : logic    ; // menvcfg.STCE（Sstc：stimecmp 有效）
     var menv_fiom : logic    ;
     var menv_adue : logic    ; // menvcfg.ADUE（Svadu）：1 = 硬體寫回 A / D，0 = page fault
@@ -433,7 +432,7 @@ module Rv64Core #(
                 12'h305: csr_rdata = mtvec;
                 12'h306: csr_rdata = {32'd0, mcounteren};
                 12'h30A: csr_rdata = {menv_stce, 1'b0, menv_adue, 60'd0, menv_fiom};
-                12'h320: csr_rdata = {32'd0, mcountinh};
+                12'h320: csr_rdata = 64'd0; // mcountinhibit：固定為 0（計數器一直在數，和 spike 一樣）
                 12'h340: csr_rdata = mscratch;
                 12'h341: csr_rdata = mepc;
                 12'h342: csr_rdata = mcause;
@@ -903,7 +902,6 @@ module Rv64Core #(
             stval     = 64'd0;
             mcounteren = 32'd0;
             scounteren = 32'd0;
-            mcountinh = 32'd0;
             menv_stce = 1'b0;
             menv_fiom = 1'b0;
             menv_adue = 1'b0;
@@ -958,8 +956,9 @@ module Rv64Core #(
                     st_mie  = 1'b0;
                     prv     = PRV_M;
                 }
-                pc    = tk_pc;
-                state = S_FETCH;
+                pc     = tk_pc;
+                state  = S_FETCH;
+                resv_v = 1'b0; // 進入陷阱時清掉 LR 的保留（規格允許，和 spike 一樣）
             } else {
                 case state {
                     S_FETCH, S_FETCH2: {} // 開始取指令：在 case 之後（do_fetch）
@@ -1075,7 +1074,7 @@ module Rv64Core #(
                                 }
                                 12'h104: mie_r = (mie_r & ~mideleg) | (csr_new[11:0] & mideleg);
                                 12'h105: stvec = {csr_new[63:2], 1'b0, csr_new[0]};
-                                12'h106: scounteren = csr_new[31:0];
+                                12'h106: scounteren = csr_new[31:0] & 32'h0000_0007; // CY TM IR（沒有 hpmcounter）
                                 12'h10A: senv_fiom = csr_new[0];
                                 12'h140: sscratch = csr_new;
                                 12'h141: sepc = {csr_new[63:1], 1'b0};
@@ -1109,13 +1108,12 @@ module Rv64Core #(
                                 12'h303: mideleg = csr_new[11:0] & 12'h222;
                                 12'h304: mie_r = csr_new[11:0] & 12'haaa;
                                 12'h305: mtvec = {csr_new[63:2], 1'b0, csr_new[0]};
-                                12'h306: mcounteren = csr_new[31:0];
+                                12'h306: mcounteren = csr_new[31:0] & 32'h0000_0007;
                                 12'h30A: {
                                     menv_stce = csr_new[63];
                                     menv_adue = csr_new[61];
                                     menv_fiom = csr_new[0];
                                 }
-                                12'h320: mcountinh = csr_new[31:0] & 32'hffff_fffd;
                                 12'h340: mscratch = csr_new;
                                 12'h341: mepc = {csr_new[63:1], 1'b0};
                                 12'h342: mcause = csr_new;

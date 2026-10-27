@@ -15,6 +15,8 @@
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
 | `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.c` | OpenSBI + Linux 6.12 + 只有一個程式的 initramfs |
 | `linux/test.sh` | 開 Linux、檢查輸出（init 最後關機，模擬結束） |
+| `verify/randgen.py`、`verify/random.sh` | 隨機指令測試：M / S / U 模式（S、U 跑在隨機權限的 Sv39 分頁上），和 spike 逐指令比對 |
+| `verify/irq.S` | 中斷的定向測試（會自己檢查）：計時器、軟體、外部（PLIC + UART）、委派、wfi、優先順序 |
 
 ## 處理器
 
@@ -86,6 +88,29 @@ cd riscv-tests/isa && make XLEN=64 rv64ui rv64um rv64ua rv64uc rv64si rv64mi
   | rv64mi-p-mcsr | spike 的 `marchid` 是 5 |
   | rv64mi-p-ma_fetch | spike 的 `misa` 可以寫入把 C 關掉，測試因此走另一條路 |
   | rv64ua-p-lrsc | spike 每 5000 個指令清掉一次 LR 的保留，SC 偶爾失敗（規格允許） |
+
+## 隨機測試與中斷測試
+
+riscv-tests 每支只測一件事；`verify/randgen.py` 產生隨機的程式，和 spike 逐指令比對：
+
+- 所有 RV64IMAC 指令與 Zicsr，運算元偏向邊界值（0、-1、最大最小值）；load / store / AMO 有一成沒對齊；
+  刻意產生非法的編碼（不存在的 funct、F / D 指令、保留的 16 位元編碼）、不存在或唯讀的 CSR、ecall / ebreak；
+  分支與跳躍只往前（程式一定會結束）；例外由 M 模式的 handler 跳過出錯的指令。
+- 模式 `m`：在 M 模式、沒有分頁。模式 `s` / `u`：在 S / U 模式、Sv39 分頁上；資料區的四個 4 KB 頁的
+  V / R / W / X / U / A / D 都隨機，`menvcfg.ADUE`、`SUM`、`MXR` 也隨機，所以每支程式都有上百次 load / store page fault。
+
+```sh
+verify/random.sh 1 300            # 種子 1..300，每個種子 M、S、U 三種模式，各 2000 個指令
+```
+
+和 spike 比對出來而修正的地方：`mcounteren` / `scounteren` 只有 CY / TM / IR 三個位元可寫、`mcountinhibit` 固定為 0、
+進入陷阱時清掉 LR 的保留（規格都允許兩種做法，改成和 spike 一樣）。隨機測試不寫 `misa`（spike 可以寫入關掉擴充）、
+不讀 `marchid`、不碰 PMP（Rv64Core 不檢查 PMP）。
+
+中斷的時機和 spike 不同，不能逐指令比；`verify/irq.S` 會自己檢查（全部通過時 `tohost = 1`）：
+M 計時器、M 軟體中斷、全域中斷關閉時 `wfi` 照樣被喚醒、Sstc 的 S 計時器（委派）、S 軟體中斷（委派）、
+在 U 模式時 M 層級的中斷照樣進來、UART 經 PLIC 的外部中斷（M、S 兩個 context，claim / complete）、
+MSI 與 MTI 同時等待時先處理 MSI。spike 也跑得過第 2–7 項（它的 UART 沒有 THRE 中斷）。
 
 ## xv6
 
