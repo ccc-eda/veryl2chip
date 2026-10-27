@@ -39,6 +39,8 @@ interface Project {
   active?: string;
   /** what is plugged into the virtual board */
   board?: BoardSetup;
+  /** the development board's breadboard (emulator, machine.json "board": "pi") */
+  piBoard?: import('./bbmodel').Part[];
 }
 
 const KEY = 'veryl2chip-ide:';
@@ -871,6 +873,8 @@ function ensureEmu(): Emulator {
   if (!emu) {
     emu = new Emulator($('emuPane'));
     emu.onStart = startEmu;
+    emu.getParts = () => proj.piBoard ?? null;
+    emu.onParts = (parts) => { proj.piBoard = parts.map(p => ({ ...p })); persist(); };
   }
   return emu;
 }

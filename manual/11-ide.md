@@ -127,6 +127,18 @@ UART 接到分頁裡的終端機。
 - 範例「RV64 + Linux（模擬機）」開 OpenSBI + Linux 6.12 + busybox：瀏覽器裡每秒約 370 萬拍，開到 `rv64:~$` 約 1 分鐘，
   之後就可以在終端機打指令。Linux 映像（`img_linux.js`，約 2.4 MB）第一次開機時才載入。
 - 這種專案的頂層太大，▶ 測試與合成會改成提示用模擬機（裡面的 `Rv64Core` 仍然可以合成）。
+- **開發板**（v2.16）：`machine.json` 有 `"gpio": { "out": "o_gpio", "oe": "o_gpio_oe", "in": "i_gpio" }` 與 `"board": "pi"` 時，
+  終端機旁邊畫一塊像樹莓派的板子：40 針排針（GPIO 3–15 放在樹莓派相同 BCM 編號的位置）、PWR 燈、ACT（GPIO 0，Linux 的心跳）
+  與 USER（GPIO 1）LED、按鈕（GPIO 2，按住 = 1），下面是和虛擬 iCEBreaker 相同的麵包板（接排針的 GPIO 3–15、3V3、GND）。
+  麵包板的配置存在專案裡。試試看：
+
+  ```sh
+  echo 1 > /sys/class/leds/user/brightness          # USER LED
+  B=$(cat /sys/class/gpio/gpiochip*/base)
+  echo $((B+5)) > /sys/class/gpio/export; echo out > /sys/class/gpio/gpio$((B+5))/direction
+  echo 1 > /sys/class/gpio/gpio$((B+5))/value       # 麵包板上的 LED（接在 GPIO 5）
+  echo $((B+2)) > /sys/class/gpio/export; cat /sys/class/gpio/gpio$((B+2))/value   # 按住板上的按鈕再讀
+  ```
 - 手機上 256 MB 的記憶體可能配置不到；模擬機的按鈕在手機版收在 ⋯ 裡。
 
 ## C 程式

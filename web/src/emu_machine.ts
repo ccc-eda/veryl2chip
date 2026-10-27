@@ -16,12 +16,20 @@ export interface MachineCfg {
   ram?: { array: string; base: string };
   /** programs loaded at start: a bundled image (`image`) at `addr` (default: the RAM base; ELF files by their segments) */
   load?: { image: string; addr?: string }[];
+  /** GPIO pins: output values, output enables, inputs (one bit per pin) */
+  gpio?: { out: string; oe: string; in: string; n?: number };
+  /** the board the IDE draws for it ('pi': the RV64 development board) */
+  board?: string;
 }
 
 interface Meta { finish: number; mute: Record<string, number>; signals: Record<string, { off: number; w: number; limbs: number; arr: number }> }
 interface Exports { mem: WebAssembly.Memory; settle(): void; posedge(): void; run(n: number): number }
 
-export interface StepResult { cycles: number; out: number[]; finished: null | { code: number; pass: boolean } }
+export interface StepResult {
+  cycles: number; out: number[]; finished: null | { code: number; pass: boolean };
+  /** GPIO: fraction of the step each pin was driven high, and which pins were driven (output enable) */
+  duty?: number[]; oe?: number;
+}
 
 /** stop signals the design is compiled with: the UART output and the finisher */
 export function machineStops(cfg: MachineCfg): string[] {
@@ -97,6 +105,14 @@ export class Machine {
   /** bytes typed into the UART */
   input(bytes: number[]): void { this.rx.push(...bytes); }
 
+  /** GPIO inputs (a bit per pin) */
+  setGpio(bits: number): void {
+    const g = this.cfg.gpio;
+    if (!g) return;
+    this.sig(g.in).set(bits);
+    this.x.settle();
+  }
+
   /** run up to `max` cycles; stops at the finisher */
   step(max: number): StepResult {
     const out: number[] = [];
@@ -104,6 +120,18 @@ export class Machine {
     const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;
     const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;
     const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;
+    // GPIO outputs are sampled every SAMPLE cycles (duty = time high / time)
+    const g = this.cfg.gpio, n = g?.n ?? 16;
+    const go = g ? this.sig(g.out) : null, ge = g ? this.sig(g.oe) : null;
+    const high = new Array<number>(n).fill(0);
+    let oeSeen = 0;
+    const SAMPLE = 1024;
+    const sample = (cycles: number) => {
+      if (!go) return;
+      const v = Number(go.get()), e = Number(ge!.get());
+      oeSeen |= e;
+      for (let k = 0; k < n; k++) if ((v & e) >> k & 1) high[k] += cycles;
+    };
     let done = 0;
     while (done < max && !this.finished) {
       let single = false;
@@ -111,10 +139,11 @@ export class Machine {
         rxv.set(1); rxd.set(this.rx.shift()!); this.x.settle();
         single = true;
       }
-      const want = single ? 1 : max - done;
-      const n = single ? 0 : this.x.run(want);
-      done += n;
-      if (n < want) {
+      const want = single ? 1 : go ? Math.min(SAMPLE, max - done) : max - done;
+      const ran = single ? 0 : this.x.run(want);
+      done += ran;
+      sample(ran);
+      if (ran < want) {
         // a stop signal (or the cycle with a received byte): this cycle's outputs, then its edge
         if (txv && txv.get()) out.push(Number(txd!.get() & 0xffn));
         if (fv && fv.get()) {
@@ -123,11 +152,14 @@ export class Machine {
         }
         this.x.posedge();
         done++;
+        sample(1);
         if (single) { rxv!.set(0); this.x.settle(); }
       }
     }
     this.cycle += done;
-    return { cycles: done, out, finished: this.finished };
+    const r: StepResult = { cycles: done, out, finished: this.finished };
+    if (go) { r.duty = high.map((h) => (done ? h / done : 0)); r.oe = oeSeen; }
+    return r;
   }
 }
 

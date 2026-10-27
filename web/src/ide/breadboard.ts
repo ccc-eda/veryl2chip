@@ -1,13 +1,19 @@
-// The breadboard editor: a header strip with the board's PMOD pins, 3V3 and
-// GND, power rails and 30 columns of 5-hole strips; parts are placed by two
-// clicks (pin A, pin B). The electrical model is in bbmodel.ts.
+// The breadboard editor: a header strip with the board's pins (the iCEBreaker's
+// PMOD pins, or the header of another board), 3V3 and GND, power rails and 30
+// columns of 5-hole strips; parts are placed by two clicks (pin A, pin B). The
+// electrical model is in bbmodel.ts.
 
 import { tr } from '../i18n';
 import { Part, PartKind } from './bbmodel';
 
-const PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
-const PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
+/** the header strip: groups of pins (number = the point `p:<pin>`), each with a label and pin names */
+export interface Header { groups: { label: string; pins: number[]; names: string[]; title?: (i: number) => string }[] }
 const NAMES = ['1', '2', '3', '4', '7', '8', '9', '10'];
+/** the iCEBreaker's PMOD1A and PMOD1B */
+export const PMOD_HEADER: Header = { groups: [
+  { label: 'PMOD1A', pins: [4, 2, 47, 45, 3, 48, 46, 44], names: NAMES },
+  { label: 'PMOD1B', pins: [43, 38, 34, 31, 42, 36, 32, 28], names: NAMES },
+] };
 const COLS = 30;
 const SVGNS = 'http://www.w3.org/2000/svg';
 
@@ -19,12 +25,20 @@ const TOOLS: [Tool, string, string][] = [
 const LED_COLORS = ['#ff3b30', '#34c759', '#ffcc00', '#0a84ff'];
 const WIRE_COLORS = ['#e5484d', '#3e63dd', '#30a46c', '#f76b15', '#8e4ec6', '#e5e5e5'];
 
+/** x of the k-th pin of group g in the header strip */
+function pinX(h: Header, g: number, k: number): number {
+  let i = k;
+  for (let j = 0; j < g; j++) i += h.groups[j].pins.length;
+  return 34 + i * 26 + g * 14;
+}
+
 /** where each point is drawn */
-function points(): Map<string, { x: number; y: number }> {
+function points(h: Header): Map<string, { x: number; y: number }> {
   const m = new Map<string, { x: number; y: number }>();
-  [...PMOD1A, ...PMOD1B].forEach((pin, i) => m.set(`p:${pin}`, { x: 34 + i * 26 + (i >= 8 ? 14 : 0), y: 30 }));
-  m.set('vcc', { x: 34 + 16 * 26 + 30, y: 30 });
-  m.set('gnd', { x: 34 + 17 * 26 + 30, y: 30 });
+  h.groups.forEach((gr, g) => gr.pins.forEach((pin, k) => m.set(`p:${pin}`, { x: pinX(h, g, k), y: 30 })));
+  const last = pinX(h, h.groups.length - 1, h.groups[h.groups.length - 1].pins.length - 1);
+  m.set('vcc', { x: last + 42, y: 30 });
+  m.set('gnd', { x: last + 68, y: 30 });
   for (let c = 1; c <= COLS; c++) {
     const x = 40 + (c - 1) * 16;
     m.set(`r:top+:${c}`, { x, y: 64 });
@@ -44,14 +58,15 @@ export class Breadboard {
   private tool: Tool = 'select';
   private first: string | null = null;
   private sel: number | null = null;
-  private pts = points();
+  private pts: Map<string, { x: number; y: number }>;
   private svg: SVGSVGElement;
   private ledColor = 0;
   private wireColor = 0;
   /** layout changed (save it) / a button or switch changed (solve again) */
   onChange: (layoutChanged: boolean) => void = () => {};
 
-  constructor(private host: HTMLElement) {
+  constructor(private host: HTMLElement, private header: Header = PMOD_HEADER) {
+    this.pts = points(header);
     host.innerHTML = `<div class="bb-tools">${TOOLS.map(([t, h, e]) => `<button class="tb-btn bb-tool" data-tool="${t}">${tr(h, e)}</button>`).join('')}
       <span class="bb-hint">${tr('選工具，點兩個孔放零件（LED：先點正極）；選取後按 Delete 刪除，右鍵也可刪除；按住按鈕、點一下開關', 'Pick a tool and click two holes (LED: anode first); select + Delete, or right-click, removes; hold buttons, click switches')}</span>
       <button class="tb-btn ghost bb-clear" title="${tr('清空麵包板', 'Clear the breadboard')}">🗑</button></div>
@@ -173,11 +188,16 @@ export class Breadboard {
     let s = '';
     // header strip
     s += `<rect x="14" y="8" width="532" height="38" rx="5" class="bb-header"/>`;
-    s += `<text x="${34 + 3.5 * 26}" y="18" class="bb-t" text-anchor="middle">PMOD1A</text><text x="${34 + 11.5 * 26 + 14}" y="18" class="bb-t" text-anchor="middle">PMOD1B</text>`;
-    [...PMOD1A, ...PMOD1B].forEach((pin, i) => {
-      const q = P.get(`p:${pin}`)!;
-      const off = this.blocked.has(pin);
-      s += `<g class="bb-pin${off ? ' off' : ''}"><title>${i < 8 ? 'PMOD1A' : 'PMOD1B'} ${NAMES[i % 8]}（${tr('腳', 'pin')} ${pin}）${off ? tr('：已接模組', ': a module is plugged in') : ''}</title><rect x="${q.x - 6}" y="${q.y - 6}" width="12" height="12" rx="2"/><text x="${q.x}" y="${q.y + 15}" class="bb-t" text-anchor="middle">${NAMES[i % 8]}</text></g>`;
+    const h = this.header;
+    h.groups.forEach((gr, g) => {
+      const mid = (pinX(h, g, 0) + pinX(h, g, gr.pins.length - 1)) / 2;
+      s += `<text x="${mid}" y="18" class="bb-t" text-anchor="middle">${gr.label}</text>`;
+      gr.pins.forEach((pin, k) => {
+        const q = P.get(`p:${pin}`)!;
+        const off = this.blocked.has(pin);
+        const t = gr.title ? gr.title(k) : `${gr.label} ${gr.names[k]}（${tr('腳', 'pin')} ${pin}）`;
+        s += `<g class="bb-pin${off ? ' off' : ''}"><title>${t}${off ? tr('：已接模組', ': a module is plugged in') : ''}</title><rect x="${q.x - 6}" y="${q.y - 6}" width="12" height="12" rx="2"/><text x="${q.x}" y="${q.y + 15}" class="bb-t" text-anchor="middle">${gr.names[k]}</text></g>`;
+      });
     });
     for (const [id, label, cls] of [['vcc', '3V3', 'bb-vcc'], ['gnd', 'GND', 'bb-gnd']]) {
       const q = P.get(id)!;

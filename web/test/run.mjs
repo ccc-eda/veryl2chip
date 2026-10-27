@@ -469,7 +469,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   fs.writeFileSync(ip, js);
   const { hans } = createRequire(import.meta.url)(ip);
   const srcDir = path.join(dist, '../src');
-  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts', 'ide/emu.ts'];
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts', 'ide/emu.ts', 'ide/pi.ts'];
   const han = /[\u3400-\u9fff]/;
   const trad = new Set('極製複貼麵學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
   let pairs = 0, badEn = [], badHans = [];
@@ -491,6 +491,14 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
 // (emu_machine.ts, as in the page's worker) boots its image far enough to print
 {
   const { Machine, machineStops } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
+  // the breadboard model and the development board's default breadboard (bundled for Node)
+  const esb = await import('esbuild');
+  const bbPath = path.join(tmp, 'bbmodel.cjs');
+  fs.writeFileSync(bbPath, esb.buildSync({ entryPoints: [path.join(dist, '../src/ide/bbmodel.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text);
+  ctx.PI_PARTS = [
+    { id: 3, kind: 'wire', a: 'p:5', b: 'h:3:a' }, { id: 4, kind: 'led', a: 'h:3:c', b: 'h:4:c' }, { id: 5, kind: 'res', a: 'h:4:e', b: 'r:top-:4' },
+    { id: 1, kind: 'wire', a: 'gnd', b: 'r:top-:1' },
+  ];
   if (fs.existsSync(path.join(dist, 'img_linux.js'))) vm.runInContext(fs.readFileSync(path.join(dist, 'img_linux.js'), 'utf8'), ctx);
   for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu)) {
     const t0 = Date.now();
@@ -507,10 +515,24 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
       // OpenSBI's banner names the platform after a few million cycles
       let out = '';
       while (m.cycle < 30_000_000 && !/Platform Name\s*: veryl2chip Rv64Soc/.test(out)) out += String.fromCharCode(...m.step(1_000_000).out);
-      const ok = /Platform Name\s*: veryl2chip Rv64Soc/.test(out);
+      let ok = /Platform Name\s*: veryl2chip Rv64Soc/.test(out);
+      let what = `OpenSBI banner after ${(m.cycle / 1e6).toFixed(1)} M cycles`;
+      // the development board: boot to the shell, light GPIO 5 from the shell, the breadboard's LED on it lights
+      if (ok && cfg.gpio) {
+        while (m.cycle < 600_000_000 && !out.includes('rv64:~$ ')) out += String.fromCharCode(...m.step(2_000_000).out);
+        const cmd = 'B=$(cat /sys/class/gpio/gpiochip*/base); echo $((B+5)) > /sys/class/gpio/export; echo out > /sys/class/gpio/gpio$((B+5))/direction; echo 1 > /sys/class/gpio/gpio$((B+5))/value; echo D$((40+2))NE\r';
+        m.input([...cmd].map((c) => c.charCodeAt(0)));
+        let r2 = null;
+        while (m.cycle < 900_000_000 && !out.includes('D42NE')) { r2 = m.step(2_000_000); out += String.fromCharCode(...r2.out); }
+        r2 = m.step(100_000);
+        const { solve } = createRequire(import.meta.url)(bbPath);
+        const led = solve(ctx.PI_PARTS, new Map([[5, r2.duty[5]]]), new Set(), new Set()).led.get(4);
+        ok = (r2.oe >> 5 & 1) === 1 && r2.duty[5] > 0.99 && led > 0.99;
+        what = `shell after ${(m.cycle / 1e6).toFixed(0)} M cycles; GPIO 5 ${ok ? 'lights the breadboard LED' : `oe ${r2.oe.toString(16)} duty ${r2.duty[5]} led ${led}`}`;
+      }
       if (!ok) bad++;
       const mhz = m.cycle / ((Date.now() - t0) / 1000) / 1e6;
-      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} emulator: ${r.stats.split(';')[0]}; OpenSBI banner after ${(m.cycle / 1e6).toFixed(1)} M cycles (${mhz.toFixed(2)} MHz)`;
+      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} emulator: ${r.stats.split(';')[0]}; ${what} (${mhz.toFixed(2)} MHz)`;
     } catch (e) {
       bad++;
       line = `FAIL ${ex.id.padEnd(9)} emulator: ${e.message}`;

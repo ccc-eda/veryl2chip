@@ -35,7 +35,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.12 | 2026-10-27 | `7b0b7ff` | 2.12.0：veryl-emu，把設計編譯成 WebAssembly 的模擬器 | |
 | v2.13 | 2026-10-27 | `4b63bc1` | 2.13.0：IDE 的模擬機，瀏覽器裡開 Linux | |
 | v2.14 | 2026-10-27 | `e4b757c` | 2.14.0：veryl-emu 加速約 1.9 倍 | |
-| v2.15 | 2026-10-27 | （本版） | 2.15.0：開發板 1：GPIO（Veryl 控制器 + Linux 驅動） | |
+| v2.15 | 2026-10-27 | `2283ee7` | 2.15.0：開發板 1：GPIO（Veryl 控制器 + Linux 驅動） | |
+| v2.16 | 2026-10-27 | （本版） | 2.16.0：開發板 2：IDE 裡的虛擬開發板 | |
 
 ---
 
@@ -385,6 +386,17 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - 測試平台印出 GPIO 輸出的變化，腳本的 `!gpio N=V` 設定輸入腳。`linux/test.sh`（Verilator 與 `SIM=emu/rv64emu`）檢查：LED、匯出的輸出腳
   （`out=0x0022`）、按鈕 0 → 1、邊緣中斷經過 PLIC（`/proc/interrupts` 計數 1）。riscv-tests 與其他回歸不變。
 - 網頁的範例與 Linux 映像在 v2.16（IDE 的開發板）一起更新。
+
+### v2.16：開發板 2，IDE 裡的虛擬開發板
+
+- `machine.json` 加上 `gpio`（輸出值、輸出致能、輸入的埠）與 `board: "pi"`。`emu_machine.ts` 每 1024 拍取樣一次 GPIO 輸出，算出每支腳的
+  佔空比（亮度），`setGpio` 設定輸入；worker 每片回報 `duty` / `oe`，收 `{type: 'gpio', bits}`。
+- `ide/pi.ts`：樹莓派風格的板子（SVG）：40 針排針，GPIO 3–15 放在樹莓派相同 BCM 編號的位置（例如 GPIO 5 在第 29 腳），被驅動成 1 的腳會亮；
+  PWR、ACT（GPIO 0，心跳）、USER（GPIO 1）、按鈕（GPIO 2）。下面是虛擬 iCEBreaker 的麵包板（`breadboard.ts` 改成可以傳入排針定義，
+  `bbmodel.ts` 不變）：預設接好 GPIO 5 的 LED + 電阻、GPIO 6 的按鈕 + 下拉電阻，配置存在專案（`piBoard`）。
+- 範例「RV64 開發板：Linux + GPIO（模擬機）」（原本的 rv64_linux），Linux 映像換成 v2.15 有 GPIO 的版本。
+- 驗證：瀏覽器裡開機（約 70 秒，同時跑 npm test），shell 點亮 USER LED 與 GPIO 5（排針亮、麵包板 LED 亮），按住板上按鈕讀到 1、放開讀到 0，
+  按住麵包板按鈕讀到 GPIO 6 = 1。npm test：Node 上開到 shell，用 shell 點亮 GPIO 5，`bbmodel` 算出麵包板 LED 亮。
 
 ---
 

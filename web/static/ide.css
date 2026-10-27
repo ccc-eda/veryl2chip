@@ -140,7 +140,30 @@ button.icon:hover { background: #3a3d41; }
 #boardPane { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); outline: none; }
 #emuPane { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
 .em-note { padding: 4px 12px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); }
-.em-box { flex: 1; position: relative; display: flex; min-height: 0; }
+.em-main { flex: 1; display: flex; min-height: 0; }
+.em-box { flex: 1; position: relative; display: flex; min-height: 0; min-width: 0; }
+.em-board { width: 560px; flex: none; overflow: auto; border-left: 1px solid var(--line); padding: 8px; }
+.pi-svg { width: 100%; display: block; }
+.pi-pcb { fill: #1f6f43; stroke: #145232; stroke-width: 2; }
+.pi-hole { fill: var(--bg); stroke: #c9a227; stroke-width: 2; }
+.pi-hdr { fill: #111; }
+.pi-pin rect { fill: #777; }
+.pi-pin.gpio rect { fill: #c9a227; }
+.pi-pin.gpio.hi rect { fill: #ffd84a; filter: drop-shadow(0 0 3px #ffd84a); }
+.pi-pin.gnd rect { fill: #444; }
+.pi-pin.pwr rect { fill: #d85b5b; }
+.pi-pin.nc rect { fill: #2a2a2a; }
+.pi-t { fill: #e8f3ec; font: 10px ui-monospace, Menlo, monospace; }
+.pi-chip { fill: #222; stroke: #555; }
+.pi-chip-t { fill: #eee; font: bold 12px ui-monospace, Menlo, monospace; }
+.pi-usb { fill: #bbb; stroke: #888; }
+.pi-led { fill: #222; stroke-width: 2; }
+.pi-btn { cursor: pointer; }
+.pi-btn-base { fill: #333; stroke: #111; }
+.pi-btn-cap { fill: #888; }
+.pi-btn.down .pi-btn-cap { fill: #555; }
+.pi-bb { margin-top: 6px; }
+@media (max-width: 1100px) { .em-main { flex-direction: column; } .em-board { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 55%; } .em-box { min-height: 200px; } }
 .em-in { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; }
 .em-term { flex: 1; margin: 0; cursor: text; padding: 8px 12px; overflow: auto; background: #0c0c0c; color: #d4d4d4; font: 13px/1.35 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; outline: none; }
 .em-cur { background: #d4d4d4; color: #0c0c0c; }

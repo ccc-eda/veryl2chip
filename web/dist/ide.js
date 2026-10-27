@@ -2911,9 +2911,11 @@ target = { type = "directory", path = "target" }
   }
 
   // src/ide/breadboard.ts
-  var PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
-  var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
   var NAMES = ["1", "2", "3", "4", "7", "8", "9", "10"];
+  var PMOD_HEADER = { groups: [
+    { label: "PMOD1A", pins: [4, 2, 47, 45, 3, 48, 46, 44], names: NAMES },
+    { label: "PMOD1B", pins: [43, 38, 34, 31, 42, 36, 32, 28], names: NAMES }
+  ] };
   var COLS = 30;
   var SVGNS = "http://www.w3.org/2000/svg";
   var TOOLS = [
@@ -2926,11 +2928,17 @@ target = { type = "directory", path = "target" }
   ];
   var LED_COLORS = ["#ff3b30", "#34c759", "#ffcc00", "#0a84ff"];
   var WIRE_COLORS = ["#e5484d", "#3e63dd", "#30a46c", "#f76b15", "#8e4ec6", "#e5e5e5"];
-  function points() {
+  function pinX(h, g, k) {
+    let i = k;
+    for (let j = 0; j < g; j++) i += h.groups[j].pins.length;
+    return 34 + i * 26 + g * 14;
+  }
+  function points(h) {
     const m = /* @__PURE__ */ new Map();
-    [...PMOD1A, ...PMOD1B].forEach((pin, i) => m.set(`p:${pin}`, { x: 34 + i * 26 + (i >= 8 ? 14 : 0), y: 30 }));
-    m.set("vcc", { x: 34 + 16 * 26 + 30, y: 30 });
-    m.set("gnd", { x: 34 + 17 * 26 + 30, y: 30 });
+    h.groups.forEach((gr, g) => gr.pins.forEach((pin, k) => m.set(`p:${pin}`, { x: pinX(h, g, k), y: 30 })));
+    const last = pinX(h, h.groups.length - 1, h.groups[h.groups.length - 1].pins.length - 1);
+    m.set("vcc", { x: last + 42, y: 30 });
+    m.set("gnd", { x: last + 68, y: 30 });
     for (let c = 1; c <= COLS; c++) {
       const x = 40 + (c - 1) * 16;
       m.set(`r:top+:${c}`, { x, y: 64 });
@@ -2943,21 +2951,23 @@ target = { type = "directory", path = "target" }
     return m;
   }
   var Breadboard = class {
-    constructor(host) {
+    constructor(host, header = PMOD_HEADER) {
       __publicField(this, "host", host);
+      __publicField(this, "header", header);
       __publicField(this, "parts", []);
       __publicField(this, "pressed", /* @__PURE__ */ new Set());
       __publicField(this, "blocked", /* @__PURE__ */ new Set());
       __publicField(this, "tool", "select");
       __publicField(this, "first", null);
       __publicField(this, "sel", null);
-      __publicField(this, "pts", points());
+      __publicField(this, "pts");
       __publicField(this, "svg");
       __publicField(this, "ledColor", 0);
       __publicField(this, "wireColor", 0);
       /** layout changed (save it) / a button or switch changed (solve again) */
       __publicField(this, "onChange", () => {
       });
+      this.pts = points(header);
       host.innerHTML = `<div class="bb-tools">${TOOLS.map(([t, h, e]) => `<button class="tb-btn bb-tool" data-tool="${t}">${tr(h, e)}</button>`).join("")}
       <span class="bb-hint">${tr("\u9078\u5DE5\u5177\uFF0C\u9EDE\u5169\u500B\u5B54\u653E\u96F6\u4EF6\uFF08LED\uFF1A\u5148\u9EDE\u6B63\u6975\uFF09\uFF1B\u9078\u53D6\u5F8C\u6309 Delete \u522A\u9664\uFF0C\u53F3\u9375\u4E5F\u53EF\u522A\u9664\uFF1B\u6309\u4F4F\u6309\u9215\u3001\u9EDE\u4E00\u4E0B\u958B\u95DC", "Pick a tool and click two holes (LED: anode first); select + Delete, or right-click, removes; hold buttons, click switches")}</span>
       <button class="tb-btn ghost bb-clear" title="${tr("\u6E05\u7A7A\u9EB5\u5305\u677F", "Clear the breadboard")}">\u{1F5D1}</button></div>
@@ -3110,11 +3120,16 @@ target = { type = "directory", path = "target" }
       const P = this.pts;
       let s = "";
       s += `<rect x="14" y="8" width="532" height="38" rx="5" class="bb-header"/>`;
-      s += `<text x="${34 + 3.5 * 26}" y="18" class="bb-t" text-anchor="middle">PMOD1A</text><text x="${34 + 11.5 * 26 + 14}" y="18" class="bb-t" text-anchor="middle">PMOD1B</text>`;
-      [...PMOD1A, ...PMOD1B].forEach((pin, i) => {
-        const q = P.get(`p:${pin}`);
-        const off = this.blocked.has(pin);
-        s += `<g class="bb-pin${off ? " off" : ""}"><title>${i < 8 ? "PMOD1A" : "PMOD1B"} ${NAMES[i % 8]}\uFF08${tr("\u8173", "pin")} ${pin}\uFF09${off ? tr("\uFF1A\u5DF2\u63A5\u6A21\u7D44", ": a module is plugged in") : ""}</title><rect x="${q.x - 6}" y="${q.y - 6}" width="12" height="12" rx="2"/><text x="${q.x}" y="${q.y + 15}" class="bb-t" text-anchor="middle">${NAMES[i % 8]}</text></g>`;
+      const h = this.header;
+      h.groups.forEach((gr, g) => {
+        const mid = (pinX(h, g, 0) + pinX(h, g, gr.pins.length - 1)) / 2;
+        s += `<text x="${mid}" y="18" class="bb-t" text-anchor="middle">${gr.label}</text>`;
+        gr.pins.forEach((pin, k) => {
+          const q = P.get(`p:${pin}`);
+          const off = this.blocked.has(pin);
+          const t = gr.title ? gr.title(k) : `${gr.label} ${gr.names[k]}\uFF08${tr("\u8173", "pin")} ${pin}\uFF09`;
+          s += `<g class="bb-pin${off ? " off" : ""}"><title>${t}${off ? tr("\uFF1A\u5DF2\u63A5\u6A21\u7D44", ": a module is plugged in") : ""}</title><rect x="${q.x - 6}" y="${q.y - 6}" width="12" height="12" rx="2"/><text x="${q.x}" y="${q.y + 15}" class="bb-t" text-anchor="middle">${gr.names[k]}</text></g>`;
+        });
       });
       for (const [id, label, cls] of [["vcc", "3V3", "bb-vcc"], ["gnd", "GND", "bb-gnd"]]) {
         const q = P.get(id);
@@ -3180,8 +3195,8 @@ target = { type = "directory", path = "target" }
     ["vga", "VGA \u87A2\u5E55\uFF08\u4F54 1A+1B\uFF09", "VGA monitor (1A+1B)"],
     ["buzzer", "\u8702\u9CF4\u5668\uFF08\u8173 1\uFF09", "buzzer (pin 1)"]
   ];
-  var PMOD1A2 = [4, 2, 47, 45, 3, 48, 46, 44];
-  var PMOD1B2 = [43, 38, 34, 31, 42, 36, 32, 28];
+  var PMOD1A = [4, 2, 47, 45, 3, 48, 46, 44];
+  var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
   var PMOD2 = [27, 25, 21, 19, 26, 23, 20, 18];
   var KEYS = { "0": 10, "1": 20, "2": 19, "3": 18 };
   var esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -3822,8 +3837,8 @@ ${lines.join("\n")}
       ${led(430, 60, 11, "#ff3b30", "LEDR_N")}
       ${led(480, 60, 37, "#34c759", "LEDG_N")}
       ${btn(440, 255, 10, "BTN_N")}
-      ${hdr(500, 120, PMOD1A2, "PMOD1A", true)}
-      ${hdr(575, 120, PMOD1B2, "PMOD1B", true)}
+      ${hdr(500, 120, PMOD1A, "PMOD1A", true)}
+      ${hdr(575, 120, PMOD1B, "PMOD1B", true)}
       ${hdr(682, 120, PMOD2, "PMOD2", true)}
       ${led(810, 115, 26, "#ff3b30", "LED1")}
       ${led(810, 65, 27, "#34c759", "LED2")}
@@ -3833,6 +3848,190 @@ ${lines.join("\n")}
       ${btn(760, 250, 20, "BTN1")}
       ${btn(810, 250, 19, "BTN2")}
       ${btn(860, 250, 18, "BTN3")}`;
+    }
+  };
+
+  // src/ide/pi.ts
+  var PI_HEADER = [
+    "3V3",
+    "5V",
+    "\u2014",
+    "5V",
+    "GPIO3",
+    "GND",
+    "GPIO4",
+    "GPIO14",
+    "GND",
+    "GPIO15",
+    "\u2014",
+    "\u2014",
+    "\u2014",
+    "GND",
+    "\u2014",
+    "\u2014",
+    "3V3",
+    "\u2014",
+    "GPIO10",
+    "GND",
+    "GPIO9",
+    "\u2014",
+    "GPIO11",
+    "GPIO8",
+    "GND",
+    "GPIO7",
+    "\u2014",
+    "\u2014",
+    "GPIO5",
+    "GND",
+    "GPIO6",
+    "GPIO12",
+    "GPIO13",
+    "GND",
+    "\u2014",
+    "\u2014",
+    "\u2014",
+    "\u2014",
+    "GND",
+    "\u2014"
+  ];
+  var HEADER_GPIOS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+  var physical = (g) => PI_HEADER.indexOf(`GPIO${g}`) + 1;
+  var BB_HEADER = { groups: [{ label: "GPIO", pins: HEADER_GPIOS, names: HEADER_GPIOS.map(String), title: (i) => tr(`GPIO ${HEADER_GPIOS[i]}\uFF08\u6392\u91DD\u7B2C ${physical(HEADER_GPIOS[i])} \u8173\uFF09`, `GPIO ${HEADER_GPIOS[i]} (header pin ${physical(HEADER_GPIOS[i])})`) }] };
+  var PI_DEFAULT_BB = [
+    { id: 1, kind: "wire", a: "gnd", b: "r:top-:1", color: "#3e63dd" },
+    { id: 2, kind: "wire", a: "vcc", b: "r:top+:30", color: "#e5484d" },
+    { id: 3, kind: "wire", a: "p:5", b: "h:3:a", color: "#f76b15" },
+    { id: 4, kind: "led", a: "h:3:c", b: "h:4:c", color: "#ff3b30" },
+    { id: 5, kind: "res", a: "h:4:e", b: "r:top-:4" },
+    { id: 6, kind: "btn", a: "r:top+:12", b: "h:12:b" },
+    { id: 7, kind: "wire", a: "h:12:a", b: "p:6", color: "#8e4ec6" },
+    { id: 8, kind: "res", a: "h:12:e", b: "r:top-:13" }
+  ];
+  var PiBoard = class {
+    constructor(host) {
+      __publicField(this, "svg");
+      __publicField(this, "bb");
+      __publicField(this, "duty", []);
+      __publicField(this, "oe", 0);
+      __publicField(this, "button", false);
+      __publicField(this, "bbInputs", 0);
+      __publicField(this, "powered", false);
+      /** GPIO inputs changed (a bit per pin) */
+      __publicField(this, "onInputs", () => {
+      });
+      /** the breadboard's layout changed (save it with the project) */
+      __publicField(this, "onLayout", () => {
+      });
+      __publicField(this, "hiKey", "");
+      host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg><div class="pi-bb"></div>`;
+      this.svg = host.querySelector(".pi-svg");
+      this.bb = new Breadboard(host.querySelector(".pi-bb"), BB_HEADER);
+      this.bb.onChange = (layout) => {
+        if (layout) this.onLayout(this.bb.parts);
+        this.solve();
+      };
+      this.draw();
+      const press = (on) => {
+        if (this.button !== on) {
+          this.button = on;
+          this.draw();
+          this.send();
+        }
+      };
+      this.svg.addEventListener("mousedown", (e) => {
+        if (e.target.closest('[data-a="btn"]')) {
+          e.preventDefault();
+          press(true);
+        }
+      });
+      this.svg.addEventListener("touchstart", (e) => {
+        if (e.target.closest('[data-a="btn"]')) {
+          e.preventDefault();
+          press(true);
+        }
+      });
+      window.addEventListener("mouseup", () => press(false));
+      window.addEventListener("touchend", () => press(false));
+    }
+    setParts(parts) {
+      this.bb.parts = parts.map((p) => ({ ...p }));
+      this.bb.render();
+      this.solve();
+    }
+    get parts() {
+      return this.bb.parts;
+    }
+    /** the machine is running (PWR LED) */
+    setPower(on) {
+      if (on !== this.powered) {
+        this.powered = on;
+        this.draw();
+      }
+    }
+    /** output duty of every pin and which pins are driven */
+    setOutputs(duty, oe) {
+      this.duty = duty;
+      this.oe = oe;
+      const key = HEADER_GPIOS.map((g) => oe >> g & 1 && (duty[g] ?? 0) > 0.5 ? 1 : 0).join("");
+      if (key !== this.hiKey) {
+        this.hiKey = key;
+        this.draw();
+      } else this.leds();
+      this.solve();
+    }
+    leds() {
+      for (const [k, id] of [[0, "act"], [1, "user"]]) {
+        const v = this.oe >> k & 1 ? this.duty[k] ?? 0 : 0;
+        for (const el2 of this.svg.querySelectorAll(`[data-led="${id}"]`)) el2.style.opacity = (v < 4e-3 ? 0 : 0.3 + 0.7 * Math.sqrt(v)).toFixed(3);
+      }
+    }
+    solve() {
+      const outputs = /* @__PURE__ */ new Map();
+      const inputs = /* @__PURE__ */ new Set();
+      for (const g of HEADER_GPIOS) {
+        if (this.oe >> g & 1) outputs.set(g, this.duty[g] ?? 0);
+        else inputs.add(g);
+      }
+      const r = solve(this.bb.parts, outputs, inputs, this.bb.pressed, tr);
+      this.bb.setLeds(r.led);
+      this.bb.setWarnings(r.warnings);
+      let bits = 0;
+      for (const [pin, v] of r.inputs) if (v) bits |= 1 << pin;
+      if (bits !== this.bbInputs) {
+        this.bbInputs = bits;
+        this.send();
+      }
+    }
+    send() {
+      this.onInputs(this.bbInputs | (this.button ? 1 << 2 : 0));
+    }
+    draw() {
+      let s = `<defs><filter id="piGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="3"/></filter></defs>`;
+      s += `<rect x="10" y="10" width="540" height="230" rx="14" class="pi-pcb"/>`;
+      for (const [x, y] of [[26, 26], [534, 26], [26, 224], [534, 224]]) s += `<circle cx="${x}" cy="${y}" r="7" class="pi-hole"/>`;
+      s += `<rect x="80" y="18" width="404" height="46" rx="3" class="pi-hdr"/>`;
+      for (let i = 0; i < 40; i++) {
+        const col = Math.floor(i / 2), up = i % 2 === 1;
+        const x = 92 + col * 20, y = up ? 30 : 52;
+        const what = PI_HEADER[i];
+        const cls = what.startsWith("GPIO") ? "gpio" : what === "GND" ? "gnd" : what === "\u2014" ? "nc" : "pwr";
+        const g = what.startsWith("GPIO") ? +what.slice(4) : -1;
+        const lit = g >= 0 && this.oe >> g & 1 && (this.duty[g] ?? 0) > 0.5;
+        s += `<g class="pi-pin ${cls}${lit ? " hi" : ""}"><title>${tr(`\u7B2C ${i + 1} \u8173\uFF1A${what === "\u2014" ? "\u6C92\u6709\u63A5" : what}`, `pin ${i + 1}: ${what === "\u2014" ? "not connected" : what}`)}</title><rect x="${x - 6}" y="${y - 6}" width="12" height="12" rx="2"/></g>`;
+        if (what.startsWith("GPIO")) s += `<text x="${x}" y="${up ? 14 : 75}" class="pi-t" text-anchor="middle">${g}</text>`;
+      }
+      s += `<text x="76" y="56" class="pi-t" text-anchor="end">1</text><text x="490" y="34" class="pi-t">40</text>`;
+      s += `<rect x="190" y="100" width="92" height="92" rx="6" class="pi-chip"/><text x="236" y="140" class="pi-chip-t" text-anchor="middle">Rv64Core</text><text x="236" y="156" class="pi-t" text-anchor="middle">RV64IMAC</text><text x="236" y="170" class="pi-t" text-anchor="middle">256 MB</text>`;
+      s += `<text x="236" y="210" class="pi-t" text-anchor="middle">veryl2chip RV64 ${tr("\u958B\u767C\u677F", "board")}</text>`;
+      s += `<rect x="16" y="110" width="44" height="40" rx="4" class="pi-usb"/><text x="38" y="166" class="pi-t" text-anchor="middle">UART</text>`;
+      const leds = [["pwr", "PWR", "#ff3b30", 92], ["act", "ACT", "#34c759", 122], ["user", "USER", "#ffcc00", 152]];
+      for (const [id, label, color, y] of leds) {
+        const on = id === "pwr" ? this.powered ? 1 : 0 : 0;
+        s += `<g><circle cx="430" cy="${y}" r="12" fill="${color}" filter="url(#piGlow)" data-led="${id}" style="opacity:${on}"/><circle cx="430" cy="${y}" r="6" class="pi-led" stroke="${color}"/><circle cx="430" cy="${y}" r="6" fill="${color}" data-led="${id}" style="opacity:${on}"/><text x="446" y="${y + 4}" class="pi-t">${label}${id === "act" ? " (GPIO 0)" : id === "user" ? " (GPIO 1)" : ""}</text></g>`;
+      }
+      s += `<g data-a="btn" class="pi-btn${this.button ? " down" : ""}"><title>${tr("\u6309\u9215\uFF08GPIO 2\uFF0C\u6309\u4E0B = 1\uFF09", "Button (GPIO 2, pressed = 1)")}</title><rect x="412" y="180" width="36" height="36" rx="4" class="pi-btn-base"/><circle cx="430" cy="198" r="11" class="pi-btn-cap"/></g><text x="456" y="202" class="pi-t">BTN (GPIO 2)</text>`;
+      this.svg.innerHTML = s;
+      this.leds();
     }
   };
 
@@ -3946,6 +4145,11 @@ ${lines.join("\n")}
       __publicField(this, "stat", { cycle: 0, rate: 0 });
       /** the IDE: compile the project and get its images */
       __publicField(this, "onStart", null);
+      /** the IDE: the project's breadboard for the development board (null: the example's), and saving it */
+      __publicField(this, "getParts", () => null);
+      __publicField(this, "onParts", () => {
+      });
+      __publicField(this, "pi", null);
       __publicField(this, "upload", null);
       __publicField(this, "uploadName", "");
       host.innerHTML = `<div class="vb-bar">
@@ -3957,7 +4161,7 @@ ${lines.join("\n")}
         <span class="vb-stat em-stat"></span>
       </div>
       <div class="em-note"></div>
-      <div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div>`;
+      <div class="em-main"><div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div><div class="em-board hidden"></div></div>`;
       const q = (a) => host.querySelector(`[data-a="${a}"]`);
       q("boot").onclick = () => this.boot();
       q("pause").onclick = () => this.pauseResume();
@@ -4018,6 +4222,7 @@ ${lines.join("\n")}
     }
     set(s) {
       this.state = s;
+      this.pi?.setPower(s === "run" || s === "pause");
       const q = (a) => this.host.querySelector(`[data-a="${a}"]`);
       q("pause").disabled = s === "off" || s === "end";
       q("pause").textContent = s === "pause" ? "\u25B6" : "\u23F8";
@@ -4049,7 +4254,7 @@ ${lines.join("\n")}
       if (this.upload) s.images = [{ bytes: this.upload }];
       this.last = s;
       this.w?.terminate();
-      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : max - done;\n        const n = single ? 0 : this.x.run(want);\n        done += n;\n        if (n < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      return { cycles: done, out, finished: this.finished };\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    m.reset();\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate });\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        boot();\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
+      const url = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/emu_machine.ts\n  var Machine = class _Machine {\n    constructor(x, meta, cfg) {\n      __publicField(this, "x", x);\n      __publicField(this, "meta", meta);\n      __publicField(this, "cfg", cfg);\n      __publicField(this, "u8");\n      __publicField(this, "u64");\n      __publicField(this, "rx", []);\n      /** cycles run since the reset */\n      __publicField(this, "cycle", 0);\n      __publicField(this, "finished", null);\n      this.u8 = new Uint8Array(x.mem.buffer);\n      this.u64 = new BigUint64Array(x.mem.buffer);\n    }\n    static async create(wasm, meta, cfg) {\n      const inst = wasm instanceof WebAssembly.Module ? await WebAssembly.instantiate(wasm, {}) : (await WebAssembly.instantiate(wasm, {})).instance;\n      return new _Machine(inst.exports, meta, cfg);\n    }\n    sig(name) {\n      const s = this.meta.signals[name];\n      if (!s) throw new Error(`machine.json: no signal \'${name}\' in ${this.cfg.top}`);\n      const i = s.off / 8, n = s.limbs, u64 = this.u64;\n      const mask = (1n << BigInt(s.w)) - 1n;\n      return {\n        get: () => {\n          let v = 0n;\n          for (let k = n - 1; k >= 0; k--) v = v << 64n | u64[i + k];\n          return v;\n        },\n        set: (v) => {\n          let x = BigInt(v) & mask;\n          for (let k = 0; k < n; k++) {\n            u64[i + k] = x & 0xffffffffffffffffn;\n            x >>= 64n;\n          }\n        }\n      };\n    }\n    /** a program: an ELF file by its segments, anything else at `addr` (default: the RAM base) */\n    load(bytes, addr) {\n      const ram = this.cfg.ram;\n      if (!ram) throw new Error(\'machine.json: no "ram" to load a program into\');\n      const info = this.meta.signals[ram.array];\n      if (!info) throw new Error(`machine.json: no array \'${ram.array}\'`);\n      const base = BigInt(ram.base);\n      const size = BigInt(info.arr * info.limbs * 8);\n      const put = (a, b) => {\n        if (a < base || a - base + BigInt(b.length) > size) throw new Error(`program at 0x${a.toString(16)} (${b.length} bytes) is outside the RAM`);\n        this.u8.set(b, info.off + Number(a - base));\n      };\n      for (const [a, b] of elfSegments(bytes) ?? [[addr ?? base, bytes]]) put(a, b);\n    }\n    /** hold the reset for its cycles, then release it */\n    reset() {\n      const r = this.cfg.reset;\n      this.rx = [];\n      this.finished = null;\n      this.cycle = 0;\n      if (this.cfg.uart?.rx_valid) this.sig(this.cfg.uart.rx_valid).set(0);\n      if (r) {\n        const p = this.sig(r.port);\n        p.set(r.active);\n        this.x.settle();\n        for (let i = 0; i < (r.cycles ?? 2); i++) this.x.posedge();\n        p.set(r.active ? 0 : 1);\n      }\n      this.x.settle();\n    }\n    /** clear every signal and memory (power off) */\n    clear() {\n      this.u8.fill(0);\n    }\n    /** bytes typed into the UART */\n    input(bytes) {\n      this.rx.push(...bytes);\n    }\n    /** GPIO inputs (a bit per pin) */\n    setGpio(bits) {\n      const g = this.cfg.gpio;\n      if (!g) return;\n      this.sig(g.in).set(bits);\n      this.x.settle();\n    }\n    /** run up to `max` cycles; stops at the finisher */\n    step(max) {\n      const out = [];\n      const u = this.cfg.uart, f = this.cfg.finish;\n      const txv = u ? this.sig(u.tx_valid) : null, txd = u ? this.sig(u.tx_data) : null;\n      const rxv = u?.rx_valid ? this.sig(u.rx_valid) : null, rxd = u?.rx_data ? this.sig(u.rx_data) : null, rxr = u?.rx_ready ? this.sig(u.rx_ready) : null;\n      const fv = f ? this.sig(f.valid) : null, fc = f?.code ? this.sig(f.code) : null;\n      const g = this.cfg.gpio, n = g?.n ?? 16;\n      const go = g ? this.sig(g.out) : null, ge = g ? this.sig(g.oe) : null;\n      const high = new Array(n).fill(0);\n      let oeSeen = 0;\n      const SAMPLE = 1024;\n      const sample = (cycles) => {\n        if (!go) return;\n        const v = Number(go.get()), e = Number(ge.get());\n        oeSeen |= e;\n        for (let k = 0; k < n; k++) if ((v & e) >> k & 1) high[k] += cycles;\n      };\n      let done = 0;\n      while (done < max && !this.finished) {\n        let single = false;\n        if (this.rx.length && rxv && rxd && (!rxr || rxr.get())) {\n          rxv.set(1);\n          rxd.set(this.rx.shift());\n          this.x.settle();\n          single = true;\n        }\n        const want = single ? 1 : go ? Math.min(SAMPLE, max - done) : max - done;\n        const ran = single ? 0 : this.x.run(want);\n        done += ran;\n        sample(ran);\n        if (ran < want) {\n          if (txv && txv.get()) out.push(Number(txd.get() & 0xffn));\n          if (fv && fv.get()) {\n            const code = fc ? Number(fc.get() & 0xffffffffn) : 0;\n            this.finished = { code, pass: (code & 65535) === (f.pass ?? 21845) };\n          }\n          this.x.posedge();\n          done++;\n          sample(1);\n          if (single) {\n            rxv.set(0);\n            this.x.settle();\n          }\n        }\n      }\n      this.cycle += done;\n      const r = { cycles: done, out, finished: this.finished };\n      if (go) {\n        r.duty = high.map((h) => done ? h / done : 0);\n        r.oe = oeSeen;\n      }\n      return r;\n    }\n  };\n  function elfSegments(f) {\n    if (f.length < 64 || f[0] !== 127 || f[1] !== 69 || f[2] !== 76 || f[3] !== 70 || f[4] !== 2) return null;\n    const d = new DataView(f.buffer, f.byteOffset, f.byteLength);\n    const phoff = Number(d.getBigUint64(32, true)), phentsize = d.getUint16(54, true), phnum = d.getUint16(56, true);\n    const segs = [];\n    for (let i = 0; i < phnum; i++) {\n      const p = phoff + i * phentsize;\n      if (d.getUint32(p, true) !== 1) continue;\n      const off = Number(d.getBigUint64(p + 8, true)), paddr = d.getBigUint64(p + 24, true);\n      const filesz = Number(d.getBigUint64(p + 32, true)), memsz = Number(d.getBigUint64(p + 40, true));\n      if (memsz === 0) continue;\n      const seg = new Uint8Array(memsz);\n      seg.set(f.subarray(off, off + filesz));\n      segs.push([paddr, seg]);\n    }\n    return segs;\n  }\n\n  // src/emu_worker.ts\n  var m = null;\n  var images = [];\n  var running = false;\n  var gen = 0;\n  var gpio = 0;\n  var post = (msg) => self.postMessage(msg);\n  function boot() {\n    m.clear();\n    for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : void 0);\n    m.reset();\n    m.setGpio(gpio);\n  }\n  async function loop(my) {\n    let chunk = 2e4;\n    let t = performance.now(), c0 = m.cycle, rate = 0;\n    while (running && my === gen) {\n      const s = performance.now();\n      const r = m.step(chunk);\n      const dt = performance.now() - s;\n      chunk = Math.max(1e3, Math.min(2e6, Math.round(chunk * (dt > 0 ? Math.min(2, 50 / dt) : 2))));\n      const now = performance.now();\n      if (now - t > 500) {\n        rate = (m.cycle - c0) / ((now - t) / 1e3);\n        t = now;\n        c0 = m.cycle;\n      }\n      post({ type: "out", bytes: r.out, cycle: m.cycle, rate, duty: r.duty, oe: r.oe });\n      if (r.finished) {\n        running = false;\n        post({ type: "finished", ...r.finished, cycle: m.cycle });\n        break;\n      }\n      await new Promise((ok) => setTimeout(ok, 0));\n    }\n  }\n  self.onmessage = async (e) => {\n    const d = e.data;\n    try {\n      if (d.type === "start") {\n        gen++;\n        running = false;\n        m = await Machine.create(d.wasm, d.meta, d.cfg);\n        images = d.images;\n        boot();\n        running = true;\n        loop(gen);\n      } else if (d.type === "input") {\n        m?.input(d.bytes);\n      } else if (d.type === "gpio") {\n        gpio = d.bits;\n        m?.setGpio(gpio);\n      } else if (d.type === "pause") {\n        running = false;\n      } else if (d.type === "resume") {\n        if (m && !running && !m.finished) {\n          running = true;\n          loop(++gen);\n        }\n      } else if (d.type === "reset") {\n        if (!m) return;\n        gen++;\n        boot();\n        running = true;\n        loop(gen);\n      }\n    } catch (err) {\n      running = false;\n      post({ type: "error", msg: String(err.message ?? err) });\n    }\n  };\n})();\n'], { type: "text/javascript" }));
       this.w = new Worker(url);
       this.w.onmessage = (e) => this.msg(e.data);
       this.w.onerror = (e) => {
@@ -4060,12 +4265,23 @@ ${lines.join("\n")}
       this.stat = { cycle: 0, rate: 0 };
       const prog = this.upload ? tr(`\u7A0B\u5F0F\uFF1A${this.uploadName}`, `program: ${this.uploadName}`) : s.cfg.load?.length ? tr(`\u7A0B\u5F0F\uFF1A${s.cfg.load.map((l) => l.image).join("\u3001")}`, `program: ${s.cfg.load.map((l) => l.image).join(", ")}`) : "";
       this.note(`${s.cfg.top}: ${s.stats}${prog ? "\u3000" + prog : ""}`);
+      const bh = this.host.querySelector(".em-board");
+      if (s.cfg.board === "pi") {
+        if (!this.pi) {
+          this.pi = new PiBoard(bh);
+          this.pi.onInputs = (bits) => this.w?.postMessage({ type: "gpio", bits });
+          this.pi.onLayout = (parts) => this.onParts(parts);
+        }
+        this.pi.setParts(this.getParts() ?? PI_DEFAULT_BB);
+        bh.classList.remove("hidden");
+      } else bh.classList.add("hidden");
       this.w.postMessage({ type: "start", wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images });
       this.set("run");
       this.inEl.focus();
     }
     msg(d) {
       if (d.type === "out") {
+        if (this.pi && d.duty) this.pi.setOutputs(d.duty, d.oe ?? 0);
         if (d.bytes.length) {
           this.term.write(d.bytes);
         }
@@ -5274,6 +5490,11 @@ int main(void) {
     if (!emu) {
       emu = new Emulator($2("emuPane"));
       emu.onStart = startEmu;
+      emu.getParts = () => proj.piBoard ?? null;
+      emu.onParts = (parts) => {
+        proj.piBoard = parts.map((p) => ({ ...p }));
+        persist();
+      };
     }
     return emu;
   }

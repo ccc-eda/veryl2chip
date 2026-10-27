@@ -5,6 +5,8 @@
 
 import { tr } from '../i18n';
 import type { MachineCfg } from '../emu_machine';
+import type { Part } from './bbmodel';
+import { PI_DEFAULT_BB, PiBoard } from './pi';
 
 declare const EMU_WORKER_SRC: string;
 
@@ -88,6 +90,10 @@ export class Emulator {
   private stat = { cycle: 0, rate: 0 };
   /** the IDE: compile the project and get its images */
   onStart: (() => Promise<EmuStart | null>) | null = null;
+  /** the IDE: the project's breadboard for the development board (null: the example's), and saving it */
+  getParts: () => Part[] | null = () => null;
+  onParts: (parts: Part[]) => void = () => {};
+  private pi: PiBoard | null = null;
 
   constructor(private host: HTMLElement) {
     host.innerHTML = `<div class="vb-bar">
@@ -99,7 +105,7 @@ export class Emulator {
         <span class="vb-stat em-stat"></span>
       </div>
       <div class="em-note"></div>
-      <div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div>`;
+      <div class="em-main"><div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div><div class="em-board hidden"></div></div>`;
     const q = <T extends HTMLElement>(a: string) => host.querySelector(`[data-a="${a}"]`) as T;
     q('boot').onclick = () => this.boot();
     q('pause').onclick = () => this.pauseResume();
@@ -139,6 +145,7 @@ export class Emulator {
 
   private set(s: Emulator['state']): void {
     this.state = s;
+    this.pi?.setPower(s === 'run' || s === 'pause');
     const q = (a: string) => this.host.querySelector(`[data-a="${a}"]`) as HTMLButtonElement;
     q('pause').disabled = s === 'off' || s === 'end';
     q('pause').textContent = s === 'pause' ? '▶' : '⏸';
@@ -175,13 +182,25 @@ export class Emulator {
     this.stat = { cycle: 0, rate: 0 };
     const prog = this.upload ? tr(`程式：${this.uploadName}`, `program: ${this.uploadName}`) : s.cfg.load?.length ? tr(`程式：${s.cfg.load.map((l) => l.image).join('、')}`, `program: ${s.cfg.load.map((l) => l.image).join(', ')}`) : '';
     this.note(`${s.cfg.top}: ${s.stats}${prog ? '　' + prog : ''}`);
+    // the development board (machine.json "board": "pi")
+    const bh = this.host.querySelector('.em-board') as HTMLElement;
+    if (s.cfg.board === 'pi') {
+      if (!this.pi) {
+        this.pi = new PiBoard(bh);
+        this.pi.onInputs = (bits) => this.w?.postMessage({ type: 'gpio', bits });
+        this.pi.onLayout = (parts) => this.onParts(parts);
+      }
+      this.pi.setParts(this.getParts() ?? PI_DEFAULT_BB);
+      bh.classList.remove('hidden');
+    } else bh.classList.add('hidden');
     this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images });
     this.set('run');
     this.inEl.focus();
   }
 
-  private msg(d: { type: string; bytes?: number[]; cycle?: number; rate?: number; code?: number; pass?: boolean; msg?: string }): void {
+  private msg(d: { type: string; bytes?: number[]; cycle?: number; rate?: number; code?: number; pass?: boolean; msg?: string; duty?: number[]; oe?: number }): void {
     if (d.type === 'out') {
+      if (this.pi && d.duty) this.pi.setOutputs(d.duty, d.oe ?? 0);
       if (d.bytes!.length) { this.term.write(d.bytes!); }
       this.stat.cycle = d.cycle!;
       if (d.rate) this.stat.rate = d.rate;
