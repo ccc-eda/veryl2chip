@@ -39,7 +39,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.16 | 2026-10-27 | `9bb24bb` | 2.16.0：開發板 2：IDE 裡的虛擬開發板 | |
 | v2.17 | 2026-10-27 | `ac29810` | 2.17.0：開發板 3：快照開機、存狀態 | |
 | v2.18 | 2026-10-27 | `b428cc3` | 2.18.0：開發板 4：檔案進出板子 | |
-| v2.19 | 2026-10-27 | （本版） | 2.19.0：開發板 5：MicroPython | |
+| v2.19 | 2026-10-27 | `c239ae3` | 2.19.0：開發板 5：MicroPython | |
+| v2.20 | 2026-10-27 | （本版） | 2.20.0：開發板 6：C 程式 | |
 
 ---
 
@@ -435,6 +436,22 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   `cd /root && getfiles > /dev/null && micropython 檔名`。板子沒開就先開機（從快照開機時也先送 Ctrl-C 叫出提示符）。編輯器加上 Python 與 shell 的語法顏色。
 - 範例：`main.py`、`button.py`、`traffic.py`；麵包板預設多了 GPIO 12（黃）與 13（綠）兩顆 LED。
 - 驗證：`linux/test.sh`（Verilator 與 veryl-emu）用 `micropython -c` 點亮 GPIO 13、讀按鈕、算 `2 ** 70`；npm test 在快照還原的機器上跑 MicroPython 點亮 GPIO 13。
+
+### v2.20：開發板 6，C 程式
+
+- veryl-eda 的 C 編譯器加上 Linux 目標（`Options::linux`、`--linux`）：沒有改型別系統，而是像 x32 一樣保留 32 位元的
+  `int` / `long` / 指標，產生 RV64 程式碼時把算 32 位元整數的指令換成 *W 版（`addw`、`subw`、`mulw`、`divuw`、`sllw`、`sraiw`…），
+  暫存器永遠是符號延伸的 32 位元值（`lw` 載入、`sltu` / `bltu` 比較都還是對的）。指標要 32 位元就夠，所以程式碰到的位址都要在
+  2 GB 以下：程式在 0x10000，自己的 256 KB 堆疊在 bss（Linux 給的堆疊在高位址，不用），堆積用 `brk`。`argv` 因此不支援。
+- 組譯器：`assemble_with(src, Opts { origin, rv64 })`，RV64 的 *W 指令、`ld` / `sd` / `lwu`、6 位元的移位量、`li` 用 `lui + addiw`；
+  `elf_linux` 寫出一個 PT_LOAD 段的 ELF64。
+- 執行期函式庫（`prelude.c` 用 `#ifdef __linux__` 分開）：系統呼叫（`__syscall`，ecall）、檔案、一行一行緩衝的標準輸出、
+  `malloc`、時間、GPIO（`gpio_base` 用 `getdents64` 找 `/sys/class/gpio/gpiochipN`）。
+- 驗證：spike + pk 執行 `src/rv/tests/*.c` 與新的 `tests/linux/files.c`（檔案、堆積、字串），輸出和主機編譯的相同；
+  `linux/test.sh`（Verilator 與 veryl-emu）與 npm test（從快照還原的機器）在板子上執行編好的 C 程式、點亮 GPIO 12。
+- IDE：開發板專案可以有好幾個 `.c`；▶ 執行時在瀏覽器裡編譯（wasm `cc` 的 `linux`，回傳 `elf`），執行檔放進交換區（tar 的模式 0755）；
+  `savefiles` 不收二進位檔。範例 `blink.c`、`count.c`、`lights.c`。
+- `emu/rv64emu.mjs` 的 `[gpio] out=…` 改成等 UART 的這一行結束才印（之前會把程式印的一行切開，`linux/test.sh` 對行首的檢查失敗）。
 
 ---
 

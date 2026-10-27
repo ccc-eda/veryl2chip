@@ -120,7 +120,7 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.17 ✓ | **快照開機**：機器狀態全部在 wasm 的線性記憶體，開到 shell 時存成快照（256 MB 幾乎都是 0：只存非零的頁，壓縮後預估幾 MB），內附在 `img_board.js`；按電源從快照繼續，幾秒內有 shell；IDE 也可以「存目前狀態」（IndexedDB） | 從快照繼續後的指令與從頭開機的結果相同；Node 上比對兩種方式的 UART 輸出 |
 | v2.18 ✓ | **檔案進出板子**：專案檔案在開機時放進 `/root`（測試平台把一個 tar 寫進 RAM 最後 16 MB 的保留區，裝置樹排除這塊，`/init` 用 `/dev/mem` 解開）；`sync` 指令把 `/root` 寫回保留區，IDE 讀回專案。shell 腳本在 IDE 改完就能在板子上執行 | Node：專案檔進板子、在板子上改、寫回後內容相同 |
 | v2.19 ✓ | **MicroPython**：官方 MicroPython 的 Unix 版本，用 musl 靜態編成 RV64 執行檔（`git clone` + `make`，MIT 授權）放進映像；`pi` 模組（`LED`、`Button`、`Pin`，像 `gpiozero`，底下用 `/sys/class/gpio` 或 GPIO 的字元裝置）；終端機的 REPL、`micropython /root/main.py`；IDE 有「▶ 在板子上執行」；範例：閃爍、按鈕計數、紅綠燈 | Verilator 與 veryl-emu：`main.py` 讓腳位依序變化、讀到按鈕；MicroPython 自己的基本測試 |
-| v2.20 | **C 程式**：veryl-eda 的 C 編譯器（`src/rv/`，目前是 RV32 裸機）加上 RV64 Linux 目標：64 位元暫存器與指標、系統呼叫（`ecall`）、小小的 libc（`printf`、`open` / `read` / `write`、`usleep`）、輸出靜態 ELF；IDE 在瀏覽器裡編譯，經 v2.18 的機制放進 `/root` 執行；`gpio.h`；範例對應 MicroPython 的那幾個 | 編譯器測試（`.c` 對照 `.out`，和現有 RV32 測試同樣的做法）；板子上跑 C 範例 |
+| v2.20 ✓ | **C 程式**：veryl-eda 的 C 編譯器（`src/rv/`，目前是 RV32 裸機）加上 RV64 Linux 目標：64 位元暫存器與指標、系統呼叫（`ecall`）、小小的 libc（`printf`、`open` / `read` / `write`、`usleep`）、輸出靜態 ELF；IDE 在瀏覽器裡編譯，經 v2.18 的機制放進 `/root` 執行；`gpio.h`；範例對應 MicroPython 的那幾個 | 編譯器測試（`.c` 對照 `.out`，和現有 RV32 測試同樣的做法）；板子上跑 C 範例 |
 | v2.21 | **螢幕**：`simple-framebuffer`（320 × 240、RGB565，放在保留的 RAM），kernel 開 fbcon；worker 每幀把那塊記憶體畫到 canvas；MicroPython 的 `framebuf` 與 C 的畫圖函式；範例：時鐘、圖形 | Node：寫入 framebuffer 的內容和畫出的影像相同；瀏覽器實測 |
 | 之後 | I2C / SPI 的虛擬元件（溫度感測器、OLED）、PWM 蜂鳴器、儲存狀態到檔案；也可以在板子上放 TinyCC（在 Linux 裡自己編 C） | |
 

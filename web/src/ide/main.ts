@@ -285,8 +285,8 @@ function newFile(): void {
   if (bad) { alert(bad); return; }
   const base = name.replace(/\.\w+$/, '').replace(/(^|[_-])(\w)/g, (_, _a, c: string) => c.toUpperCase()).replace(/\W/g, '');
   const m = /^[A-Za-z]/.test(base) ? base : 'M' + base;
-  if (name.endsWith('.c') && cFile()) { alert(tr('一個專案只能有一個 .c 檔', 'A project has one .c file')); return; }
-  proj.files.push({ name, src: name.endsWith('.veryl') ? newModule(m) : name.endsWith('.c') ? C_TEMPLATE : '' });
+  if (name.endsWith('.c') && cFile() && !boardProject()) { alert(tr('一個專案只能有一個 .c 檔', 'A project has one .c file')); return; }
+  proj.files.push({ name, src: name.endsWith('.veryl') ? newModule(m) : name.endsWith('.c') ? (boardProject() ? C_BOARD_TEMPLATE : C_TEMPLATE) : '' });
   openFile(name);
   changed();
 }
@@ -546,18 +546,42 @@ int main(void) {
 }
 `;
 
-interface CProgram { compiled: boolean; bin?: string; listing?: string; size?: number; end?: number; mem?: number; errors: { file: string; line: number; msg: string }[] }
+const C_BOARD_TEMPLATE = `// A C program for the RV64 board's Linux: ▶ Run compiles it in the browser and runs it
+// in /root. Library: printf, puts, getchar, read_line, sleep, usleep, delay_ms, millis,
+// open / read / write / close, malloc, strlen ...; GPIO: gpio_write, gpio_read, pin_mode
+// (0 / 1 = ACT / USER LED, 2 = the button, 3-15 the header).
+
+int main(void) {
+    int i;
+    for (i = 0; i < 5; i++) {
+        gpio_write(5, 1);
+        delay_ms(500);
+        gpio_write(5, 0);
+        delay_ms(500);
+        printf("blink %d\\n", i + 1);
+    }
+    return 0;
+}
+`;
+
+interface CProgram { compiled: boolean; bin?: string; listing?: string; size?: number; end?: number; mem?: number; elf?: string; errors: { file: string; line: number; msg: string }[] }
 /** the last compiled C program */
 let cprog: CProgram | null = null;
 /** the hardware last flashed (veryl files, top, pins, mode): only the program changed -> swap it */
 let boardHw = '';
 
-/** the project's C program (one .c file) */
-function cFile(): VFile | undefined { return proj.files.find(f => f.name.endsWith('.c')); }
+/** a project for the RV64 board (machine.json with an exchange area): its C programs run on Linux */
+function boardProject(): boolean { return !!machineCfg()?.files; }
 
-async function compileC(c: Core): Promise<CProgram> {
-  const f = cFile()!;
-  cprog = await c.call<CProgram>({ cmd: 'cc', src: f.src, name: f.name });
+/** the project's C program (one .c file; on the board: the one open, else the last one run, else the first) */
+function cFile(): VFile | undefined {
+  const cs = proj.files.filter(f => f.name.endsWith('.c'));
+  if (boardProject()) return cs.find(f => f.name === proj.active) ?? cs.find(f => f.name === boardFile) ?? cs[0];
+  return cs[0];
+}
+
+async function compileC(c: Core, f = cFile()!): Promise<CProgram> {
+  cprog = await c.call<CProgram>({ cmd: 'cc', src: f.src, name: f.name, linux: boardProject() });
   return cprog;
 }
 
@@ -571,6 +595,7 @@ function cProblems(r: CProgram): typeof problems {
 /** run the C program on the instruction-set simulator: its serial output in the Output panel */
 async function runC(): Promise<void> {
   if (!core || !cFile()) { alert(tr('這個專案沒有 .c 檔', 'This project has no .c file')); return; }
+  if (boardProject()) { runOnBoard(); return; }
   const f = cFile()!;
   const input = prompt(tr('要從序列埠送給程式的文字（可以空白）', 'Text the program receives on the serial port (may be empty)'), '') ?? '';
   const r = await core.call<CProgram & { run?: { tx: string; halted: boolean; error: string | null; instret: number; cycles: number; led: number } }>({ cmd: 'cc', src: f.src, name: f.name, run: 5_000_000, input: input ? input + '\r' : '' });
@@ -859,17 +884,18 @@ function machineCfg(): MachineCfg | null {
   try { return JSON.parse(f.src) as MachineCfg; } catch { return null; }
 }
 
-/** the project's files for the board (not the hardware: Veryl, machine.json, pins) as an exchange area */
-function projectArea(): Uint8Array {
+/** the project's files for the board (not the hardware: Veryl, machine.json, pins) and programs as an exchange area */
+function projectArea(programs: { name: string; src: Uint8Array; mode: number }[] = []): Uint8Array {
   const fs = proj.files.filter(f => !f.name.endsWith('.veryl') && f.name !== 'machine.json' && !f.name.endsWith('.pcf'));
-  return exchangeArea(tarFiles(fs));
+  return exchangeArea(tarFiles([...fs, ...programs]));
 }
 
 /** savefiles on the board: its /root (no hidden files) into the project */
 function filesBack(area: Uint8Array): string {
   const t = readExchangeArea(area);
   if (!t) return tr('板子沒有送回檔案', 'The board sent no files');
-  const got = untarFiles(t).filter(f => !f.name.split('/').some(p => p.startsWith('.')) && !f.name.includes('/'));
+  // text files only (not the compiled programs)
+  const got = untarFiles(t).filter(f => !f.name.split('/').some(p => p.startsWith('.')) && !f.name.includes('/') && !f.data.includes(0));
   for (const f of got) {
     const cur = file(f.name);
     if (cur) cur.src = f.src; else proj.files.push({ name: f.name, src: f.src });
@@ -941,6 +967,7 @@ function ensureEmu(): Emulator {
     emu.onStart = startEmu;
     emu.getParts = () => proj.piBoard ?? null;
     emu.getRun = boardRun;
+    emu.getRunFiles = boardRunFiles;
     emu.getFiles = projectArea;
     emu.onFilesBack = filesBack;
     emu.onSave = async (st) => { if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st }); };
@@ -949,8 +976,8 @@ function ensureEmu(): Emulator {
   return emu;
 }
 
-/** how the board runs a file (.py with MicroPython, .sh with the shell; null: it does not) */
-const boardCmd = (n: string): string | null => n.endsWith('.py') ? `micropython ${n}` : n.endsWith('.sh') ? `sh ${n}` : null;
+/** how the board runs a file (.py with MicroPython, .sh with the shell, .c compiled: ./NAME; null: it does not) */
+const boardCmd = (n: string): string | null => n.endsWith('.py') ? `micropython ${n}` : n.endsWith('.sh') ? `sh ${n}` : n.endsWith('.c') ? `./${n.slice(0, -2)}` : null;
 /** the last file opened that the board can run */
 let boardFile = '';
 
@@ -960,6 +987,19 @@ function boardRun(): { name: string; cmd: string } | null {
   const ok = (n: string) => !!file(n) && !!boardCmd(n);
   const n = [proj.active ?? '', boardFile, 'main.py'].find(ok) ?? proj.files.map(f => f.name).find(ok);
   return n ? { name: n, cmd: boardCmd(n)! } : null;
+}
+
+/** the exchange area for a run: the project's files, and a C program compiled (errors: the Problems panel) */
+async function boardRunFiles(r: { name: string; cmd: string }): Promise<Uint8Array | string> {
+  if (!r.name.endsWith('.c')) return projectArea();
+  if (!core) return tr('核心還沒載入', 'The core is not loaded yet');
+  const f = file(r.name)!;
+  const p = await compileC(core, f);
+  const errs = cProblems(p);
+  problems = [...errs, ...problems.filter(x => x.file !== f.name)];
+  renderProblems();
+  if (!p.compiled) { panel('problems'); return tr(`${f.name} 有 ${errs.length} 個錯誤（見「問題」面板）`, `${f.name} has ${errs.length} error(s) (see the Problems panel)`); }
+  return projectArea([{ name: f.name.slice(0, -2), src: fromBase64(p.elf!), mode: 0o755 }]);
 }
 
 function runOnBoard(): void {

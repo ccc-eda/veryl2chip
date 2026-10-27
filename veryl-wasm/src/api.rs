@@ -522,15 +522,17 @@ fn board_program(v: &Value) -> R<Value> {
 }
 
 /// Compile C for RvSoc: { src, name?, mem? (RAM bytes), run? (max instructions on the
-/// instruction-set simulator), input? (serial bytes for it) } ->
-/// { ok, compiled, asm, listing, bin (base64), size, end, symbols, errors: [{file, line, msg}], run? }
+/// instruction-set simulator), input? (serial bytes for it), linux? (an executable for the
+/// RV64 board's Linux instead: `elf`, no run) } ->
+/// { ok, compiled, asm, listing, bin (base64), size, end, symbols, errors: [{file, line, msg}], run?, elf? }
 /// (compile errors are a normal answer: ok with compiled = false)
 fn cc(v: &Value) -> R<Value> {
     use veryl_eda::rv;
     let src = v.get("src").and_then(|s| s.as_str()).ok_or("missing src")?;
     let name = v.get("name").and_then(|s| s.as_str()).unwrap_or("main.c");
     let mem = v.get("mem").and_then(|m| m.as_u64()).unwrap_or(8192) as u32;
-    let o = match rv::cc::compile(name, src, &rv::cc::Options { mem_size: mem }) {
+    let linux = v.get("linux").and_then(|l| l.as_bool()).unwrap_or(false);
+    let o = match rv::cc::compile(name, src, &rv::cc::Options { mem_size: mem, linux }) {
         Ok(o) => o,
         Err(es) => return Ok(json!({ "ok": true, "compiled": false, "errors": es.iter().map(|e| json!({ "file": e.file, "line": e.line, "msg": e.msg })).collect::<Vec<_>>() })),
     };
@@ -539,6 +541,7 @@ fn cc(v: &Value) -> R<Value> {
         "size": o.program.bytes.len(), "end": o.program.end, "mem": mem,
         "symbols": o.program.symbols.iter().filter(|s| !s.0.starts_with('.')).map(|s| json!([s.0, s.1])).collect::<Vec<_>>(), "errors": [],
     });
+    if let Some(elf) = &o.elf { out["elf"] = json!(base64(elf)); return Ok(out); }
     if let Some(n) = v.get("run").and_then(|r| r.as_u64()) {
         let mut s = rv::iss::Iss::new(&o.program.bytes, mem as usize);
         if let Some(i) = v.get("input").and_then(|i| i.as_str()) { s.rx.extend(i.bytes()); }

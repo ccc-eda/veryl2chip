@@ -1,0 +1,9 @@
+open for writing: ok
+read 36 bytes:
+line 1 of 3
+line 2 of 3
+line 3 of 3
+unlink: 0, open again: gone
+heap + ok, sum 124716
+strncmp 1 1
+x

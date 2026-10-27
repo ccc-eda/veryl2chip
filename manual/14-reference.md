@@ -87,6 +87,7 @@ v2c <子指令> [選項] FILE.veryl...
 | `-L P.lst` | 列表 |
 | `--run [N]` | 在指令集模擬器上執行（預設最多 1000 萬個指令） |
 | `--mem BYTES` | RAM 大小（預設 8192） |
+| `--linux` | RV64 開發板 Linux 的靜態執行檔（`-o` 預設是去掉 `.c` 的檔名） |
 
 ### `v2c pdk [check] [DIR]`
 

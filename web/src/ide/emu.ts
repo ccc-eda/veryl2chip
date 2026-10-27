@@ -119,6 +119,8 @@ export class Emulator {
   getParts: () => Part[] | null = () => null;
   /** the IDE: the file to run on the board and its command (null: nothing to run) */
   getRun: () => { name: string; cmd: string } | null = () => null;
+  /** the IDE: the exchange area for running it (with a compiled program), or why it cannot run */
+  getRunFiles: (r: { name: string; cmd: string }) => Promise<Uint8Array | string> = async () => this.getFiles() ?? '';
   onParts: (parts: Part[]) => void = () => {};
   private pi: PiBoard | null = null;
 
@@ -127,7 +129,7 @@ export class Emulator {
         <button class="tb-btn" data-a="boot" title="${tr('用 veryl-emu 把設計編譯成 WebAssembly，載入程式後開機', 'Compile the design to WebAssembly with veryl-emu, load the programs and boot')}">${tr('🖥 開機', '🖥 Boot')}</button>
         <button class="tb-btn" data-a="pause" disabled>⏸</button>
         <button class="tb-btn" data-a="reset" disabled title="${tr('冷開機（重新載入程式，從頭開機，不用快照）', 'Cold boot (reload the programs and boot from the start, no snapshot)')}">⟲</button>
-        <button class="tb-btn hidden" data-a="run" title="${tr('在板子上執行這個檔案（.py 用 MicroPython、.sh 用 shell）：先停掉正在跑的程式，再把專案的檔案送進 /root', 'Run this file on the board (.py with MicroPython, .sh with the shell): stops the running program, then puts the project\'s files into /root')}">▶</button>
+        <button class="tb-btn hidden" data-a="run" title="${tr('在板子上執行這個檔案（.py 用 MicroPython、.sh 用 shell、.c 編譯成執行檔）：先停掉正在跑的程式，再把專案的檔案送進 /root', 'Run this file on the board (.py with MicroPython, .sh with the shell, .c compiled to a program): stops the running program, then puts the project\'s files into /root')}">▶</button>
         <button class="tb-btn ghost" data-a="files" disabled title="${tr('把專案的檔案（Veryl 與 machine.json 以外）放進板子的 /root（板子上打 savefiles 送回專案）', 'Put the project\'s files (other than Veryl and machine.json) into /root on the board (savefiles on the board sends them back)')}">${tr('⇅ 檔案', '⇅ Files')}</button>
         <button class="tb-btn ghost" data-a="save" disabled title="${tr('存下目前的狀態（存在這個瀏覽器；下次開機從這裡繼續）', 'Save the current state (in this browser; the next boot continues from here)')}">💾</button>
         <button class="tb-btn ghost" data-a="upload" title="${tr('載入自己的程式（ELF 或二進位檔，放在 RAM 的開頭）再開機', 'Load your own program (ELF or a binary at the start of the RAM), then boot')}">${tr('📂 程式', '📂 Program')}</button>
@@ -271,11 +273,13 @@ export class Emulator {
   /** run the IDE's file on the board (booting it first when it is off) */
   async run(): Promise<void> {
     const r = this.getRun();
-    if (!r) { this.note(tr('專案裡沒有可以在板子上執行的檔案（.py 或 .sh）', 'The project has no file to run on the board (.py or .sh)')); return; }
+    if (!r) { this.note(tr('專案裡沒有可以在板子上執行的檔案（.py、.sh 或 .c）', 'The project has no file to run on the board (.py, .sh or .c)')); return; }
+    const area = await this.getRunFiles(r);
+    if (typeof area === 'string') { this.note(area); return; }
     if (this.state === 'off' || this.state === 'end') { await this.boot(); if (!this.w) return; }
     if (!this.last?.cfg.files) { this.note(tr('這台機器沒有交換區（machine.json 的 files），不能把檔案放進去', 'This machine has no exchange area (machine.json "files"): files cannot go in')); return; }
     if (this.state === 'pause') this.pauseResume();
-    this.w!.postMessage({ type: 'run', area: this.getFiles(), cmd: r.cmd });
+    this.w!.postMessage({ type: 'run', area, cmd: r.cmd });
     this.note(tr(`在板子上執行 ${r.name}：${r.cmd}（Ctrl-C 停止）`, `Running ${r.name} on the board: ${r.cmd} (Ctrl-C stops it)`));
     this.inEl.focus();
   }

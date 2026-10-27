@@ -48,6 +48,7 @@ Hello from C on a RISC-V you built in Veryl!
 | `-L PROG.lst` | 列表：位址、機器碼、組合語言與 C 原始碼對照 |
 | `--run [N]` | 在指令集模擬器上執行最多 N 個指令（預設 1000 萬）。序列埠的輸出印到螢幕；結束時印出指令數、時脈數與 LED |
 | `--mem BYTES` | RAM 大小（預設 8192，與 RvSoc 相同） |
+| `--linux` | 改成給 RV64 開發板的 Linux 的靜態執行檔（見下面的「在開發板的 Linux 上」） |
 
 程式跑到 `main` 結束會停在 `_halt`（顯示 `halted`）；永遠不結束的程式在 N 個指令後停下（顯示 `stopped`）。
 `--run` 不會把鍵盤輸入送給程式；要互動（`getchar`、`read_line`）請用虛擬開發板的 USB 終端機。
@@ -91,6 +92,21 @@ Hello from C on a RISC-V you built in Veryl!
 | `switches.c` | 開關顯示在 LED，終端機印出二進位 / 十六進位 |
 | `vga.c` | VGA 文字模式（`RvVgaBoard`） |
 | `threads.c` | 小小的搶佔式多執行緒核心：計時器中斷切換執行緒、`ecall` 做 yield / sleep、`amoswap` 互斥鎖 |
+
+## 在開發板的 Linux 上（v2.20）
+
+`v2c cc PROG.c --linux -o PROG` 把同樣的 C 編成 RV64 開發板（`examples/rv64`，第 11 章的模擬機）上 Linux 的靜態 ELF 執行檔：
+
+- 資料模型不變：`int`、`long`、指標都是 4 個位元組（像 x32）。程式是 RV64 指令，算 32 位元整數用 `addw`、`mulw` 等 *W 指令，
+  所以暫存器裡永遠是「32 位元、符號延伸」的值；程式載入在 0x10000，自己的堆疊（256 KB）放在 bss，堆積用 `brk` 往上長，
+  程式碰到的位址都在 2 GB 以下，指標存 32 位元就夠。
+- 執行期函式庫（`prelude.c` 的 `__linux__` 部分）用系統呼叫：`open` / `read` / `write` / `close` / `lseek` / `unlink`、
+  `printf`（標準輸出一行一行緩衝）、`getchar`、`read_line`、`malloc`、`exit`、`sleep` / `usleep` / `delay_ms` / `millis`；
+  `write_file`、`read_int`；GPIO：`gpio_write(pin, v)`、`gpio_read(pin)`、`pin_mode(pin, INPUT|OUTPUT)`（0 / 1 是 ACT / USER LED，
+  2 是按鈕，其餘經 `/sys/class/gpio`）。`#include <gpio.h>` 之類的 `#include` 一樣會被忽略（函式庫一直都在）。
+- 測試：`cargo test cc_linux` 把 `src/rv/tests/*.c` 與 `tests/linux/*.c` 編成 Linux 執行檔，用 spike + pk（proxy kernel，
+  系統呼叫號碼與 Linux 相同）執行，輸出要和主機的編譯結果（`.out`）相同；`linux/test.sh` 在 Verilator / veryl-emu 上的 Linux 跑一個。
+- IDE：開發板專案裡打開 `.c` 檔按「▶ 執行」，在瀏覽器裡編譯，執行檔（檔名去掉 `.c`）和專案檔案一起送進 `/root` 執行。
 
 ## 放到 FPGA 上
 

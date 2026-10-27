@@ -11,6 +11,7 @@
 //   - -s SCRIPT: a line per "$ " prompt; the next prompt after the last line ends the run;
 //     a line "!gpio N=V" sets GPIO input N to V instead of being typed
 //   - GPIO: a change of the outputs (pins with output enable) prints "[gpio] out=…" on stderr
+//     (after the UART's current line, so the program's lines stay whole)
 //   - -t: a line per retired instruction, as `spike -l --log-commits` prints it
 //   - -m CYCLES: at most this many cycles (default 100 M; 0 = no limit)
 //   - -d ADDR:LEN:FILE: at the end, write LEN bytes of the RAM from ADDR to FILE (e.g. the file
@@ -110,6 +111,8 @@ if (!scripted && process.stdin.isTTY) {
   process.stdin.on('data', (d) => { for (const b of d) rx.push(b === 10 ? 13 : b); });
 }
 const out = [];
+/** a GPIO change waiting for the end of the UART's line */
+let gpioNote = null;
 const flush = () => { if (out.length) { process.stdout.write(Buffer.from(out)); out.length = 0; } };
 
 const t0 = performance.now();
@@ -147,6 +150,7 @@ while (cyc < maxCycles && !done) {
         else { code = 0; done = true; }
       }
       last = ch;
+      if (gpioNote && ch === '\n') { flush(); process.stderr.write(gpioNote); gpioNote = null; }
     }
     if (fin.get()) {
       const v = finCode.get();
@@ -158,7 +162,14 @@ while (cyc < maxCycles && !done) {
     if (rxValid.get()) { rxValid.set(0); emu.settle(); }
   }
   // GPIO outputs (looked at between run slices)
-  { const g = gpioOut.get() & gpioOe.get(); if (g !== gpioSeen) { gpioSeen = g; flush(); process.stderr.write(`[gpio] out=0x${g.toString(16).padStart(4, '0')}\n`); } }
+  {
+    const g = gpioOut.get() & gpioOe.get();
+    if (g !== gpioSeen) {
+      gpioSeen = g;
+      gpioNote = `[gpio] out=0x${g.toString(16).padStart(4, '0')}\n`;
+      if (last === '\n' || last === '') { flush(); process.stderr.write(gpioNote); gpioNote = null; }
+    }
+  }
   if (tohostAt >= 0) {
     const v = emu.u64[tohostAt / 8];
     if (v !== 0n) {
@@ -172,6 +183,7 @@ while (cyc < maxCycles && !done) {
   if (!scripted && process.stdin.isTTY) await new Promise((r) => setImmediate(r));
 }
 flush();
+if (gpioNote) process.stderr.write(gpioNote);
 for (const [a, len, f] of dumps) fs.writeFileSync(f, emu.u8.subarray(ramInfo.off + Number(a - RAM_BASE), ramInfo.off + Number(a - RAM_BASE) + len));
 if (!scripted && process.stdin.isTTY) process.stdin.setRawMode(false);
 const sec = (performance.now() - t0) / 1000;

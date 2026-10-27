@@ -138,6 +138,10 @@ UART 接到分頁裡的終端機。
   `micropython 檔名`（`.sh` 是 `sh 檔名`）；板子沒開時先開機。模擬機工具列的「▶ 執行 main.py」做同樣的事。
   範例：`main.py`（GPIO 5 的紅燈與 USER 燈輪流亮）、`button.py`（數按鈕次數）、`traffic.py`（麵包板上的紅黃綠燈 GPIO 5 / 12 / 13，
   GPIO 6 的按鈕讓綠燈提早結束）。
+- **C**（v2.20）：開發板專案可以有好幾個 `.c` 檔；打開一個按「▶ 執行」，IDE 用 veryl-eda 的 C 編譯器（`--linux`，見第 10 章）在瀏覽器裡
+  編成 RV64 Linux 執行檔，放進 `/root`（檔名去掉 `.c`）再執行 `./檔名`；編譯錯誤在「問題」面板。組合語言分頁顯示打開的那個 `.c`。
+  函式庫：`printf`、`delay_ms`、`gpio_write`、`gpio_read`、`pin_mode`、檔案的 `open` / `read` / `write` 等。範例 `blink.c`、`count.c`、
+  `lights.c` 對應三個 MicroPython 範例。`savefiles` 不會把編譯出來的執行檔送回專案（只收文字檔）。
 - 範例「RV64 + Linux（模擬機）」開 OpenSBI + Linux 6.12 + busybox：瀏覽器裡每秒約 370 萬拍，開到 `rv64:~$` 約 1 分鐘，
   之後就可以在終端機打指令。Linux 映像（`img_linux.js`，約 2.4 MB）第一次開機時才載入。
 - 這種專案的頂層太大，▶ 測試與合成會改成提示用模擬機（裡面的 `Rv64Core` 仍然可以合成）。

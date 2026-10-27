@@ -2,6 +2,9 @@
 //! operands, `%hi` / `%lo`), the common pseudo-instructions and data directives.
 //! Sections `.text`, `.rodata`, `.data`, `.bss` are laid out in that order from
 //! address 0 into one flat image (the SoC loads it into RAM as it is).
+//! `assemble_with` also does RV64 (the *W instructions, `ld` / `sd` / `lwu`, 6-bit
+//! shifts, `li` of a 32-bit value with `addiw`) at another origin, and `elf_linux`
+//! wraps such an image as a static Linux executable.
 
 use std::collections::HashMap;
 
@@ -23,6 +26,17 @@ pub struct Program {
     pub listing: Vec<Line>,
     /// end of all sections, bss included
     pub end: u32,
+    /// address of the first byte (0 unless `Opts::origin`)
+    pub origin: u32,
+}
+
+/// how to assemble
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Opts {
+    /// address of the image (the text section)
+    pub origin: u32,
+    /// RV64: the *W instructions, ld / sd / lwu, shifts up to 63
+    pub rv64: bool,
 }
 
 impl Program {
@@ -200,7 +214,9 @@ fn inst_size(op: &str, args: &[String]) -> u32 {
     }
 }
 
-pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
+pub fn assemble(src: &str) -> Result<Program, Vec<Error>> { assemble_with(src, Opts::default()) }
+
+pub fn assemble_with(src: &str, opts: Opts) -> Result<Program, Vec<Error>> {
     let mut errs = vec![];
     let mut stmts: Vec<Stmt> = vec![];
     let mut labels: Vec<(String, usize, u32, usize)> = vec![]; // name, section, offset, line
@@ -284,7 +300,7 @@ pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
         }
     }
     // section bases: text, rodata, data, bss (each word aligned)
-    let mut base = [0u32; 4];
+    let mut base = [opts.origin; 4];
     for s in 1..4 { base[s] = (base[s - 1] + off[s - 1] + 3) & !3; }
     let end = base[3] + off[3];
     let mut sym: HashMap<String, i64> = equ.clone();
@@ -293,7 +309,7 @@ pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
     sym.insert("__bss_end".into(), ((end + 3) & !3) as i64);
     sym.entry("__end".into()).or_insert(end as i64);
 
-    let image_len = base[2] + off[2];
+    let image_len = base[2] + off[2] - opts.origin;
     let mut bytes = vec![0u8; image_len as usize];
     let mut listing = vec![];
     for st in &stmts {
@@ -314,13 +330,13 @@ pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
                     let x = ev(v)?;
                     out.extend(&(x as u32).to_le_bytes()[..*size]);
                 },
-                Item::Inst { op, args } => for w in encode(op, args, addr, &ev)? { out.extend(w.to_le_bytes()); },
+                Item::Inst { op, args } => for w in encode(op, args, addr, &ev, opts.rv64)? { out.extend(w.to_le_bytes()); },
             }
             Ok(())
         })();
         if let Err(msg) = r { errs.push(Error { line: st.line, msg }); continue; }
         if out.len() as u32 != st.size { errs.push(Error { line: st.line, msg: format!("internal: size {} != {}", out.len(), st.size) }); continue; }
-        if st.sec != 3 { bytes[addr as usize..addr as usize + out.len()].copy_from_slice(&out); }
+        if st.sec != 3 { let a = (addr - opts.origin) as usize; bytes[a..a + out.len()].copy_from_slice(&out); }
         listing.push(Line { addr, bytes: if st.sec == 3 { vec![] } else { out }, line: st.line, text: st.text.clone() });
     }
     // lines without code (labels, comments, directives) at their address, in source order
@@ -330,7 +346,7 @@ pub fn assemble(src: &str) -> Result<Program, Vec<Error>> {
     if !errs.is_empty() { errs.sort_by_key(|e| e.line); return Err(errs); }
     let mut symbols: Vec<(String, u32)> = labels.iter().map(|(n, s, o, _)| (n.clone(), base[*s] + o)).collect();
     symbols.sort_by_key(|s| s.1);
-    Ok(Program { bytes, symbols, listing, end })
+    Ok(Program { bytes, symbols, listing, end, origin: opts.origin })
 }
 
 fn r_type(f7: u32, rs2: u32, rs1: u32, f3: u32, rd: u32, op: u32) -> u32 { f7 << 25 | rs2 << 20 | rs1 << 15 | f3 << 12 | rd << 7 | op }
@@ -356,7 +372,7 @@ fn csr_num(s: &str, ev: &dyn Fn(&str) -> Result<i64, String>) -> Result<u32, Str
     Ok(v as u32)
 }
 
-fn encode(op: &str, a: &[String], pc: u32, ev: &dyn Fn(&str) -> Result<i64, String>) -> Result<Vec<u32>, String> {
+fn encode(op: &str, a: &[String], pc: u32, ev: &dyn Fn(&str) -> Result<i64, String>, rv64: bool) -> Result<Vec<u32>, String> {
     let n = |k: usize| -> Result<(), String> { if a.len() == k { Ok(()) } else { Err(format!("{} takes {} operand{}", op, k, if k == 1 { "" } else { "s" })) } };
     let r = |i: usize| -> Result<u32, String> { let s = a.get(i).ok_or_else(|| format!("{}: missing operand", op))?; reg(s).ok_or_else(|| format!("{}: {} is not a register", op, s)) };
     let imm12 = |v: i64| -> Result<i64, String> { if fits12(v) { Ok(v) } else { Err(format!("{}: immediate {} out of range (-2048..2047)", op, v)) } };
@@ -388,6 +404,51 @@ fn encode(op: &str, a: &[String], pc: u32, ev: &dyn Fn(&str) -> Result<i64, Stri
         };
         let (rs2, rs1) = if base == "lr.w" { n(2)?; (0, addr(1)?) } else { n(3)?; (r(1)?, addr(2)?) };
         return Ok(vec![(f5 as u32) << 27 | ord << 25 | rs2 << 20 | rs1 << 15 | 2 << 12 | r(0)? << 7 | 0x2f]);
+    }
+    // ---- RV64 ----
+    if rv64 {
+        match op {
+            "addw" | "subw" | "sllw" | "srlw" | "sraw" | "mulw" | "divw" | "divuw" | "remw" | "remuw" => {
+                n(3)?;
+                let (f3, f7) = match op { "addw" => (0, 0), "subw" => (0, 0x20), "sllw" => (1, 0), "srlw" => (5, 0), "sraw" => (5, 0x20),
+                    "mulw" => (0, 1), "divw" => (4, 1), "divuw" => (5, 1), "remw" => (6, 1), _ => (7, 1) };
+                return Ok(vec![r_type(f7, r(2)?, r(1)?, f3, r(0)?, 0x3b)]);
+            }
+            "addiw" => { n(3)?; return Ok(vec![i_type(imm12(ev(&a[2])?)?, r(1)?, 0, r(0)?, 0x1b)]); }
+            "slliw" | "srliw" | "sraiw" => {
+                n(3)?;
+                let s = ev(&a[2])?;
+                if !(0..32).contains(&s) { return Err(format!("{}: shift {} out of range", op, s)); }
+                let (f3, f7) = match op { "slliw" => (1, 0), "srliw" => (5, 0), _ => (5, 0x20) };
+                return Ok(vec![i_type(s | f7 << 5, r(1)?, f3, r(0)?, 0x1b)]);
+            }
+            "slli" | "srli" | "srai" => {
+                n(3)?;
+                let s = ev(&a[2])?;
+                if !(0..64).contains(&s) { return Err(format!("{}: shift {} out of range", op, s)); }
+                let (f3, f7) = match op { "slli" => (1, 0), "srli" => (5, 0), _ => (5, 0x20) };
+                return Ok(vec![i_type(s | f7 << 5, r(1)?, f3, r(0)?, 0x13)]);
+            }
+            "negw" => { n(2)?; return Ok(vec![r_type(0x20, r(1)?, 0, 0, r(0)?, 0x3b)]); }
+            "sext.w" => { n(2)?; return Ok(vec![i_type(0, r(1)?, 0, r(0)?, 0x1b)]); }
+            "ld" | "lwu" => { n(2)?; let (o, b) = mem(1)?; return Ok(vec![i_type(imm12(o)?, b, if op == "ld" { 3 } else { 6 }, r(0)?, 0x03)]); }
+            "sd" => { n(2)?; let (o, b) = mem(1)?; return Ok(vec![s_type(imm12(o)?, r(0)?, b, 3, 0x23)]); }
+            "li" => {
+                // a 32-bit value, sign-extended (lui + addiw)
+                n(2)?;
+                let v = ev(&a[1])?;
+                let rd = r(0)?;
+                if !(-0x8000_0000..=0xffff_ffff).contains(&v) { return Err(format!("li: {} does not fit 32 bits", v)); }
+                let v = v as u32 as i32 as i64;
+                let small = parse_num(&a[1]).is_some();
+                if small && fits12(v) { return Ok(vec![i_type(v, 0, 0, rd, 0x13)]); }
+                if small && v & 0xfff == 0 { return Ok(vec![((v as u32) & 0xfffff000) | rd << 7 | 0x37]); }
+                let hi = ((v + 0x800) >> 12) & 0xfffff;
+                let lo = ((v & 0xfff) ^ 0x800) - 0x800;
+                return Ok(vec![(hi as u32) << 12 | rd << 7 | 0x37, i_type(lo, rd, 0, rd, 0x1b)]);
+            }
+            _ => {}
+        }
     }
     let alu_i = ["addi", "slti", "sltiu", "xori", "ori", "andi"];
     let alu_r = ["add", "sub", "sll", "slt", "sltu", "xor", "srl", "sra", "or", "and"];
@@ -544,4 +605,36 @@ pub fn listing_text(p: &Program) -> String {
         s += &format!("{:04x}  {:<18} {}\n", l.addr, words.join(" "), l.text);
     }
     s
+}
+
+/// a static RV64 Linux executable (ELF64) of an image assembled at `p.origin` (a multiple of
+/// 4 KB): one loadable segment (read, write, execute) with the bss, entry at `_start`
+pub fn elf_linux(p: &Program) -> Vec<u8> {
+    let entry = p.symbol("_start").unwrap_or(p.origin) as u64;
+    let mut e = vec![0u8; 0x1000];
+    e[..16].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let put = |e: &mut Vec<u8>, at: usize, v: &[u8]| e[at..at + v.len()].copy_from_slice(v);
+    put(&mut e, 16, &2u16.to_le_bytes()); // ET_EXEC
+    put(&mut e, 18, &243u16.to_le_bytes()); // EM_RISCV
+    put(&mut e, 20, &1u32.to_le_bytes());
+    put(&mut e, 24, &entry.to_le_bytes());
+    put(&mut e, 32, &64u64.to_le_bytes()); // program headers
+    put(&mut e, 40, &0u64.to_le_bytes()); // no section headers
+    put(&mut e, 48, &0u32.to_le_bytes()); // flags: no C, soft float
+    put(&mut e, 52, &64u16.to_le_bytes());
+    put(&mut e, 54, &56u16.to_le_bytes());
+    put(&mut e, 56, &1u16.to_le_bytes());
+    put(&mut e, 58, &64u16.to_le_bytes());
+    // PT_LOAD: file offset 0x1000 = the image at p.origin
+    let ph = 64;
+    put(&mut e, ph, &1u32.to_le_bytes());
+    put(&mut e, ph + 4, &7u32.to_le_bytes()); // R W X
+    put(&mut e, ph + 8, &0x1000u64.to_le_bytes());
+    put(&mut e, ph + 16, &(p.origin as u64).to_le_bytes());
+    put(&mut e, ph + 24, &(p.origin as u64).to_le_bytes());
+    put(&mut e, ph + 32, &(p.bytes.len() as u64).to_le_bytes());
+    put(&mut e, ph + 40, &((p.end - p.origin) as u64).to_le_bytes());
+    put(&mut e, ph + 48, &0x1000u64.to_le_bytes());
+    e.extend(&p.bytes);
+    e
 }

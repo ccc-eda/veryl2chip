@@ -339,6 +339,15 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const cOf = (e) => e.files.find((f) => f.name.endsWith('.c'));
   const sizes = [];
   for (const e of ctx.VERYL_EXAMPLES.filter((x) => cOf(x))) {
+    // the RV64 board's programs: compiled for its Linux (they run in the emulator test)
+    if (e.emu) {
+      for (const c of e.files.filter((f) => f.name.endsWith('.c'))) {
+        const r = core.call({ cmd: 'cc', src: c.src, name: c.name, linux: true });
+        if (!r.compiled || !r.elf) problems.push(`${e.id}: ${c.name}: ${r.errors.map((x) => x.line + ': ' + x.msg).join('; ')}`);
+        else sizes.push(`${c.name} ${Math.round(r.elf.length * 0.75)} (Linux)`);
+      }
+      continue;
+    }
     const c = cOf(e);
     const r = core.call({ cmd: 'cc', src: c.src, name: c.name, run: 300000 });
     if (!r.compiled) { problems.push(`${e.id}: ${r.errors.map((x) => x.line + ': ' + x.msg).join('; ')}`); continue; }
@@ -489,7 +498,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
 
 // the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine
 // (emu_machine.ts, as in the page's worker) boots its image far enough to print; the
-// development board also: GPIO from the shell, the snapshot, files in and out, MicroPython
+// development board also: GPIO from the shell, the snapshot, files in and out, MicroPython, C
 {
   const { Machine, machineStops, fingerprint } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
   // the breadboard model and the development board's default breadboard (bundled for Node)
@@ -571,6 +580,20 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
             const mOk = o.includes('MP ' + (45n * 2n ** 64n)) && (r4.oe >> 13 & 1) === 1 && r4.duty[13] > 0.99;
             ok = mOk;
             what += `; MicroPython ${mOk ? `lights GPIO 13 (${Date.now() - t2} ms)` : 'FAILED ' + JSON.stringify(o.slice(-300))}`;
+          }
+          // a C program compiled for the board's Linux (cc with linux), put into /root and run
+          if (ok) {
+            const T = createRequire(import.meta.url)(tarPath);
+            const c = core.call({ cmd: 'cc', name: 'ct.c', linux: true, src: 'int main(void) { gpio_write(12, 1); printf("C %d %u\\n", gpio_read(13), 0xffffffffu / 3); return 5; }\n' });
+            m2.writeArea(T.exchangeArea(T.tarFiles([{ name: 'ct', src: fromBase64(c.elf), mode: 0o755 }])));
+            const cmd5 = 'getfiles > /dev/null; ./ct; echo "C exit $?"\r';
+            let o = '';
+            m2.input([...cmd5].map((ch) => ch.charCodeAt(0)));
+            while (m2.cycle < 3_000_000_000 && !/C exit \d+/.test(o)) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const r5 = m2.step(100_000);
+            const cOk = c.compiled && o.includes('C 1 1431655765') && o.includes('C exit 5') && r5.duty[12] > 0.99;
+            ok = cOk;
+            what += `; C (${c.elf ? Math.round(c.elf.length * 0.75) : 0} bytes) ${cOk ? 'runs and lights GPIO 12' : 'FAILED ' + JSON.stringify(c.compiled ? o.slice(-300) : c.errors)}`;
           }
         }
       }

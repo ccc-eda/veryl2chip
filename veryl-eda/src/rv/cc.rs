@@ -15,6 +15,13 @@
 //! to a0, intermediate values are pushed on the stack, locals live in the
 //! frame (s0 = frame pointer). Each statement is preceded by a comment with its
 //! C source line, so the assembly reads alongside the program.
+//!
+//! `Options::linux` compiles for the RV64 board's Linux (examples/rv64) instead: a
+//! static ELF executable at 0x10000 with the same 32-bit data model (int, long and
+//! pointers are 4 bytes, like x32): the code is RV64 with the *W instructions, so a
+//! register always holds a 32-bit value sign-extended, and everything the program
+//! addresses (code, data, its own stack in the bss, the heap) lies below 2 GB. The
+//! runtime library (`__linux__` in prelude.c) uses system calls.
 
 use super::asm;
 use std::collections::{HashMap, HashSet};
@@ -27,14 +34,22 @@ pub struct Diag { pub file: String, pub line: usize, pub msg: String }
 pub struct Options {
     /// RAM size in bytes: the stack starts at its top
     pub mem_size: u32,
+    /// a program for Linux on RV64 (examples/rv64): `Output::elf`
+    pub linux: bool,
 }
 
-impl Default for Options { fn default() -> Self { Options { mem_size: 8192 } } }
+impl Default for Options { fn default() -> Self { Options { mem_size: 8192, linux: false } } }
 
 pub struct Output {
     pub asm: String,
     pub program: asm::Program,
+    /// the executable (Linux)
+    pub elf: Option<Vec<u8>>,
 }
+
+/// where a Linux program is loaded, and its stack (in the bss)
+pub const LINUX_ORIGIN: u32 = 0x10000;
+const LINUX_STACK: u32 = 256 * 1024;
 
 // ------------------------------------------------------------------ tokens
 
@@ -809,13 +824,28 @@ struct Gen<'a> {
     last_line: (usize, usize),
     /// generating only for a type (sizeof): no code kept
     dry: usize,
+    /// RV64: 32-bit arithmetic with the *W instructions
+    rv64: bool,
+}
+
+/// the RV64 form of an instruction that computes a 32-bit int (sign-extended)
+fn w_form(s: &str) -> String {
+    let (op, rest) = s.split_once(' ').unwrap_or((s, ""));
+    match op {
+        "add" | "sub" | "mul" | "div" | "divu" | "rem" | "remu" | "sll" | "srl" | "sra" | "addi" | "slli" | "srli" | "srai" | "neg" => format!("{}w {}", op, rest),
+        _ => s.to_string(),
+    }
 }
 
 /// arguments: 8 words at s0 - 40 .. s0 - 12 (ascending, so `...` arguments follow the named ones)
 const ARGS: i32 = 40;
 
 impl Gen<'_> {
-    fn emit(&mut self, s: impl Into<String>) { self.out.push(format!("    {}", s.into())); }
+    fn emit(&mut self, s: impl Into<String>) {
+        let s = s.into();
+        let s = if self.rv64 { w_form(&s) } else { s };
+        self.out.push(format!("    {}", s));
+    }
     fn label(&mut self, l: &str) { self.out.push(format!("{}:", l)); }
     fn new_label(&mut self) -> String { self.lab += 1; format!(".L{}", self.lab) }
     fn error(&mut self, e: &E, m: String) { if self.dry == 0 { self.errs.push(Diag { file: self.files[e.file].clone(), line: e.line, msg: m }); } }
@@ -1271,7 +1301,7 @@ impl Gen<'_> {
             match args { [E { k: EK::Str(text), .. }] => {
                 let text = String::from_utf8_lossy(text).to_string();
                 for n in asm_names(&text) { if self.funcs.contains_key(&n) || self.globals.contains_key(&n) { self.refs.insert(n); } }
-                for l in text.lines() { if !l.trim().is_empty() { self.emit(l.trim()); } }
+                for l in text.lines() { if !l.trim().is_empty() { self.out.push(format!("    {}", l.trim())); } }
             } _ => self.error(e, "asm takes one string of assembly".into()) }
             return Ty::Void;
         }
@@ -1601,7 +1631,8 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     let files = vec!["<runtime>".to_string(), name.to_string()];
     let mut pre = Pre { macros: HashMap::new(), errs: vec![], files: &files };
     pre.macros.insert("__VERYL2CHIP__".into(), Macro { params: None, variadic: false, body: vec![Token { t: Tok::Num(1, false), file: 0, line: 0 }] });
-    pre.macros.insert("RAM_SIZE".into(), Macro { params: None, variadic: false, body: vec![Token { t: Tok::Num(opts.mem_size as i64, false), file: 0, line: 0 }] });
+    if opts.linux { pre.macros.insert("__linux__".into(), Macro { params: None, variadic: false, body: vec![Token { t: Tok::Num(1, false), file: 0, line: 0 }] }); }
+    else { pre.macros.insert("RAM_SIZE".into(), Macro { params: None, variadic: false, body: vec![Token { t: Tok::Num(opts.mem_size as i64, false), file: 0, line: 0 }] }); }
     let mut toks = vec![];
     pre.run(0, PRELUDE, &mut toks);
     pre.run(1, src, &mut toks);
@@ -1613,7 +1644,7 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     let mut g = Gen {
         files: &files, user_file: 1, src_lines: vec![PRELUDE.lines().map(|s| s.to_string()).collect(), src.lines().map(|s| s.to_string()).collect()],
         globals: HashMap::new(), funcs: HashMap::new(), scopes: vec![], frame: 0, max_frame: 0, out: vec![], lab: 0, brk: vec![], cont: vec![], cases: vec![],
-        strings: vec![], refs: HashSet::new(), ret_ty: Ty::Void, ret_lab: String::new(), errs: vec![], last_line: (usize::MAX, 0), dry: 0,
+        strings: vec![], refs: HashSet::new(), ret_ty: Ty::Void, ret_lab: String::new(), errs: vec![], last_line: (usize::MAX, 0), dry: 0, rv64: opts.linux,
     };
     for (n, t, f, l) in &protos {
         if let Some(old) = g.funcs.get(n) { if old != t { g.error_at(*f, *l, format!("{} declared twice with different types", n)); } }
@@ -1662,6 +1693,8 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     // reachability
     let mut keep: Vec<String> = vec![];
     let mut todo = vec!["main".to_string()];
+    // the start code calls exit (Linux)
+    if opts.linux { todo.push("exit".into()); }
     // what top-level assembly refers to
     for a in &asms { for n in asm_names(a) { if code.contains_key(&n) || data.contains_key(&n) { todo.push(n); } } }
     // labels defined by top-level assembly
@@ -1683,8 +1716,13 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     if !errs.is_empty() { errs.sort_by(|a, b| (a.file != *name, a.line).cmp(&(b.file != *name, b.line))); errs.dedup(); return Err(errs); }
 
     let mut s = String::new();
-    s += &format!("# compiled by veryl-eda's C compiler ({} bytes of RAM)\n    .text\n_start:\n    li sp, {}\n", opts.mem_size, opts.mem_size);
-    s += "    la t0, __bss_start\n    la t1, __bss_end\n.Lbss:\n    bgeu t0, t1, .Lmain\n    sw zero, 0(t0)\n    addi t0, t0, 4\n    j .Lbss\n.Lmain:\n    call main\n_halt:\n    j _halt\n";
+    if opts.linux {
+        // Linux clears the bss; the stack is ours (below 2 GB, see the module comment); main's value to exit
+        s += "# compiled by veryl-eda's C compiler for RV64 Linux (32-bit int, long and pointers)\n    .text\n_start:\n    la sp, __stack_top\n    call main\n    call exit\n";
+    } else {
+        s += &format!("# compiled by veryl-eda's C compiler ({} bytes of RAM)\n    .text\n_start:\n    li sp, {}\n", opts.mem_size, opts.mem_size);
+        s += "    la t0, __bss_start\n    la t1, __bss_end\n.Lbss:\n    bgeu t0, t1, .Lmain\n    sw zero, 0(t0)\n    addi t0, t0, 4\n    j .Lbss\n.Lmain:\n    call main\n_halt:\n    j _halt\n";
+    }
     // functions in source order (runtime first), then top-level assembly
     for f in &funcs {
         if keep.contains(&f.name) {
@@ -1710,9 +1748,12 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
             if init { for l in out { s += l; s.push('\n'); } } else { s += &format!("    .zero {}\n", d.ty.size()); }
         }
     }
-    let program = asm::assemble(&s).map_err(|es| es.into_iter().map(|e| Diag { file: format!("{} (assembly)", name), line: e.line, msg: e.msg }).collect::<Vec<_>>())?;
+    if opts.linux { s += &format!("\n    .bss\n    .balign 16\n__stack:\n    .zero {}\n__stack_top:\n", LINUX_STACK); }
+    let ao = if opts.linux { asm::Opts { origin: LINUX_ORIGIN, rv64: true } } else { asm::Opts::default() };
+    let program = asm::assemble_with(&s, ao).map_err(|es| es.into_iter().map(|e| Diag { file: format!("{} (assembly)", name), line: e.line, msg: e.msg }).collect::<Vec<_>>())?;
+    if opts.linux { let elf = asm::elf_linux(&program); return Ok(Output { asm: s, program, elf: Some(elf) }); }
     if program.end + 256 > opts.mem_size {
         return Err(vec![Diag { file: name.into(), line: 1, msg: format!("the program needs {} bytes; the RAM has {} (and the stack needs room)", program.end, opts.mem_size) }]);
     }
-    Ok(Output { asm: s, program })
+    Ok(Output { asm: s, program, elf: None })
 }

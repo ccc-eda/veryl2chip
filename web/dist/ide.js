@@ -4175,6 +4175,8 @@ ${lines.join("\n")}
       __publicField(this, "getParts", () => null);
       /** the IDE: the file to run on the board and its command (null: nothing to run) */
       __publicField(this, "getRun", () => null);
+      /** the IDE: the exchange area for running it (with a compiled program), or why it cannot run */
+      __publicField(this, "getRunFiles", async () => this.getFiles() ?? "");
       __publicField(this, "onParts", () => {
       });
       __publicField(this, "pi", null);
@@ -4184,7 +4186,7 @@ ${lines.join("\n")}
         <button class="tb-btn" data-a="boot" title="${tr("\u7528 veryl-emu \u628A\u8A2D\u8A08\u7DE8\u8B6F\u6210 WebAssembly\uFF0C\u8F09\u5165\u7A0B\u5F0F\u5F8C\u958B\u6A5F", "Compile the design to WebAssembly with veryl-emu, load the programs and boot")}">${tr("\u{1F5A5} \u958B\u6A5F", "\u{1F5A5} Boot")}</button>
         <button class="tb-btn" data-a="pause" disabled>\u23F8</button>
         <button class="tb-btn" data-a="reset" disabled title="${tr("\u51B7\u958B\u6A5F\uFF08\u91CD\u65B0\u8F09\u5165\u7A0B\u5F0F\uFF0C\u5F9E\u982D\u958B\u6A5F\uFF0C\u4E0D\u7528\u5FEB\u7167\uFF09", "Cold boot (reload the programs and boot from the start, no snapshot)")}">\u27F2</button>
-        <button class="tb-btn hidden" data-a="run" title="${tr("\u5728\u677F\u5B50\u4E0A\u57F7\u884C\u9019\u500B\u6A94\u6848\uFF08.py \u7528 MicroPython\u3001.sh \u7528 shell\uFF09\uFF1A\u5148\u505C\u6389\u6B63\u5728\u8DD1\u7684\u7A0B\u5F0F\uFF0C\u518D\u628A\u5C08\u6848\u7684\u6A94\u6848\u9001\u9032 /root", "Run this file on the board (.py with MicroPython, .sh with the shell): stops the running program, then puts the project's files into /root")}">\u25B6</button>
+        <button class="tb-btn hidden" data-a="run" title="${tr("\u5728\u677F\u5B50\u4E0A\u57F7\u884C\u9019\u500B\u6A94\u6848\uFF08.py \u7528 MicroPython\u3001.sh \u7528 shell\u3001.c \u7DE8\u8B6F\u6210\u57F7\u884C\u6A94\uFF09\uFF1A\u5148\u505C\u6389\u6B63\u5728\u8DD1\u7684\u7A0B\u5F0F\uFF0C\u518D\u628A\u5C08\u6848\u7684\u6A94\u6848\u9001\u9032 /root", "Run this file on the board (.py with MicroPython, .sh with the shell, .c compiled to a program): stops the running program, then puts the project's files into /root")}">\u25B6</button>
         <button class="tb-btn ghost" data-a="files" disabled title="${tr("\u628A\u5C08\u6848\u7684\u6A94\u6848\uFF08Veryl \u8207 machine.json \u4EE5\u5916\uFF09\u653E\u9032\u677F\u5B50\u7684 /root\uFF08\u677F\u5B50\u4E0A\u6253 savefiles \u9001\u56DE\u5C08\u6848\uFF09", "Put the project's files (other than Veryl and machine.json) into /root on the board (savefiles on the board sends them back)")}">${tr("\u21C5 \u6A94\u6848", "\u21C5 Files")}</button>
         <button class="tb-btn ghost" data-a="save" disabled title="${tr("\u5B58\u4E0B\u76EE\u524D\u7684\u72C0\u614B\uFF08\u5B58\u5728\u9019\u500B\u700F\u89BD\u5668\uFF1B\u4E0B\u6B21\u958B\u6A5F\u5F9E\u9019\u88E1\u7E7C\u7E8C\uFF09", "Save the current state (in this browser; the next boot continues from here)")}">\u{1F4BE}</button>
         <button class="tb-btn ghost" data-a="upload" title="${tr("\u8F09\u5165\u81EA\u5DF1\u7684\u7A0B\u5F0F\uFF08ELF \u6216\u4E8C\u9032\u4F4D\u6A94\uFF0C\u653E\u5728 RAM \u7684\u958B\u982D\uFF09\u518D\u958B\u6A5F", "Load your own program (ELF or a binary at the start of the RAM), then boot")}">${tr("\u{1F4C2} \u7A0B\u5F0F", "\u{1F4C2} Program")}</button>
@@ -4366,7 +4368,12 @@ ${lines.join("\n")}
     async run() {
       const r = this.getRun();
       if (!r) {
-        this.note(tr("\u5C08\u6848\u88E1\u6C92\u6709\u53EF\u4EE5\u5728\u677F\u5B50\u4E0A\u57F7\u884C\u7684\u6A94\u6848\uFF08.py \u6216 .sh\uFF09", "The project has no file to run on the board (.py or .sh)"));
+        this.note(tr("\u5C08\u6848\u88E1\u6C92\u6709\u53EF\u4EE5\u5728\u677F\u5B50\u4E0A\u57F7\u884C\u7684\u6A94\u6848\uFF08.py\u3001.sh \u6216 .c\uFF09", "The project has no file to run on the board (.py, .sh or .c)"));
+        return;
+      }
+      const area = await this.getRunFiles(r);
+      if (typeof area === "string") {
+        this.note(area);
         return;
       }
       if (this.state === "off" || this.state === "end") {
@@ -4378,7 +4385,7 @@ ${lines.join("\n")}
         return;
       }
       if (this.state === "pause") this.pauseResume();
-      this.w.postMessage({ type: "run", area: this.getFiles(), cmd: r.cmd });
+      this.w.postMessage({ type: "run", area, cmd: r.cmd });
       this.note(tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${r.name}\uFF1A${r.cmd}\uFF08Ctrl-C \u505C\u6B62\uFF09`, `Running ${r.name} on the board: ${r.cmd} (Ctrl-C stops it)`));
       this.inEl.focus();
     }
@@ -4440,11 +4447,11 @@ ${lines.join("\n")}
   function tarFiles(files) {
     const parts = [];
     for (const f of files) {
-      const body = enc.encode(f.src);
+      const body = typeof f.src === "string" ? enc.encode(f.src) : f.src;
       const h = new Uint8Array(512);
       const put = (s, at2) => h.set(enc.encode(s).subarray(0, s.length), at2);
       put(f.name.slice(0, 99), 0);
-      put(octal(420, 8), 100);
+      put(octal(f.mode ?? 420, 8), 100);
       put(octal(0, 8), 108);
       put(octal(0, 8), 116);
       put(octal(body.length, 12), 124);
@@ -4479,7 +4486,10 @@ ${lines.join("\n")}
       const size = parseInt(str(124, 12).trim() || "0", 8);
       const type = String.fromCharCode(h[156] || 48);
       at += 512;
-      if (type === "0" || type === "\0") out.push({ name: name.replace(/^\.\//, ""), src: dec.decode(t.subarray(at, at + size)) });
+      if (type === "0" || type === "\0") {
+        const data = t.slice(at, at + size);
+        out.push({ name: name.replace(/^\.\//, ""), src: dec.decode(data), data });
+      }
       at += Math.ceil(size / 512) * 512;
     }
     return out;
@@ -5114,11 +5124,11 @@ ${lines.join("\n")}
     }
     const base = name.replace(/\.\w+$/, "").replace(/(^|[_-])(\w)/g, (_, _a, c) => c.toUpperCase()).replace(/\W/g, "");
     const m = /^[A-Za-z]/.test(base) ? base : "M" + base;
-    if (name.endsWith(".c") && cFile()) {
+    if (name.endsWith(".c") && cFile() && !boardProject()) {
       alert(tr("\u4E00\u500B\u5C08\u6848\u53EA\u80FD\u6709\u4E00\u500B .c \u6A94", "A project has one .c file"));
       return;
     }
-    proj.files.push({ name, src: name.endsWith(".veryl") ? newModule(m) : name.endsWith(".c") ? C_TEMPLATE : "" });
+    proj.files.push({ name, src: name.endsWith(".veryl") ? newModule(m) : name.endsWith(".c") ? boardProject() ? C_BOARD_TEMPLATE : C_TEMPLATE : "" });
     openFile(name);
     changed();
   }
@@ -5384,14 +5394,35 @@ int main(void) {
     }
 }
 `;
+  var C_BOARD_TEMPLATE = `// A C program for the RV64 board's Linux: \u25B6 Run compiles it in the browser and runs it
+// in /root. Library: printf, puts, getchar, read_line, sleep, usleep, delay_ms, millis,
+// open / read / write / close, malloc, strlen ...; GPIO: gpio_write, gpio_read, pin_mode
+// (0 / 1 = ACT / USER LED, 2 = the button, 3-15 the header).
+
+int main(void) {
+    int i;
+    for (i = 0; i < 5; i++) {
+        gpio_write(5, 1);
+        delay_ms(500);
+        gpio_write(5, 0);
+        delay_ms(500);
+        printf("blink %d\\n", i + 1);
+    }
+    return 0;
+}
+`;
   var cprog = null;
   var boardHw = "";
-  function cFile() {
-    return proj.files.find((f) => f.name.endsWith(".c"));
+  function boardProject() {
+    return !!machineCfg()?.files;
   }
-  async function compileC(c) {
-    const f = cFile();
-    cprog = await c.call({ cmd: "cc", src: f.src, name: f.name });
+  function cFile() {
+    const cs = proj.files.filter((f) => f.name.endsWith(".c"));
+    if (boardProject()) return cs.find((f) => f.name === proj.active) ?? cs.find((f) => f.name === boardFile) ?? cs[0];
+    return cs[0];
+  }
+  async function compileC(c, f = cFile()) {
+    cprog = await c.call({ cmd: "cc", src: f.src, name: f.name, linux: boardProject() });
     return cprog;
   }
   function cProblems(r) {
@@ -5401,6 +5432,10 @@ int main(void) {
   async function runC() {
     if (!core || !cFile()) {
       alert(tr("\u9019\u500B\u5C08\u6848\u6C92\u6709 .c \u6A94", "This project has no .c file"));
+      return;
+    }
+    if (boardProject()) {
+      runOnBoard();
       return;
     }
     const f = cFile();
@@ -5672,14 +5707,14 @@ int main(void) {
       return null;
     }
   }
-  function projectArea() {
+  function projectArea(programs = []) {
     const fs = proj.files.filter((f) => !f.name.endsWith(".veryl") && f.name !== "machine.json" && !f.name.endsWith(".pcf"));
-    return exchangeArea(tarFiles(fs));
+    return exchangeArea(tarFiles([...fs, ...programs]));
   }
   function filesBack(area) {
     const t = readExchangeArea(area);
     if (!t) return tr("\u677F\u5B50\u6C92\u6709\u9001\u56DE\u6A94\u6848", "The board sent no files");
-    const got = untarFiles(t).filter((f) => !f.name.split("/").some((p) => p.startsWith(".")) && !f.name.includes("/"));
+    const got = untarFiles(t).filter((f) => !f.name.split("/").some((p) => p.startsWith(".")) && !f.name.includes("/") && !f.data.includes(0));
     for (const f of got) {
       const cur2 = file(f.name);
       if (cur2) cur2.src = f.src;
@@ -5754,6 +5789,7 @@ int main(void) {
       emu.onStart = startEmu;
       emu.getParts = () => proj.piBoard ?? null;
       emu.getRun = boardRun;
+      emu.getRunFiles = boardRunFiles;
       emu.getFiles = projectArea;
       emu.onFilesBack = filesBack;
       emu.onSave = async (st) => {
@@ -5766,13 +5802,27 @@ int main(void) {
     }
     return emu;
   }
-  var boardCmd = (n) => n.endsWith(".py") ? `micropython ${n}` : n.endsWith(".sh") ? `sh ${n}` : null;
+  var boardCmd = (n) => n.endsWith(".py") ? `micropython ${n}` : n.endsWith(".sh") ? `sh ${n}` : n.endsWith(".c") ? `./${n.slice(0, -2)}` : null;
   var boardFile = "";
   function boardRun() {
     if (!machineCfg()?.files) return null;
     const ok = (n2) => !!file(n2) && !!boardCmd(n2);
     const n = [proj.active ?? "", boardFile, "main.py"].find(ok) ?? proj.files.map((f) => f.name).find(ok);
     return n ? { name: n, cmd: boardCmd(n) } : null;
+  }
+  async function boardRunFiles(r) {
+    if (!r.name.endsWith(".c")) return projectArea();
+    if (!core) return tr("\u6838\u5FC3\u9084\u6C92\u8F09\u5165", "The core is not loaded yet");
+    const f = file(r.name);
+    const p = await compileC(core, f);
+    const errs = cProblems(p);
+    problems = [...errs, ...problems.filter((x) => x.file !== f.name)];
+    renderProblems();
+    if (!p.compiled) {
+      panel("problems");
+      return tr(`${f.name} \u6709 ${errs.length} \u500B\u932F\u8AA4\uFF08\u898B\u300C\u554F\u984C\u300D\u9762\u677F\uFF09`, `${f.name} has ${errs.length} error(s) (see the Problems panel)`);
+    }
+    return projectArea([{ name: f.name.slice(0, -2), src: fromBase64(p.elf), mode: 493 }]);
   }
   function runOnBoard() {
     const e = ensureEmu();

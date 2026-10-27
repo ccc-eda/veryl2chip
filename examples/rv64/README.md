@@ -303,5 +303,9 @@ frozen 進 asyncio 與板子的 `pi` 模組（`linux/micropython/pi.py`、`manif
 `gchelper_generic.c` 的 register-asm 讀法，會漏掃根）。`pi` 用 `/sys/class/leds`（GPIO 0、1）與 `/sys/class/gpio`（其餘）：
 `LED`、`Button`、`Pin`。範例在 `board/`：`main.py`、`button.py`、`traffic.py`；`linux/test.sh` 用 `micropython -c` 點亮 GPIO 13、讀按鈕。
 
+C（v2.20）：`v2c cc PROG.c --linux` 把 C 編成這塊板子 Linux 的靜態執行檔（32 位元資料模型、RV64 的 *W 指令、系統呼叫；見
+`manual/10-riscv-c.md`），函式庫有 `gpio_write` / `gpio_read` / `pin_mode`。範例 `board/blink.c`、`count.c`、`lights.c`；
+`linux/test.sh` 編一個小程式放進交換區，在板子上 `./ctest` 點亮 GPIO 12、讀按鈕（需要 `veryl-eda/target/release/veryl-eda`）。
+
 測試平台（`sim/main.cpp`、`emu/rv64emu.mjs`）在輸出改變時印出 `[gpio] out=…`；`-s` 腳本裡的 `!gpio N=V` 是「把輸入腳 N 設成 V」
 （按下按鈕），不會送進終端機。`linux/test.sh` 用它檢查 LED、輸出腳、按鈕與邊緣中斷（`/proc/interrupts`）。

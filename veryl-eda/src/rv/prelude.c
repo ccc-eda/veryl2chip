@@ -1,6 +1,8 @@
-// The runtime library of veryl-eda's C compiler for RvSoc (examples/src/rvsoc.veryl).
+// The runtime library of veryl-eda's C compiler for RvSoc (examples/src/rvsoc.veryl)
+// and, with __linux__, for programs on the RV64 board's Linux (examples/rv64).
 // It is always compiled with the program; only the functions the program uses are kept.
 
+#ifndef __linux__
 // ---- the SoC's peripherals (memory mapped) ----
 #define LED         (*(volatile unsigned *)0x10000000)  // 8 LEDs (PMOD1A), read / write
 #define BUTTONS     (*(volatile unsigned *)0x10000004 & 7)         // bit 0..2 = BTN1..BTN3 (1 = pressed)
@@ -18,6 +20,7 @@
 #define VGA_COLOR   (*(volatile unsigned *)0x10006000)      // foreground | background << 16 (0xRGB each)
 #define VGA_COLS    40
 #define VGA_ROWS    30
+#endif
 
 #define NULL ((void *)0)
 
@@ -70,6 +73,63 @@ int __modsi3(int a, int b) {
     return neg ? -(int)r : (int)r;
 }
 
+#ifdef __linux__
+// ---- Linux system calls (ecall, the number in a7): the program is an RV64 process ----
+int __syscall(int n, int a, int b, int c, int d) { asm("mv a7, a0\n mv a0, a1\n mv a1, a2\n mv a2, a3\n mv a3, a4\n ecall\n ret"); }
+
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_RDWR   2
+#define O_CREAT  64
+#define O_TRUNC  512
+#define O_APPEND 1024
+#define EOF      (-1)
+
+// open a file (O_CREAT makes it with mode 0644, a third argument is ignored); a file descriptor, or a negative error
+int open(char *path, int flags, ...) { return __syscall(56, -100, (int)path, flags, 0644); }
+int read(int fd, void *buf, int n) { return __syscall(63, fd, (int)buf, n, 0); }
+int write(int fd, void *buf, int n) { return __syscall(64, fd, (int)buf, n, 0); }
+int close(int fd) { return __syscall(57, fd, 0, 0, 0); }
+int lseek(int fd, int off, int whence) { return __syscall(62, fd, off, whence, 0); }
+int unlink(char *path) { return __syscall(35, -100, (int)path, 0, 0); }
+int getpid(void) { return __syscall(172, 0, 0, 0, 0); }
+
+// standard output is buffered: a line at a time
+char __obuf[256];
+int __on;
+void __flush(void) { if (__on) { write(1, __obuf, __on); __on = 0; } }
+#define stdout 1
+int fflush(int f) { __flush(); return 0; }
+
+void exit(int code) { __flush(); __syscall(94, code, 0, 0, 0); }
+
+int putchar(int c) {
+    __obuf[__on++] = c;
+    if (c == '\n' || __on == 256) __flush();
+    return c;
+}
+
+// the next byte of standard input (the terminal gives a line at a time), EOF at the end
+int getchar(void) {
+    char c;
+    __flush();
+    if (read(0, &c, 1) != 1) return EOF;
+    return c;
+}
+
+// memory: grows the program's break (free does nothing)
+char *__brk;
+void *malloc(int n) {
+    char *p;
+    if (!__brk) __brk = (char *)__syscall(214, 0, 0, 0, 0);
+    n = (n + 7) & ~7;
+    if (__syscall(214, (int)(__brk + n), 0, 0, 0) != (int)(__brk + n)) return NULL;
+    p = __brk;
+    __brk = __brk + n;
+    return p;
+}
+void free(void *p) {}
+#else
 // ---- the serial port (USB terminal) ----
 int putchar(int c) {
     if (c == '\n') putchar('\r');
@@ -85,6 +145,7 @@ int getchar(void) {
 
 // 1 when a received byte is waiting (getchar will not wait)
 int kbhit(void) { return (UART_STATUS & 2) != 0; }
+#endif
 
 int puts(char *s) {
     while (*s) putchar(*s++);
@@ -160,6 +221,43 @@ int sprintf(char *buf, char *fmt, ...) {
     return n;
 }
 
+#ifdef __linux__
+// read a line from standard input (the terminal echoes it) into buf, without the newline; its length (-1 at the end)
+int read_line(char *buf, int size) {
+    int n = 0, c;
+    while ((c = getchar()) != '\n') {
+        if (c == EOF) { if (n == 0) return -1; break; }
+        if (n < size - 1) buf[n++] = c;
+    }
+    buf[n] = 0;
+    return n;
+}
+
+// ---- time ----
+int __ts[4];
+// milliseconds since boot
+unsigned millis(void) { __syscall(113, 1, (int)__ts, 0, 0); return __ts[0] * 1000 + __ts[2] / 1000000; }
+
+int usleep(int us) {
+    __flush();
+    __ts[0] = us / 1000000;
+    __ts[1] = 0;
+    __ts[2] = us % 1000000 * 1000;
+    __ts[3] = 0;
+    return __syscall(101, (int)__ts, 0, 0, 0);
+}
+unsigned sleep(unsigned s) {
+    __flush();
+    __ts[0] = s;
+    __ts[1] = 0;
+    __ts[2] = 0;
+    __ts[3] = 0;
+    __syscall(101, (int)__ts, 0, 0, 0);
+    return 0;
+}
+void delay_ms(int ms) { usleep(ms * 1000); }
+void delay_us(int us) { usleep(us); }
+#else
 // read a line from the terminal (echoed, backspace works) into buf; its length
 int read_line(char *buf, int size) {
     int n = 0;
@@ -187,6 +285,7 @@ void delay_us(int us) {
     unsigned n = us * 12;
     while (TIMER - start < n) ;
 }
+#endif
 
 // ---- small helpers from the C library ----
 unsigned __rand_state = 1;
@@ -207,6 +306,18 @@ int strlen(char *s) {
 int strcmp(char *a, char *b) {
     while (*a && *a == *b) { a++; b++; }
     return *a - *b;
+}
+
+int strncmp(char *a, char *b, int n) {
+    while (n > 0 && *a && *a == *b) { a++; b++; n--; }
+    return n == 0 ? 0 : *a - *b;
+}
+
+char *strcat(char *d, char *s) {
+    char *r = d;
+    while (*d) d++;
+    while ((*d++ = *s++)) ;
+    return r;
 }
 
 char *strcpy(char *d, char *s) {
@@ -236,6 +347,84 @@ int atoi(char *s) {
     return neg ? -n : n;
 }
 
+#ifdef __linux__
+// ---- files: a whole string into a file, a number from a file ----
+int write_file(char *path, char *s) {
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) return fd;
+    write(fd, s, strlen(s));
+    return close(fd);
+}
+int read_int(char *path) {
+    char b[24];
+    int fd = open(path, O_RDONLY), n;
+    if (fd < 0) return fd;
+    n = read(fd, b, 23);
+    close(fd);
+    if (n < 0) return n;
+    b[n] = 0;
+    return atoi(b);
+}
+
+// ---- the board's GPIO (gpio.h): pins 0 and 1 are the ACT and USER LEDs, 2 the button,
+// 3-15 the header; the others go through /sys/class/gpio (exported on first use) ----
+#define INPUT  0
+#define OUTPUT 1
+int __gpio_base = -1;
+int __gpio_dir[16];
+
+// the GPIO controller's first number (/sys/class/gpio/gpiochipN)
+int gpio_base(void) {
+    char buf[1024];
+    int fd, n, i = 0;
+    if (__gpio_base >= 0) return __gpio_base;
+    fd = open("/sys/class/gpio", 65536);
+    if (fd < 0) return fd;
+    n = __syscall(61, fd, (int)buf, 1024, 0);
+    close(fd);
+    while (i < n) {
+        if (strncmp(buf + i + 19, "gpiochip", 8) == 0) { __gpio_base = atoi(buf + i + 27); break; }
+        i += buf[i + 16] | buf[i + 17] << 8;
+    }
+    return __gpio_base;
+}
+
+char __gpio_path[64];
+char *__gpio_file(int pin, char *what) {
+    if (pin < 2) sprintf(__gpio_path, "/sys/class/leds/%s/%s", pin ? "user" : "act", what);
+    else sprintf(__gpio_path, "/sys/class/gpio/gpio%d/%s", gpio_base() + pin, what);
+    return __gpio_path;
+}
+
+// make a pin an input or an output (output starts at 0)
+void pin_mode(int pin, int mode) {
+    char num[12];
+    if (pin < 0 || pin > 15) return;
+    if (pin < 2) { write_file(__gpio_file(pin, "trigger"), "none"); __gpio_dir[pin] = OUTPUT + 1; return; }
+    if (read_int(__gpio_file(pin, "value")) < 0) { sprintf(num, "%d", gpio_base() + pin); write_file("/sys/class/gpio/export", num); }
+    write_file(__gpio_file(pin, "direction"), mode == OUTPUT ? "low" : "in");
+    __gpio_dir[pin] = mode + 1;
+}
+
+// set an output pin (the first write makes it an output)
+void gpio_write(int pin, int value) {
+    if (pin < 0 || pin > 15) return;
+    if (__gpio_dir[pin] != OUTPUT + 1) pin_mode(pin, OUTPUT);
+    write_file(__gpio_file(pin, pin < 2 ? "brightness" : "value"), value ? "1" : "0");
+}
+
+// read a pin: 0 or 1 (the first read of a pin nobody exported makes it an input; an output reads its level)
+int gpio_read(int pin) {
+    int v;
+    if (pin < 0 || pin > 15) return -1;
+    if (pin < 2) return read_int(__gpio_file(pin, "brightness")) != 0;
+    if (__gpio_dir[pin]) return read_int(__gpio_file(pin, "value"));
+    v = read_int(__gpio_file(pin, "value"));
+    if (v < 0) { pin_mode(pin, INPUT); v = read_int(__gpio_file(pin, "value")); }
+    else __gpio_dir[pin] = INPUT + 1;
+    return v;
+}
+#else
 // ---- VGA text mode (RvVgaBoard): 40 x 30 characters, the cursor moves like a terminal's ----
 // (the screen memory cannot be read back, so the text wraps to the top instead of scrolling)
 unsigned char __font[760] = {
@@ -333,7 +522,7 @@ int vga_printf(char *fmt, ...) {
     return 0;
 }
 
-// ---- machine mode (RvCore: RV32IMA + Zicsr): interrupts, CSRs, atomics ----
+// ---- machine mode (RvCore: RV32IMA + Zicsr): interrupts, CSRs ----
 // Functions with only asm in them are "naked": the assembly is the whole function.
 #define MIE_MSIE 0x8      // software interrupt   (mcause 0x80000003)
 #define MIE_MTIE 0x80     // timer interrupt      (mcause 0x80000007)
@@ -355,6 +544,7 @@ unsigned read_mip(void) { asm("csrr a0, mip\n ret"); }
 unsigned read_minstret(void) { asm("csrr a0, minstret\n ret"); }
 unsigned read_mscratch(void) { asm("csrr a0, mscratch\n ret"); }
 void write_mscratch(unsigned v) { asm("csrw mscratch, a0\n ret"); }
+#endif
 
 // atomic read-modify-write (A extension): each returns the old value
 int atomic_swap(volatile int *p, int v) { asm("amoswap.w a0, a1, (a0)\n ret"); }

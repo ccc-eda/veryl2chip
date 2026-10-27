@@ -1,20 +1,20 @@
 // A small ustar writer / reader for the emulator's file exchange (busybox tar on the
-// board reads and writes this format). Regular files only; no DOM.
+// board reads and writes this format). Regular files only (text or bytes); no DOM.
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 function octal(n: number, len: number): string { return n.toString(8).padStart(len - 1, '0') + '\0'; }
 
-/** a tar of the files (name -> text), each with mode 0644 */
-export function tarFiles(files: { name: string; src: string }[]): Uint8Array {
+/** a tar of the files (text or bytes), mode 0644 unless given (0755: a program) */
+export function tarFiles(files: { name: string; src: string | Uint8Array; mode?: number }[]): Uint8Array {
   const parts: Uint8Array[] = [];
   for (const f of files) {
-    const body = enc.encode(f.src);
+    const body = typeof f.src === 'string' ? enc.encode(f.src) : f.src;
     const h = new Uint8Array(512);
     const put = (s: string, at: number) => h.set(enc.encode(s).subarray(0, s.length), at);
     put(f.name.slice(0, 99), 0);
-    put(octal(0o644, 8), 100);
+    put(octal(f.mode ?? 0o644, 8), 100);
     put(octal(0, 8), 108);
     put(octal(0, 8), 116);
     put(octal(body.length, 12), 124);
@@ -35,9 +35,9 @@ export function tarFiles(files: { name: string; src: string }[]): Uint8Array {
   return out;
 }
 
-/** the regular files of a tar (name without a leading "./", text) */
-export function untarFiles(t: Uint8Array): { name: string; src: string }[] {
-  const out: { name: string; src: string }[] = [];
+/** the regular files of a tar (name without a leading "./", text, and the bytes) */
+export function untarFiles(t: Uint8Array): { name: string; src: string; data: Uint8Array }[] {
+  const out: { name: string; src: string; data: Uint8Array }[] = [];
   for (let at = 0; at + 512 <= t.length;) {
     const h = t.subarray(at, at + 512);
     if (h.every((b) => b === 0)) break;
@@ -48,7 +48,7 @@ export function untarFiles(t: Uint8Array): { name: string; src: string }[] {
     const size = parseInt(str(124, 12).trim() || '0', 8);
     const type = String.fromCharCode(h[156] || 0x30);
     at += 512;
-    if (type === '0' || type === '\0') out.push({ name: name.replace(/^\.\//, ''), src: dec.decode(t.subarray(at, at + size)) });
+    if (type === '0' || type === '\0') { const data = t.slice(at, at + size); out.push({ name: name.replace(/^\.\//, ''), src: dec.decode(data), data }); }
     at += Math.ceil(size / 512) * 512;
   }
   return out;

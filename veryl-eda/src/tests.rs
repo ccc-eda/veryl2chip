@@ -1067,6 +1067,42 @@ fn cc_programs() {
     assert!(n >= 3);
 }
 
+/// the same programs, and those in tests/linux (system calls: files, the heap), compiled
+/// for Linux on RV64 (`Options::linux`) and run with spike's proxy kernel (pk: the same
+/// system call numbers as Linux): the same output. Without spike / pk (SPIKE, PK) only
+/// the executables are checked.
+#[test]
+fn cc_linux_programs() {
+    let dir = format!("{}/src/rv/tests", env!("CARGO_MANIFEST_DIR"));
+    let spike = std::env::var("SPIKE").unwrap_or("spike".into());
+    let pk = std::env::var("PK").unwrap_or("/opt/homebrew/opt/riscv-pk/riscv64-unknown-elf/bin/pk".into());
+    let have = std::path::Path::new(&pk).exists() && std::process::Command::new(&spike).arg("--help").output().is_ok();
+    let tmp = std::env::temp_dir().join(format!("veryl_cc_linux_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut n = 0;
+    let files: Vec<std::path::PathBuf> = [dir.clone(), format!("{}/linux", dir)].iter().flat_map(|d| std::fs::read_dir(d).unwrap().map(|f| f.unwrap().path())).collect();
+    for p in files {
+        if p.extension().map(|e| e == "c") != Some(true) { continue; }
+        let name = p.file_stem().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&p).unwrap();
+        let o = crate::rv::cc::compile(&format!("{}.c", name), &src, &crate::rv::cc::Options { linux: true, ..Default::default() }).unwrap_or_else(|e| panic!("{}: {:?}", name, e));
+        let elf = o.elf.unwrap();
+        assert_eq!(&elf[..4], b"\x7fELF");
+        assert_eq!(u16::from_le_bytes([elf[18], elf[19]]), 243, "EM_RISCV");
+        n += 1;
+        if !have { continue; }
+        let exe = tmp.join(&name);
+        std::fs::write(&exe, &elf).unwrap();
+        let r = std::process::Command::new(&spike).args(["--isa=rv64imac", &pk, exe.to_str().unwrap()]).current_dir(&tmp).output().unwrap();
+        let got = String::from_utf8_lossy(&r.stdout).replace("bbl loader\r\n", "").replace("bbl loader\n", "");
+        let want = std::fs::read_to_string(p.with_extension("out")).unwrap();
+        assert_eq!(got, want, "{} (spike pk)", name);
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(n >= 4);
+    eprintln!("cc_linux_programs: {} programs{}", n, if have { " match on spike + pk" } else { " compiled (no spike / pk)" });
+}
+
 /// compile errors point at the line
 #[test]
 fn cc_errors() {

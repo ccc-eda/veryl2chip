@@ -16,6 +16,7 @@ Veryl 的逻辑综合、FPGA 与 ASIC 流程（类似 yosys `synth` / `synth_ice
               [--asic [--seed N] [-v]] [--gatesim opt|ice40|ecp5|asic|sky130] [--program PROG.bin]
               a.veryl b.veryl ...
     veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
+    veryl-eda --cc PROG.c --linux [-o PROG]      （给 RV64 开发板 Linux 的静态可执行文件）
 
 在源代码目录里也可以用 `cargo run --release -- ...`。自研布局布线需要 IceStorm 的 `chipdb-5k.txt`（OSS CAD Suite 内附，或以 `VERYL_EDA_CHIPDB` 指定）。
 

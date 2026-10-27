@@ -13,6 +13,7 @@ fn usage() -> ! {
     if let Some(cmd) = V2C.get() { eprintln!("v2c {}: wrong arguments (v2c help {})", cmd, cmd); std::process::exit(2); }
     eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
     eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc; PROG.s: assemble)");
+    eprintln!("       veryl-eda --cc PROG.c --linux [-o PROG] [-S PROG.s] [-L PROG.lst]   (C for Linux on the RV64 board: a static ELF)");
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
     eprintln!("                 [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf] [--config OUT.config] [--bit OUT.bit]]");
@@ -39,6 +40,7 @@ fn usage() -> ! {
 fn cc_main(args: &[String]) -> ! {
     let (mut src, mut out, mut asm_out, mut run, mut mem) = (None::<String>, None::<String>, None::<String>, None::<u64>, 8192u32);
     let mut lst: Option<String> = None;
+    let mut linux = false;
     let mut a = args.iter();
     while let Some(x) = a.next() {
         match x.as_str() {
@@ -46,6 +48,7 @@ fn cc_main(args: &[String]) -> ! {
             "-S" => asm_out = a.next().cloned(),
             "-L" => lst = a.next().cloned(),
             "--run" => run = Some(a.clone().next().and_then(|n| n.parse().ok()).inspect(|_| { a.next(); }).unwrap_or(10_000_000)),
+            "--linux" => linux = true,
             "--mem" => mem = a.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| usage()),
             f if !f.starts_with('-') => src = Some(f.to_string()),
             _ => usage(),
@@ -62,10 +65,20 @@ fn cc_main(args: &[String]) -> ! {
         eprintln!("{}: {} bytes", name, p.bytes.len());
         std::process::exit(0);
     }
-    let o = match rv::cc::compile(&name, &text, &rv::cc::Options { mem_size: mem }) {
+    let o = match rv::cc::compile(&name, &text, &rv::cc::Options { mem_size: mem, linux }) {
         Ok(o) => o,
         Err(es) => { for e in es { eprintln!("{}:{}: error: {}", e.file, e.line, e.msg); } std::process::exit(1) }
     };
+    if let Some(elf) = &o.elf {
+        if let Some(p) = &asm_out { std::fs::write(p, &o.asm).unwrap(); }
+        if let Some(p) = &lst { std::fs::write(p, rv::asm::listing_text(&o.program)).unwrap(); }
+        let p = out.unwrap_or_else(|| name.trim_end_matches(".c").to_string());
+        std::fs::write(&p, elf).unwrap();
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)); }
+        eprintln!("{}: {} ({} bytes, RV64 Linux)", name, p, elf.len());
+        std::process::exit(0);
+    }
     eprintln!("{}: {} bytes of code and data, {} with bss (RAM {} bytes)", name, o.program.bytes.len(), o.program.end, mem);
     if let Some(p) = &asm_out { std::fs::write(p, &o.asm).unwrap(); }
     if let Some(p) = &lst { std::fs::write(p, rv::asm::listing_text(&o.program)).unwrap(); }

@@ -78,6 +78,7 @@ asic: vlib cells, sky130: SKY130 cells) and its #[test] testbenches run against 
 example: v2c gatesim ice40 fifo.veryl"),
     ("cc", "compile C (or assemble .s) for the RISC-V SoC, run it", "\
 usage: v2c cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
+       v2c cc PROG.c --linux [-o PROG] [-S PROG.s] [-L PROG.lst]
 
 Compiles a C program (a C subset, with veryl-eda's runtime: printf, LED, UART, timer,
 interrupts, atomics, VGA text) for RvSoc (examples/src/rvsoc.veryl); a .s / .S file is
@@ -87,6 +88,8 @@ printing what it sends to the UART.
   -S PROG.s       the generated assembly
   -L PROG.lst     listing with addresses and source lines
   --mem BYTES     RAM size (default 8192)
+  --linux         a static executable for Linux on the RV64 board (examples/rv64): the same
+                  C (int, long, pointers 4 bytes), system calls for files, time and GPIO
 example: v2c cc --run examples/c/hello.c"),
     ("pdk", "check a SKY130 PDK directory (Liberty + LEF)", "\
 usage: v2c pdk [check] [DIR]

@@ -17,6 +17,7 @@ Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https:
               [--asic [--seed N] [-v]] [--gatesim opt|ice40|ecp5|asic|sky130] [--program PROG.bin]
               a.veryl b.veryl ...
     veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
+    veryl-eda --cc PROG.c --linux [-o PROG]      (a static executable for Linux on the RV64 board)
 
 In the source tree, `cargo run --release -- ...` works too. The own place & route needs IceStorm's `chipdb-5k.txt` (included in OSS CAD Suite, or point to it with `VERYL_EDA_CHIPDB`).
 
