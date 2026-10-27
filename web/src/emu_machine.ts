@@ -27,6 +27,8 @@ export interface MachineCfg {
   files?: { addr: string; size: number };
   /** a screen in the RAM (Linux's simple-framebuffer): address, size in pixels, RGB565 */
   fb?: { addr: string; width: number; height: number };
+  /** the design is Rv64Soc: riscv-emu (rv_machine.ts) can run its programs instead of veryl-emu */
+  riscv?: boolean;
 }
 
 /** a bundled or saved machine state: the memory (gzip of `Machine.snapshot()`), the cycle, the terminal so far */

@@ -612,6 +612,33 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
           }
         }
       }
+      // riscv-emu (machine.json riscv): the same board on the instruction-set emulator, from a cold boot
+      if (ok && cfg.riscv) {
+        const { RvMachine } = createRequire(import.meta.url)(path.join(dist, 'rv_machine.cjs'));
+        vm.runInContext(fs.readFileSync(path.join(dist, 'rvemu.js'), 'utf8'), ctx);
+        const T = createRequire(import.meta.url)(tarPath);
+        const rm = await RvMachine.create(fromBase64(ctx.VERYL_RVEMU_B64), cfg);
+        for (const l of cfg.load ?? []) rm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+        rm.reset();
+        const t1 = Date.now();
+        let o = '';
+        while (rm.cycle < 400_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...rm.step(1_000_000).out);
+        const boot = Date.now() - t1, bootM = rm.cycle;
+        const c = core.call({ cmd: 'cc', name: 'ct.c', linux: true, src: 'int main(void) { gpio_write(12, 1); printf("C %d\\n", 6 * 7); return 0; }\n' });
+        rm.writeArea(T.exchangeArea(T.tarFiles([{ name: 'hello.txt', src: 'hi from the IDE\n' }, { name: 'ct', src: fromBase64(c.elf), mode: 0o755 }])));
+        const cmd = 'getfiles > /dev/null; cat hello.txt; micropython -c "from pi import LED; LED(13).on(); print(\'MP\', 7 * 6)"; ./ct; echo RV$((1+1))DONE\r';
+        rm.input([...cmd].map((ch) => ch.charCodeAt(0)));
+        o = '';
+        let r = null;
+        while (rm.cycle < bootM + 200_000_000 && !o.includes('RV2DONE')) { r = rm.step(1_000_000); o += String.fromCharCode(...r.out); }
+        r = rm.step(100_000);
+        const scr = rm.screen();
+        let lit = 0;
+        for (let i = 0; i < scr.length; i += 2) if (scr[i] | scr[i + 1]) lit++;
+        const rOk = o.includes('hi from the IDE') && o.includes('MP 42') && o.includes('C 42') && r.duty[12] > 0.99 && r.duty[13] > 0.99 && lit > 100;
+        ok = rOk;
+        what += `; riscv-emu: ${rOk ? `shell after ${(bootM / 1e6).toFixed(0)} M instructions in ${boot} ms (${(bootM / boot / 1e3).toFixed(0)} MIPS), files, MicroPython, C, GPIO 12 / 13, screen` : 'FAILED ' + JSON.stringify(o.slice(-300)) + ` duty ${r?.duty?.[12]} ${r?.duty?.[13]} lit ${lit}`}`;
+      }
       if (!ok) bad++;
       const mhz = m.cycle / ((Date.now() - t0) / 1000) / 1e6;
       line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} emulator: ${r.stats.split(';')[0]}; ${what} (${mhz.toFixed(2)} MHz)`;

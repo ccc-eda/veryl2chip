@@ -1,0 +1,4 @@
+# the web build: translated blocks (src/jit.rs) go into the core's function table, which the
+# host grows and fills
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--export-table", "-C", "link-arg=--growable-table"]

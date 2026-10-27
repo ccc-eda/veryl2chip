@@ -1,6 +1,7 @@
-// The emulator's worker: runs a Machine (emu_machine.ts) in slices of about 50 ms,
+// The emulator's worker: runs a Machine (emu_machine.ts: veryl-emu's model of the design)
+// or an RvMachine (rv_machine.ts: riscv-emu, engine 'riscv') in slices of about 50 ms,
 // sends the UART output and the speed, takes typed bytes and pause / resume / reset.
-//   in:  {type: 'start', wasm, meta, cfg, images: [{bytes, addr?}], snapshot?, cycle?, files?} | {type: 'input', bytes}
+//   in:  {type: 'start', engine?, wasm, meta, cfg, images: [{bytes, addr?}], snapshot?, cycle?, files?} | {type: 'input', bytes}
 //        {type: 'files', area} (the project's files into the exchange area, then getfiles is typed)
 //        {type: 'run', area, cmd} (Ctrl-C, leave a MicroPython REPL, then at the shell prompt: the files, cd /root, getfiles, cmd)
 //        {type: 'pause'} | {type: 'resume'} | {type: 'reset'} (a cold boot) | {type: 'gpio', bits} | {type: 'save'}
@@ -10,8 +11,9 @@
 //        {type: 'fb', data} (the screen's pixels, RGB565, when they changed; at most 10 times a second)
 
 import { Machine } from './emu_machine';
+import { RvMachine } from './rv_machine';
 
-let m: Machine | null = null;
+let m: Machine | RvMachine | null = null;
 let images: { bytes: Uint8Array; addr?: string }[] = [];
 let running = false;
 let gen = 0;
@@ -73,7 +75,8 @@ async function loop(my: number): Promise<void> {
     }
     if (now - fbTime > 100) { fbTime = now; screen(); }
     if (r.finished) { running = false; post({ type: 'finished', ...r.finished, cycle: m!.cycle }); break; }
-    await new Promise((ok) => setTimeout(ok, 0));
+    // riscv-emu in real time: the hart waits (wfi), so does the worker
+    await new Promise((ok) => setTimeout(ok, 'idle' in r && r.idle ? 4 : 0));
   }
 }
 
@@ -83,7 +86,7 @@ self.onmessage = async (e: MessageEvent) => {
     if (d.type === 'start') {
       gen++;
       running = false;
-      m = await Machine.create(d.wasm, d.meta, d.cfg);
+      m = d.engine === 'riscv' ? await RvMachine.create(d.wasm, d.cfg, { realtime: true }) : await Machine.create(d.wasm, d.meta, d.cfg);
       images = d.images;
       files = d.files ?? null;
       tail = '';

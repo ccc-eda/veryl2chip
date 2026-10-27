@@ -166,6 +166,9 @@ SIM=../../riscv-emu/target/release/rvemu xv6/test.sh usertests     # 285 億個�
 riscv-emu 數指令，`mtime` 也是每個指令加一）。riscv-tests 和 spike 逐指令比對，只有 RTL 也有的四個已知差別（觸發器、marchid、
 spike 的 misa.C 可寫、spike 的 SC 隨機失敗）。
 
+瀏覽器（v2.23）：riscv-emu 也編成 59 KB 的 wasm（`web/dist/rvemu.js`，C ABI、沒有 import，`riscv-emu/src/wasm.rs`），
+IDE 的模擬機可以選它當引擎（`web/src/rv_machine.ts`，和 veryl-emu 的 `Machine` 同樣的介面），Node 上約 50 MIPS，1.6 秒開到 shell。
+
 ## veryl-emu：編譯成 WebAssembly
 
 [veryl-emu](../../veryl-emu/README.tw.md) 是我們自己的編譯式模擬器（像 Verilator，但產生 WebAssembly）：

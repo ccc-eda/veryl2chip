@@ -150,7 +150,7 @@ fn main() {
                 else if m.bus.rx.is_empty() && !scripted { break; }
                 else if m.bus.rx.is_empty() { let _ = out.flush(); eprintln!("\nidle: nothing more will happen"); code = 1; break; }
             }
-            Stop::Count => {}
+            Stop::Count | Stop::Jit => {}
         }
     }
     let _ = out.flush();

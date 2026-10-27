@@ -33,6 +33,13 @@ target/release/rvemu ../examples/rv64/linux/build/opensbi/platform/generic/firmw
   and runs are reproducible); `wfi` with nothing to do jumps to the next timer interrupt. `-r` (the default when typing at
   a terminal) follows the real clock instead.
 
+## In the browser
+
+`cargo build --release --lib --target wasm32-unknown-unknown` gives a wasm of about 60 KB without imports (`src/wasm.rs`:
+`rv_init`, `rv_run`, `rv_input`, `rv_output`, `rv_set_gpio`, `rv_gpio`, `rv_save` / `rv_restore` …, bytes through `rv_buf`,
+the RAM read and written directly at `rv_ram`). `web/build.mjs` puts it into `web/dist/rvemu.js`; the IDE's emulator drives
+it with `web/src/rv_machine.ts`, its time following the real clock (`rv_set_time`). About 50 MIPS in Node (65–85 natively).
+
 ## rvemu
 
 ```

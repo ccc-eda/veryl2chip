@@ -29,6 +29,13 @@ target/release/rvemu ../examples/rv64/linux/build/opensbi/platform/generic/firmw
 - **時間**：預設 `mtime` 每個指令加一（裝置樹說 10 MHz，所以一秒是一千萬個指令，結果可以重現）；`wfi` 沒有事情時直接跳到下一個
   計時器中斷。`-r`（在終端機打字時的預設）改成跟著真實時間走。
 
+## 瀏覽器
+
+`cargo build --release --lib --target wasm32-unknown-unknown` 得到約 60 KB、沒有 import 的 wasm（`src/wasm.rs`：`rv_init`、`rv_run`、
+`rv_input`、`rv_output`、`rv_set_gpio`、`rv_gpio`、`rv_save` / `rv_restore`…，位元組經過 `rv_buf`，RAM 直接用 `rv_ram` 讀寫）。
+`web/build.mjs` 把它放進 `web/dist/rvemu.js`，IDE 的模擬機用 `web/src/rv_machine.ts` 驅動，時間跟著真實時鐘（`rv_set_time`）。
+Node 上約 50 MIPS（原生約 65–85 MIPS）。
+
 ## rvemu
 
 ```

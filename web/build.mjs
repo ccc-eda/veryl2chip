@@ -32,6 +32,16 @@ const wasm = fs.readFileSync(wasmPath);
 fs.writeFileSync(path.join(dist, 'wasm.js'), `var VERYL_WASM_B64 = "${wasm.toString('base64')}";\n`);
 console.log(`wasm.js      ${(wasm.length / 1e6).toFixed(1)} MB wasm`);
 
+// ---- riscv-emu (the RV64 board's instruction-set emulator), loaded when an emulator uses it ----
+const rvCrate = path.join(root, 'riscv-emu');
+if (!process.argv.includes('--skip-wasm')) {
+  console.log('cargo build riscv-emu (wasm32-unknown-unknown) …');
+  execFileSync('cargo', ['build', '--release', '--lib', '--target', 'wasm32-unknown-unknown'], { cwd: rvCrate, stdio: 'inherit' });
+}
+const rvWasm = fs.readFileSync(path.join(rvCrate, 'target/wasm32-unknown-unknown/release/riscv_emu.wasm'));
+fs.writeFileSync(path.join(dist, 'rvemu.js'), `// riscv-emu (riscv-emu/src/wasm.rs) as base64\nvar VERYL_RVEMU_B64 = "${rvWasm.toString('base64')}";\n`);
+console.log(`rvemu.js     ${(rvWasm.length / 1e3).toFixed(0)} KB wasm`);
+
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
 // English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
@@ -126,7 +136,7 @@ const EX = [
     machine: { top: 'Rv64Soc', reset: { port: 'i_rst', active: 0, cycles: 2 },
       uart: { tx_valid: 'o_tx_valid', tx_data: 'o_tx_data', rx_valid: 'i_rx_valid', rx_data: 'i_rx_data', rx_ready: 'o_rx_ready' },
       finish: { valid: 'o_finish', code: 'o_finish_code', pass: 0x5555 }, ram: { array: 'mem', base: '0x80000000' }, load: [{ image: 'linux' }],
-      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi', snapshot: 'linux', prompt: 'rv64:~$ ', files: { addr: '0x8F000000', size: 16777216 }, fb: { addr: '0x8EF00000', width: 320, height: 240 } },
+      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi', snapshot: 'linux', prompt: 'rv64:~$ ', files: { addr: '0x8F000000', size: 16777216 }, fb: { addr: '0x8EF00000', width: 320, height: 240 }, riscv: true },
     note: '像樹莓派的開發板：Rv64Core（RV64IMAC、M / S / U、SV39）放在有 256 MB RAM 與 16 支腳 GPIO 的 Rv64Soc 裡，用模擬機（🖥）跑：veryl-emu 把它編成 WebAssembly，開 OpenSBI + Linux 6.12 + busybox；板上 ACT / USER LED（GPIO 0、1）、按鈕（GPIO 2），排針與麵包板上是 GPIO 3–15（和樹莓派同樣的 BCM 編號）。打開 main.py 按「▶ 執行」：專案的檔案放進 /root，MicroPython 用 pi 模組（LED、Button、Pin）跑它；button.py 數按鈕次數，traffic.py 是麵包板上的紅綠燈；blink.c、count.c、lights.c 是 C 版（▶ 執行時在瀏覽器裡編譯）；clock.py、shapes.c 在 320 × 240 的螢幕上畫圖；打 micropython 進 REPL，sh blink.sh 是 shell 版；板子上打 savefiles 送回專案' },
   { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
@@ -176,6 +186,7 @@ await esbuild.build({ entryPoints: [path.join(here, 'src/ide/main.ts')], bundle:
   define: { WORKER_SRC: JSON.stringify(workerSrc), EMU_WORKER_SRC: JSON.stringify(emuWorkerSrc) } });
 // the emulator's machine for the Node tests
 await esbuild.build({ entryPoints: [path.join(here, 'src/emu_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'emu_machine.cjs'), logLevel: 'warning' });
+await esbuild.build({ entryPoints: [path.join(here, 'src/rv_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'rv_machine.cjs'), logLevel: 'warning' });
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
 for (const f of ['index.html', 'ide.css', 'demo.html', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
 console.log('app.js, ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');

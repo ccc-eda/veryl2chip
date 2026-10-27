@@ -5,9 +5,14 @@
 //!
 //!   cpu.rs  the hart (RV64IMAC, M / S / U, Sv39, interrupts)
 //!   bus.rs  the SoC's devices (CLINT, PLIC, UART, GPIO, finisher) and the RAM
+//!   jit.rs  hot blocks translated to WebAssembly (run by wasm32 hosts)
+//!   wasm.rs the WebAssembly interface for the IDE (wasm32 only)
 
 pub mod bus;
 pub mod cpu;
+pub mod jit;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 pub use bus::RAM_BASE;
 pub use cpu::{Machine, Stop, Trap};
@@ -55,6 +60,7 @@ impl Machine {
         if !self.bus.in_ram(addr, bytes.len() as u64) { return Err(format!("0x{:x} ({} bytes) is outside the RAM", addr, bytes.len())); }
         let o = (addr - RAM_BASE) as usize;
         self.bus.ram[o..o + bytes.len()].copy_from_slice(bytes);
+        if self.jit.on { let mut p = o & !0xfff; while p < o + bytes.len() { if self.jit.has_code(p) { self.jit.invalidate_page(p); } p += 4096; } }
         Ok(())
     }
 

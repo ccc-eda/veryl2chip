@@ -1,6 +1,6 @@
 [package]
 name = "veryl2chip-riscv-emu"
-version = "2.22.0"
+version = "2.23.0"
 edition = "2021"
 description = "An RV64IMAC instruction-set emulator of veryl2chip's Rv64Soc (runs its OpenSBI + Linux)"
 license = "MIT"
@@ -9,6 +9,8 @@ publish = false
 [lib]
 name = "riscv_emu"
 path = "src/lib.rs"
+# rlib for rvemu and the tests, cdylib for the web (wasm32: src/wasm.rs)
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "rvemu"

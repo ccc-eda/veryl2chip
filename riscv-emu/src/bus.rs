@@ -64,10 +64,42 @@ impl Bus {
     /// devices back to their reset state (the RAM is kept)
     pub fn reset(&mut self) {
         let ram = std::mem::take(&mut self.ram);
-        let pins = self.gpio.pins_in;
+        let (pins, tohost) = (self.gpio.pins_in, self.tohost);
         *self = Bus::new(0);
         self.ram = ram;
         self.gpio.pins_in = pins;
+        self.tohost = tohost;
+    }
+
+    /// the devices' registers as words (`Machine::state`), and back
+    pub fn state(&self) -> Vec<u64> {
+        let (u, g, p) = (&self.uart, &self.gpio, &self.plic);
+        let mut v = vec![self.mtime, self.mtimecmp, self.msip as u64,
+            u.ier as u64, u.lcr as u64, u.mcr as u64, u.scr as u64, u.fcr as u64, u.dll as u64, u.dlm as u64, u.rx_full as u64, u.rx_byte as u64, u.thre_pend as u64];
+        v.extend([g.input_en, g.output_en, g.out_val, g.pue, g.ds, g.rise_ie, g.rise_ip, g.fall_ie, g.fall_ip, g.high_ie, g.high_ip, g.low_ie, g.low_ip,
+            g.iof_en, g.iof_sel, g.out_xor, g.iv].map(|x| x as u64));
+        v.extend(p.prio.iter().map(|x| *x as u64));
+        v.extend([p.en[0] as u64, p.en[1] as u64, p.thr[0] as u64, p.thr[1] as u64, p.claimed as u64]);
+        v
+    }
+    pub fn set_state(&mut self, v: &[u64]) {
+        [self.mtime, self.mtimecmp] = [v[0], v[1]];
+        self.msip = v[2] != 0;
+        let u = &mut self.uart;
+        [u.ier, u.lcr, u.mcr, u.scr] = [v[3] as u8, v[4] as u8, v[5] as u8, v[6] as u8];
+        u.fcr = v[7] != 0;
+        [u.dll, u.dlm] = [v[8] as u8, v[9] as u8];
+        u.rx_full = v[10] != 0;
+        u.rx_byte = v[11] as u8;
+        u.thre_pend = v[12] != 0;
+        let g = &mut self.gpio;
+        let w: Vec<u32> = v[13..30].iter().map(|x| *x as u32).collect();
+        [g.input_en, g.output_en, g.out_val, g.pue, g.ds, g.rise_ie, g.rise_ip, g.fall_ie, g.fall_ip, g.high_ie, g.high_ip, g.low_ie, g.low_ip,
+            g.iof_en, g.iof_sel, g.out_xor, g.iv] = w.try_into().unwrap();
+        for k in 0..32 { self.plic.prio[k] = v[30 + k] as u8; }
+        self.plic.en = [v[62] as u32, v[63] as u32];
+        self.plic.thr = [v[64] as u8, v[65] as u8];
+        self.plic.claimed = v[66] as u32;
     }
 
     #[inline]

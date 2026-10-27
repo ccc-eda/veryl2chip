@@ -42,7 +42,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.19 | 2026-10-27 | `c239ae3` | 2.19.0：開發板 5：MicroPython | |
 | v2.20 | 2026-10-27 | `8bd9404` | 2.20.0：開發板 6：C 程式 | |
 | v2.21 | 2026-10-27 | `dfdddd2` | 2.21.0：開發板 7：螢幕 | |
-| v2.22 | 2026-10-27 | （本版） | 2.22.0：riscv-emu 1：指令集模擬器 | |
+| v2.22 | 2026-10-27 | `9ded8c5` | 2.22.0：riscv-emu 1：指令集模擬器 | |
+| v2.23 | 2026-10-27 | （本版） | 2.23.0：riscv-emu 2：IDE 的引擎 | |
 
 ---
 
@@ -481,6 +482,18 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   veryl-emu 107 秒）；xv6 `usertests` 全過（285 億個指令，5.6 分鐘，84 MIPS）。`cargo test`：手組的小程式、壓縮指令、
   riscv-tests 與 Linux（有建置時）。
 - 根目錄的 `build.sh`、`test.sh` 與 CI 加上 riscv-emu。
+
+### v2.23：riscv-emu 2，IDE 的引擎
+
+- `riscv-emu/src/wasm.rs`：C ABI（`rv_*`），一個 instance 一台機器，位元組經過 `rv_buf`，RAM 直接讀寫；`Machine::state` / `set_state`
+  與 `rv_save` / `rv_restore`（暫存器、CSR、周邊、RAM 的非零頁）。編成 59 KB、沒有 import 的 wasm（crate 加上 `cdylib`）。
+- `web/src/rv_machine.ts`：`RvMachine`，和 veryl-emu 的 `Machine` 同樣的介面（load、reset、writeArea / readArea、screen、input、setGpio、
+  snapshot / restore、step 回傳輸出與 GPIO 佔空比），`realtime` 時 mtime 跟著 `performance.now()`，hart 在 wfi 時回報 `idle`，worker 就睡 4 ms。
+- IDE：`machine.json` 的 `riscv`；模擬機工具列的引擎選單（預設 riscv-emu，存在專案的 `emuEngine`），換引擎就重新開機；狀態列顯示 MIPS；
+  存下的狀態以 `riscv-emu:<wasm 大小>` 當指紋。`build.mjs` 建 `dist/rvemu.js` 與 `dist/rv_machine.cjs`。
+- 驗證：npm test 在 Node 上用 riscv-emu 冷開機（約 1.6 秒、50 MIPS），檔案、MicroPython、C、GPIO 12 / 13、螢幕；瀏覽器實測開機、
+  執行 `shapes.c`、切換兩種引擎。
+- 下一版的翻譯器（`jit.rs`、wasm 的 `rv_jit*` 與 `jit_ld` / `jit_st` / `jit_ar`、匯出可成長的函式表）已經在這版的程式裡，但沒有打開。
 
 ---
 

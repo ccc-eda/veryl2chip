@@ -52,9 +52,13 @@ const MEIP: u64 = 1 << 11;
 const STCE: u64 = 1 << 63;
 const ADUE: u64 = 1 << 61;
 
+/// repr(C): translated blocks (jit.rs) find x, pc and jit_fault at fixed offsets
+#[repr(C)]
 pub struct Machine {
     pub x: [u64; 32],
     pub pc: u64,
+    /// set by the translated code's helpers: 1 = a trap (in `jit.trap`), 2 = a store hit translated code
+    pub jit_fault: u64,
     pub prv: u64,
     mstatus: u64, medeleg: u64, mideleg: u64, mie: u64, mip_sw: u64,
     mtvec: u64, mepc: u64, mcause: u64, mtval: u64, mscratch: u64, mcounteren: u64, menvcfg: u64,
@@ -82,11 +86,13 @@ pub struct Machine {
     pub last_prv: u64,
     /// mtime is set by the caller from a clock (else it counts instructions)
     pub realtime: bool,
+    /// translation to WebAssembly (wasm32 hosts)
+    pub jit: crate::jit::State,
 }
 
 /// what `run` stopped for
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Stop { Count, Finished, Idle }
+pub enum Stop { Count, Finished, Idle, Jit }
 
 fn sext(v: u64, bits: u32) -> u64 { (((v << (64 - bits)) as i64) >> (64 - bits)) as u64 }
 
@@ -96,7 +102,9 @@ impl Machine {
     /// the reset: pc = 0x8000_0000 in machine mode, CSRs and devices cleared (the RAM is kept)
     pub fn reset(&mut self) {
         let bus = std::mem::replace(&mut self.bus, Bus::new(0));
-        *self = Machine { bus, ..Machine::blank() };
+        let mut jit = std::mem::take(&mut self.jit);
+        jit.clear();
+        *self = Machine { bus, jit, ..Machine::blank() };
         self.bus.reset();
     }
 
@@ -106,7 +114,7 @@ impl Machine {
             mscratch: 0, mcounteren: 0, menvcfg: 0, stvec: 0, sepc: 0, scause: 0, stval: 0, sscratch: 0, scounteren: 0,
             senvcfg: 0, satp: 0, stimecmp: u64::MAX, pmpcfg: [0; 2], pmpaddr: [0; 16], instret: 0, instret_off: 0, cycle_off: 0, resv: None,
             tlb: vec![Tlb { tag: u64::MAX, page: 0, pte: 0 }; TLB_N], bus: Bus::new(0), check: true, timer_next: 0, waiting: false,
-            last_wr: None, last_insn: 0, last_pc: 0, last_prv: 0, realtime: false,
+            last_wr: None, last_insn: 0, last_pc: 0, last_prv: 0, realtime: false, jit_fault: 0, jit: Default::default(),
         }
     }
 
@@ -145,6 +153,7 @@ impl Machine {
     }
 
     pub fn trap(&mut self, t: Trap) {
+        self.jit.at_block = true;
         let irq = t.cause & INT != 0;
         let code = t.cause & 63;
         let deleg = if irq { self.mideleg } else { self.medeleg };
@@ -171,7 +180,7 @@ impl Machine {
 
     // ------------------------------------------------------------ memory
 
-    fn flush_tlb(&mut self) { for e in self.tlb.iter_mut() { e.tag = u64::MAX; } }
+    fn flush_tlb(&mut self) { for e in self.tlb.iter_mut() { e.tag = u64::MAX; } self.jit.flush_tlb(); }
 
     /// may this access use a page with these PTE bits?
     fn perm_ok(&self, pte: u64, acc: Acc, prv: u64) -> bool {
@@ -255,6 +264,7 @@ impl Machine {
             let o = (pa - RAM_BASE) as usize;
             self.bus.ram[o..o + size as usize].copy_from_slice(&v.to_le_bytes()[..size as usize]);
             if Some(pa) == self.bus.tohost && v != 0 { self.bus.tohost_val = v; }
+            if self.jit.on && self.jit.has_code(o) { self.jit.invalidate_page(o); self.jit.hit = true; }
             return Ok(());
         }
         self.check = true;
@@ -357,6 +367,7 @@ impl Machine {
                 let mut v = v;
                 if v >> 11 & 3 == 2 { v &= !MPP; }
                 if (self.mstatus ^ v) & (MPRV | SUM | MXR) != 0 { /* permissions only: the TLB keeps leaves */ }
+                if (self.mstatus ^ v) & (MPRV | SUM | MXR | MPP) != 0 { self.jit.flush_tlb(); }
                 self.mstatus = (self.mstatus & !MSTATUS_W) | (v & MSTATUS_W);
             }
             0x301 => {}
@@ -370,7 +381,10 @@ impl Machine {
             0x344 => self.mip_sw = (self.mip_sw & !(SSIP | STIP | SEIP)) | (v & (SSIP | STIP | SEIP)),
             0x3a0 => self.pmpcfg[0] = v, 0x3a2 => self.pmpcfg[1] = v, 0x3a4..=0x3af => {},
             0x3b0..=0x3bf => self.pmpaddr[(n - 0x3b0) as usize] = v & ((1 << 54) - 1), 0x3c0..=0x3ef => {},
-            0x100 => self.mstatus = (self.mstatus & !SSTATUS_W) | (v & SSTATUS_W),
+            0x100 => {
+                if (self.mstatus ^ v) & (SUM | MXR) != 0 { self.jit.flush_tlb(); }
+                self.mstatus = (self.mstatus & !SSTATUS_W) | (v & SSTATUS_W);
+            }
             0x104 => self.mie = (self.mie & !self.mideleg) | (v & self.mideleg),
             0x105 => self.stvec = v & !2,
             0x106 => self.scounteren = v & 7,
@@ -404,6 +418,14 @@ impl Machine {
                     continue;
                 }
             }
+            if self.jit.on && self.jit.at_block {
+                self.jit.at_block = false;
+                match self.jit_block() {
+                    crate::jit::Step::Ran => continue,
+                    crate::jit::Step::Request => { self.jit.at_block = true; return Stop::Jit; }
+                    crate::jit::Step::No => {}
+                }
+            }
             if self.waiting {
                 if self.mip() & self.mie != 0 { self.waiting = false; continue; }
                 if !self.bus.rx.is_empty() { self.check = true; continue; }
@@ -435,6 +457,60 @@ impl Machine {
             Err(t) => self.trap(t),
         }
         if !self.realtime { self.bus.mtime += 1; }
+    }
+
+    /// a load for translated code (f3 of the load: size and sign); a RAM page goes into the
+    /// translated code's TLB of this privilege
+    pub fn jit_load(&mut self, va: u64, f3: u32) -> Result<u64, Trap> {
+        let size = 1u32 << (f3 & 3);
+        if va & (size as u64 - 1) != 0 { return Err(exc(4, va)); }
+        let pa = self.translate(va, Acc::Load)?;
+        let v = self.read_pa(pa, size, va, Acc::Load)?;
+        if self.bus.in_ram(pa, size as u64) && (self.prv != 3 || self.mstatus & MPRV == 0) {
+            let host = self.bus.ram.as_ptr() as u64 + ((pa & !0xfff) - RAM_BASE);
+            self.jit.fill(false, self.prv, va, host);
+        }
+        Ok(match f3 { 0 => sext(v, 8), 1 => sext(v, 16), 2 => sext(v, 32), _ => v })
+    }
+    pub fn jit_store(&mut self, va: u64, v: u64, f3: u32) -> Result<(), Trap> {
+        let size = 1u32 << (f3 & 3);
+        if va & (size as u64 - 1) != 0 { return Err(exc(6, va)); }
+        let pa = self.translate(va, Acc::Store)?;
+        self.write_pa(pa, size, v, va)?;
+        let page = pa & !0xfff;
+        if self.bus.in_ram(pa, size as u64) && (self.prv != 3 || self.mstatus & MPRV == 0) && !self.jit.has_code((page - RAM_BASE) as usize)
+            && self.bus.tohost.map(|t| t & !0xfff) != Some(page) {
+            let host = self.bus.ram.as_ptr() as u64 + (page - RAM_BASE);
+            self.jit.fill(true, self.prv, va, host);
+        }
+        Ok(())
+    }
+
+    /// at the start of a block: run its translation, or count it (and ask for one when it is hot)
+    fn jit_block(&mut self) -> crate::jit::Step {
+        use crate::jit::Step;
+        let va = self.pc;
+        let Ok(pa) = self.translate(va, Acc::Fetch) else { return Step::No };
+        if !self.bus.in_ram(pa, 2) { return Step::No; }
+        if let Some((f, n)) = self.jit.lookup(pa, va) {
+            self.jit_fault = 0;
+            self.jit.hit = false;
+            let k = crate::jit::call(f, self) as u64;
+            let _ = n;
+            self.instret += k;
+            if !self.realtime { self.bus.mtime += k; }
+            if self.jit_fault == 1 { let t = self.jit.trap.take().unwrap(); self.trap(t); }
+            self.jit.at_block = true;
+            self.jit.blocks_run += 1;
+            return Step::Ran;
+        }
+        if self.jit.hot(pa, va) {
+            let o = (pa - RAM_BASE) as usize;
+            let end = ((o | 0xfff) + 1).min(self.bus.ram.len());
+            let tlbs = self.jit.tlb_addrs();
+            if let Some((m, n)) = crate::jit::compile(va, &self.bus.ram[o..end], tlbs) { self.jit.request = Some((pa, va, m, n)); return Step::Request; }
+        }
+        Step::No
     }
 
     #[inline]
@@ -625,7 +701,57 @@ impl Machine {
             }
             _ => return Err(ill),
         }
+        // a jump, a branch, SYSTEM, FENCE, AMO: the next instruction may start a translated block
+        if matches!(i & 0x7f, 0x6f | 0x67 | 0x63 | 0x73 | 0x0f | 0x2f) { self.jit.at_block = true; }
         self.pc = next;
+        Ok(())
+    }
+
+    /// what multiply-high, divide and remainder give (translated code's `ar` helper: kind = f3, + 8 for the W forms)
+    pub fn arith(a: u64, b: u64, kind: u32) -> u64 {
+        let (x, y) = (a as u32, b as u32);
+        let w = |v: u32| v as i32 as i64 as u64;
+        match kind {
+            1 => ((a as i64 as i128 * b as i64 as i128) >> 64) as u64,
+            2 => ((a as i64 as i128 * b as u128 as i128) >> 64) as u64,
+            3 => ((a as u128 * b as u128) >> 64) as u64,
+            4 => if b == 0 { u64::MAX } else if a as i64 == i64::MIN && b as i64 == -1 { a } else { ((a as i64) / (b as i64)) as u64 },
+            5 => if b == 0 { u64::MAX } else { a / b },
+            6 => if b == 0 { a } else if a as i64 == i64::MIN && b as i64 == -1 { 0 } else { ((a as i64) % (b as i64)) as u64 },
+            7 => if b == 0 { a } else { a % b },
+            12 => if y == 0 { u64::MAX } else if x as i32 == i32::MIN && y as i32 == -1 { w(x) } else { ((x as i32) / (y as i32)) as i64 as u64 },
+            13 => if y == 0 { u64::MAX } else { w(x / y) },
+            14 => if y == 0 { w(x) } else if x as i32 == i32::MIN && y as i32 == -1 { 0 } else { ((x as i32) % (y as i32)) as i64 as u64 },
+            _ => if y == 0 { w(x) } else { w(x % y) },
+        }
+    }
+
+    /// the hart's and the devices' state (not the RAM) as words, and back
+    pub fn state(&self) -> Vec<u64> {
+        let mut v: Vec<u64> = self.x.to_vec();
+        v.extend([self.pc, self.prv, self.mstatus, self.medeleg, self.mideleg, self.mie, self.mip_sw, self.mtvec, self.mepc, self.mcause, self.mtval,
+            self.mscratch, self.mcounteren, self.menvcfg, self.stvec, self.sepc, self.scause, self.stval, self.sscratch, self.scounteren, self.senvcfg,
+            self.satp, self.stimecmp, self.instret, self.instret_off, self.cycle_off, self.waiting as u64]);
+        v.extend(self.pmpcfg);
+        v.extend(self.pmpaddr);
+        v.extend(self.bus.state());
+        v
+    }
+    pub fn set_state(&mut self, v: &[u64]) -> Result<(), String> {
+        let n = self.state().len();
+        if v.len() != n { return Err(format!("state of {} words, not {}", v.len(), n)); }
+        self.x.copy_from_slice(&v[..32]);
+        let r = &v[32..];
+        [self.pc, self.prv, self.mstatus, self.medeleg, self.mideleg, self.mie, self.mip_sw, self.mtvec, self.mepc, self.mcause, self.mtval,
+            self.mscratch, self.mcounteren, self.menvcfg, self.stvec, self.sepc, self.scause, self.stval, self.sscratch, self.scounteren, self.senvcfg,
+            self.satp, self.stimecmp, self.instret, self.instret_off, self.cycle_off] = r[..26].try_into().unwrap();
+        self.waiting = r[26] != 0;
+        self.pmpcfg.copy_from_slice(&r[27..29]);
+        self.pmpaddr.copy_from_slice(&r[29..45]);
+        self.bus.set_state(&r[45..]);
+        self.resv = None;
+        self.flush_tlb();
+        self.timer_update();
         Ok(())
     }
 

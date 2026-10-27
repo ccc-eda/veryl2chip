@@ -19,6 +19,8 @@ export interface EmuStart {
   stats: string;
   /** the project's files for the exchange area (machine.json "files") */
   files?: Uint8Array;
+  /** what runs the machine: veryl-emu's model of the design, or riscv-emu (the RV64 board's instruction set) */
+  engine?: 'veryl' | 'riscv';
   /** start from this state instead of a cold boot (memory, cycle, the terminal so far; where it comes from) */
   snap?: { data: Uint8Array; cycle: number; log: string; from: 'saved' | 'bundled' };
 }
@@ -121,11 +123,18 @@ export class Emulator {
   getRun: () => { name: string; cmd: string } | null = () => null;
   /** the IDE: the exchange area for running it (with a compiled program), or why it cannot run */
   getRunFiles: (r: { name: string; cmd: string }) => Promise<Uint8Array | string> = async () => this.getFiles() ?? '';
+  /** the IDE: the engine (null: the machine has only veryl-emu), and a new choice */
+  getEngine: () => 'veryl' | 'riscv' | null = () => null;
+  onEngine: (e: 'veryl' | 'riscv') => void = () => {};
   onParts: (parts: Part[]) => void = () => {};
   private pi: PiBoard | null = null;
 
   constructor(private host: HTMLElement) {
     host.innerHTML = `<div class="vb-bar">
+ <select class="tb-sel hidden" data-a="engine" title="${tr('模擬機的引擎：riscv-emu 只模擬指令集（像 QEMU，快幾十倍）；veryl-emu 模擬 Veryl 寫的硬體本身（每一拍、每個訊號）', 'The emulator\'s engine: riscv-emu emulates the instruction set only (like QEMU, tens of times faster); veryl-emu simulates the hardware written in Veryl (every cycle, every signal)')}">
+          <option value="riscv">${tr('riscv-emu（指令集，快）', 'riscv-emu (instruction set, fast)')}</option>
+          <option value="veryl">${tr('veryl-emu（硬體）', 'veryl-emu (the hardware)')}</option>
+        </select>
         <button class="tb-btn" data-a="boot" title="${tr('用 veryl-emu 把設計編譯成 WebAssembly，載入程式後開機', 'Compile the design to WebAssembly with veryl-emu, load the programs and boot')}">${tr('🖥 開機', '🖥 Boot')}</button>
         <button class="tb-btn" data-a="pause" disabled>⏸</button>
         <button class="tb-btn" data-a="reset" disabled title="${tr('冷開機（重新載入程式，從頭開機，不用快照）', 'Cold boot (reload the programs and boot from the start, no snapshot)')}">⟲</button>
@@ -144,6 +153,10 @@ export class Emulator {
     q('reset').onclick = () => { if (this.w && this.last) { this.term = new Term(); this.dirty = true; this.w.postMessage({ type: 'reset' }); this.note(tr('冷開機', 'Cold boot')); this.set('run'); this.inEl.focus(); } };
     q('files').onclick = () => { const a = this.getFiles(); if (this.w && a) { this.w.postMessage({ type: 'files', area: a }); this.note(tr('專案的檔案送進板子的 /root', 'The project\'s files went to /root on the board')); } };
     q('run').onclick = () => this.run();
+    q<HTMLSelectElement>('engine').onchange = () => {
+      this.onEngine(q<HTMLSelectElement>('engine').value as 'veryl' | 'riscv');
+      if (this.state !== 'off') this.boot();
+    };
     q('save').onclick = () => { if (this.w) { this.w.postMessage({ type: 'save' }); this.note(tr('存狀態中…', 'Saving the state…')); } };
     q('upload').onclick = () => q<HTMLInputElement>('file').click();
     q<HTMLInputElement>('file').onchange = async () => {
@@ -200,7 +213,10 @@ export class Emulator {
     const st = this.host.querySelector('.em-stat') as HTMLElement;
     const mhz = (this.stat.rate / 1e6).toFixed(2);
     const what = { off: tr('關機', 'off'), run: tr('執行中', 'running'), pause: tr('暫停', 'paused'), end: tr('結束', 'ended') }[this.state];
-    st.textContent = this.state === 'off' ? '' : tr(`${what}　${(this.stat.cycle / 1e6).toFixed(1)} M 拍　${mhz} MHz`, `${what}  ${(this.stat.cycle / 1e6).toFixed(1)} M cycles  ${mhz} MHz`);
+    const rv = this.last?.engine === 'riscv';
+    st.textContent = this.state === 'off' ? '' : rv
+      ? tr(`${what}　${(this.stat.cycle / 1e6).toFixed(1)} M 個指令　${(this.stat.rate / 1e6).toFixed(1)} MIPS`, `${what}  ${(this.stat.cycle / 1e6).toFixed(1)} M instructions  ${(this.stat.rate / 1e6).toFixed(1)} MIPS`)
+      : tr(`${what}　${(this.stat.cycle / 1e6).toFixed(1)} M 拍　${mhz} MHz`, `${what}  ${(this.stat.cycle / 1e6).toFixed(1)} M cycles  ${mhz} MHz`);
   }
 
   async boot(): Promise<void> {
@@ -234,7 +250,7 @@ export class Emulator {
       this.pi.setScreenSize(s.cfg.fb ?? null);
       bh.classList.remove('hidden');
     } else bh.classList.add('hidden');
-    this.w.postMessage({ type: 'start', wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle, files: s.files });
+    this.w.postMessage({ type: 'start', engine: s.engine, wasm: s.wasm, meta: s.meta, cfg: s.cfg, images: s.images, snapshot: s.snap?.data, cycle: s.snap?.cycle, files: s.files });
     this.set('run');
     this.inEl.focus();
   }
@@ -265,8 +281,12 @@ export class Emulator {
     }
   }
 
-  /** the run button shows the file it runs (only for a machine with an exchange area) */
+  /** the run button shows the file it runs (only for a machine with an exchange area); the engine choice */
   runLabel(): void {
+    const sel = this.host.querySelector('[data-a="engine"]') as HTMLSelectElement;
+    const eng = this.getEngine();
+    sel.classList.toggle('hidden', !eng);
+    if (eng) sel.value = eng;
     const b = this.host.querySelector('[data-a="run"]') as HTMLButtonElement;
     const r = this.getRun();
     b.classList.toggle('hidden', !r || (!!this.last && !this.last.cfg.files));

@@ -42,6 +42,8 @@ interface Project {
   board?: BoardSetup;
   /** the development board's breadboard (emulator, machine.json "board": "pi") */
   piBoard?: import('./bbmodel').Part[];
+  /** the emulator's engine for a machine riscv-emu can run (machine.json "riscv") */
+  emuEngine?: 'veryl' | 'riscv';
 }
 
 const KEY = 'veryl2chip-ide:';
@@ -968,6 +970,8 @@ function ensureEmu(): Emulator {
     emu.getParts = () => proj.piBoard ?? null;
     emu.getRun = boardRun;
     emu.getRunFiles = boardRunFiles;
+    emu.getEngine = () => (machineCfg()?.riscv ? emuEngine() : null);
+    emu.onEngine = (e) => { proj.emuEngine = e; persist(); };
     emu.getFiles = projectArea;
     emu.onFilesBack = filesBack;
     emu.onSave = async (st) => { if (emuFp) await idbPut(`state:${proj.id}`, { fingerprint: emuFp, ...st }); };
@@ -1021,12 +1025,42 @@ function openEmu(): void {
   if (!e.running) e.boot();
 }
 
+/** the emulator's engine: riscv-emu (instruction set, fast) where it can run the machine, else veryl-emu (the hardware) */
+function emuEngine(): 'veryl' | 'riscv' { return machineCfg()?.riscv ? proj.emuEngine ?? 'riscv' : 'veryl'; }
+
+declare const VERYL_RVEMU_B64: string | undefined;
+/** riscv-emu's wasm (rvemu.js, loaded when first needed) */
+async function rvWasm(): Promise<Uint8Array> {
+  if (typeof VERYL_RVEMU_B64 === 'undefined') {
+    await new Promise<void>((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = 'rvemu.js';
+      s.onload = () => ok();
+      s.onerror = () => fail(new Error(tr('找不到 rvemu.js', 'rvemu.js not found')));
+      document.head.appendChild(s);
+    });
+  }
+  return fromBase64(VERYL_RVEMU_B64!);
+}
+
 async function startEmu(): Promise<EmuStart | null> {
   if (!core) return null;
   const f = proj.files.find(x => x.name === 'machine.json');
   if (!f) throw new Error(tr('這個專案沒有 machine.json：模擬機要知道頂層模組、重設、UART、RAM 等腳位（可以參考範例「RV64 + Linux」）', 'This project has no machine.json: the emulator needs the top module, the reset, UART and RAM ports (see the example "RV64 + Linux")'));
   let cfg: MachineCfg;
   try { cfg = JSON.parse(f.src); } catch (e) { throw new Error('machine.json: ' + (e as Error).message); }
+  if (emuEngine() === 'riscv') {
+    // riscv-emu: the board's programs on the instruction-set emulator (the Veryl source is not used); a cold boot takes seconds
+    const wasm = await rvWasm();
+    const images: EmuStart['images'] = [];
+    for (const l of cfg.load ?? []) images.push({ bytes: await image(l.image), addr: l.addr });
+    emuFp = `riscv-emu:${wasm.length}`;
+    let snap: EmuStart['snap'];
+    const saved = await idbGet<{ fingerprint: string; cycle: number; log: string; data: Uint8Array }>(`state:${proj.id}`);
+    if (saved && saved.fingerprint === emuFp) snap = { data: await gunzip(saved.data), cycle: saved.cycle, log: saved.log, from: 'saved' };
+    $('sbTest').textContent = tr('🖥 模擬機開機（riscv-emu）', '🖥 Emulator booted (riscv-emu)');
+    return { engine: 'riscv', wasm, meta: {}, cfg, images, stats: tr('riscv-emu：指令集模擬（不看 Veryl 原始碼）', 'riscv-emu: instruction-set emulation (the Veryl source is not used)'), snap, files: cfg.files ? projectArea() : undefined };
+  }
   setBusy(true, tr('🖥 veryl-emu 編譯中…', '🖥 veryl-emu compiling…'));
   try {
     const files = proj.files.filter(x => x.name.endsWith('.veryl'));
@@ -1043,7 +1077,7 @@ async function startEmu(): Promise<EmuStart | null> {
       if (b && b.fingerprint === emuFp) snap = { data: b.data, cycle: b.cycle, log: b.log, from: 'bundled' };
     }
     $('sbTest').textContent = tr('🖥 模擬機開機', '🖥 Emulator booted');
-    return { wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: r.stats, snap, files: cfg.files ? projectArea() : undefined };
+    return { engine: 'veryl', wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: `veryl-emu: ${r.stats}`, snap, files: cfg.files ? projectArea() : undefined };
   } finally {
     setBusy(false);
   }

@@ -142,6 +142,10 @@ UART 接到分頁裡的終端機。
   編成 RV64 Linux 執行檔，放進 `/root`（檔名去掉 `.c`）再執行 `./檔名`；編譯錯誤在「問題」面板。組合語言分頁顯示打開的那個 `.c`。
   函式庫：`printf`、`delay_ms`、`gpio_write`、`gpio_read`、`pin_mode`、檔案的 `open` / `read` / `write` 等。範例 `blink.c`、`count.c`、
   `lights.c` 對應三個 MicroPython 範例。`savefiles` 不會把編譯出來的執行檔送回專案（只收文字檔）。
+- **引擎**（v2.23）：`machine.json` 有 `"riscv": true`（設計是 Rv64Soc）時，模擬機工具列可以選引擎：**riscv-emu**（預設）只模擬指令集，
+  像 QEMU，冷開機幾秒就有 shell，`sleep(1)` 就是真的一秒（時間跟著時鐘走），狀態列顯示 MIPS；**veryl-emu** 模擬 Veryl 寫的硬體本身
+  （每一拍、每個訊號，從快照開機），要看自己改過的 Veryl 設計就選它。GPIO、麵包板、檔案、▶ 執行、螢幕、💾 兩種引擎都一樣
+  （存下的狀態屬於存它的引擎）。riscv-emu 不看專案的 Veryl 原始碼：它的 SoC 是 [riscv-emu](../riscv-emu/README.tw.md) 照 Rv64Soc 寫的。
 - **螢幕**（v2.21）：`machine.json` 有 `"fb": { "addr": "0x8EF00000", "width": 320, "height": 240 }` 時，板子和麵包板之間多一個
   320 × 240 的螢幕：Linux 的 `simple-framebuffer`（`/dev/fb0`，RGB565）放在 RAM 裡，worker 每 0.1 秒看一次，有變化才畫到 canvas。
   開機時 fbcon（tty1）顯示問候語；`echo hi > /dev/tty1` 寫字到螢幕上。MicroPython：`from pi import Screen` 是 320 × 240 的
