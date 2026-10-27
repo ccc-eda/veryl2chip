@@ -5429,10 +5429,17 @@ ${lines.join("\n")}
     );
   }
   function renderExamples() {
+    const chips = $2("exFilter");
+    chips.innerHTML = EX_FILTERS().map(([f, label]) => `<button class="${f === exFilter ? "cur" : ""}" data-f="${f}" title="${attr(filterHint(f))}">${esc4(label)} <small>${exCount(f)}</small></button>`).join("");
+    chips.onclick = (e) => {
+      const f = e.target.closest("[data-f]")?.dataset.f;
+      if (f) setExFilter(f);
+    };
     const box = $2("exList");
     box.innerHTML = "";
     let g = "";
     for (const ex of examples()) {
+      if (!exMatches(ex, exFilter)) continue;
       if (ex.group !== g) {
         g = ex.group;
         const h = document.createElement("div");
@@ -5455,9 +5462,77 @@ ${lines.join("\n")}
       box.appendChild(d);
     }
   }
+  var exFilter = load("exFilter", "all");
+  var EX_FILTERS = () => [["all", tr("\u5168\u90E8", "All")], ["test", "\u{1F9EA}"], ["board", "\u26A1"], ["emu", "\u{1F5A5}"], ["synth", "\u2699"]];
+  function filterHint(f) {
+    return f === "all" ? tr("\u6240\u6709\u7BC4\u4F8B", "every example") : f === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66\u3001\u770B\u6CE2\u5F62", "with testbenches: \u25B6 Test, waveforms") : f === "board" ? tr("\u80FD\u653E\u4E0A\u865B\u64EC\u677F\uFF08\u6709\u8173\u4F4D\uFF09", "go on the virtual board (have pins)") : f === "emu" ? tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: boot it in the \u{1F5A5} emulator") : tr("\u80FD\u5408\u6210\uFF1AFPGA\u3001ASIC \u6676\u7247\u7248\u5716", "can be synthesized: FPGA, ASIC layout");
+  }
+  function exMatches(ex, f) {
+    return f === "all" || caps(exCapIn(ex))[f].on;
+  }
+  var exCount = (f) => examples().filter((e) => exMatches(e, f)).length;
+  function setExFilter(f) {
+    exFilter = f;
+    save("exFilter", f);
+    renderExamples();
+  }
+  var goals = () => [
+    {
+      goal: "learn",
+      icon: "\u{1F9EA}",
+      title: tr("\u5B78 Veryl", "Learn Veryl"),
+      ex: "tut_blinky",
+      filter: "test",
+      text: tr("\u5F9E\u6559\u5B78\u7B2C 1 \u8AB2\u958B\u59CB\uFF1A\u5BEB\u96FB\u8DEF\u548C\u5B83\u7684 testbench\uFF0C\u8DD1\u6E2C\u8A66\u3001\u770B\u6CE2\u5F62\u3002", "Begin with lesson 1 of the tutorial: write a circuit and its testbench, run the tests, read the waveform.")
+    },
+    {
+      goal: "board",
+      icon: "\u26A1",
+      title: tr("\u505A\u96FB\u8DEF\uFF0C\u653E\u4E0A\u958B\u767C\u677F", "Build a circuit, put it on a board"),
+      ex: "lab_traffic",
+      filter: "board",
+      text: tr("\u50CF Arduino\uFF1A\u71D2\u9032\u865B\u64EC iCEBreaker \u958B\u767C\u677F\uFF0C\u6309\u6309\u9215\u3001\u770B LED\u3001\u63A5\u9EB5\u5305\u677F\u3002", "Like an Arduino: flash it to a virtual iCEBreaker, press buttons, watch LEDs, wire a breadboard.")
+    },
+    {
+      goal: "emu",
+      icon: "\u{1F5A5}",
+      title: tr("\u958B\u4E00\u53F0\u96FB\u8166\uFF0C\u5BEB\u7A0B\u5F0F", "Boot a computer, write programs"),
+      ex: "rv64_linux",
+      filter: "emu",
+      text: tr("\u50CF\u6A39\u8393\u6D3E\uFF1ARV64 \u958B\u767C\u677F\u958B Linux\uFF0C\u7528 MicroPython\u3001C \u63A7\u5236 GPIO\u3001\u9EB5\u5305\u677F\u548C\u87A2\u5E55\u3002", "Like a Raspberry Pi: the RV64 board boots Linux; MicroPython and C drive its GPIO, breadboard and screen.")
+    },
+    {
+      goal: "chip",
+      icon: "\u2699",
+      title: tr("\u770B\u96FB\u8DEF\u8B8A\u6210\u6676\u7247", "See the circuit become a chip"),
+      ex: "fifo",
+      filter: "synth",
+      text: tr("\u5408\u6210\u6210\u908F\u8F2F\u9598\uFF0C\u653E\u9032 FPGA \u4F48\u5C40\u7E5E\u7DDA\uFF0C\u6216\u505A\u6210 SKY130 \u6676\u7247\u7248\u5716\u3002", "Synthesize it to gates, place and route it on an FPGA, or make a SKY130 chip layout.")
+    }
+  ];
+  async function startGoal(goal) {
+    const g = goals().find((x) => x.goal === goal);
+    exFilter = g.filter;
+    save("exFilter", g.filter);
+    const ex = examples().find((e) => e.id === g.ex);
+    if (!ex) return;
+    openExample(ex);
+    renderExamples();
+    if (!core) return;
+    await check();
+    if (goal === "learn") runTests();
+    else if (goal === "board") flashBoard();
+    else if (goal === "emu") openEmu();
+    else runSynth();
+  }
   function welcome() {
     const recent = projects.slice(-8).reverse();
     $2("welcome").innerHTML = `<h2>veryl2chip IDE</h2><p>${tr("Veryl \u2192 \u6A21\u64EC \u2192 \u5408\u6210 \u2192 FPGA / ASIC\uFF0C\u5168\u90E8\u5728\u700F\u89BD\u5668\u88E1\u3002", "Veryl \u2192 simulation \u2192 synthesis \u2192 FPGA / ASIC, all in the browser.")}</p>
+    <h3 class="goal-h">${tr("\u4F60\u60F3\u505A\u4EC0\u9EBC\uFF1F", "What do you want to do?")}</h3>
+    <div class="goals">${goals().map((g) => {
+      const ex = examples().find((e) => e.id === g.ex);
+      return `<div class="goal"><div class="gi">${g.icon}</div><b>${esc4(g.title)}</b><p>${esc4(g.text)}</p><button class="tb-btn primary" data-goal="${g.goal}">${esc4(tr("\u5F9E\u9019\u88E1\u958B\u59CB\uFF1A", "Start with: "))}${esc4(ex ? exTitle(ex) : g.ex)}</button><a data-goalex="${g.goal}">${esc4(tr(`\u770B\u9019\u4E00\u985E\u7684\u7BC4\u4F8B\uFF08${exCount(g.filter)} \u500B\uFF09`, `See the examples of this kind (${exCount(g.filter)})`))}</a></div>`;
+    }).join("")}</div>
     <div class="cols">
       <div><h3>${tr("\u958B\u59CB", "Start")}</h3><a data-a="newfile">${tr("\uFF0B \u65B0\u589E .veryl \u6A94", "\uFF0B New .veryl file")}</a><a data-a="newproj">${tr("\uFF0B \u65B0\u5C08\u6848", "\uFF0B New project")}</a><a data-a="examples">${tr("\u{1F4DA} \u958B\u555F\u7BC4\u4F8B\u2026", "\u{1F4DA} Open an example\u2026")}</a><a data-a="import">${tr("\u21EA \u532F\u5165 .veryl \u6A94\u2026", "\u21EA Import .veryl files\u2026")}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr("\u{1F4D6} \u5F9E\u96F6\u958B\u59CB\u7684\u6559\u5B78\uFF08\u5BEB Veryl \u2192 \u71D2\u9032 iCEBreaker\uFF09", "\u{1F4D6} Tutorial from scratch (write Veryl \u2192 flash an iCEBreaker)")}</a></div>
       <div><h3>${tr("\u6700\u8FD1\u7684\u5C08\u6848", "Recent projects")}</h3>${recent.map((p) => `<a data-p="${p.id}">${esc4(projName(p))}</a>`).join("")}</div>
@@ -5471,7 +5546,11 @@ ${lines.join("\n")}
       else if (a === "examples") sideView("examples");
       else if (a === "import") $2("importIn").click();
       else if (a === "flow") runSynth();
-      else if (t.dataset.p) switchProject(t.dataset.p);
+      else if (t.dataset.goal) startGoal(t.dataset.goal);
+      else if (t.dataset.goalex) {
+        setExFilter(goals().find((g) => g.goal === t.dataset.goalex).filter);
+        sideView("examples");
+      } else if (t.dataset.p) switchProject(t.dataset.p);
       else if (t.dataset.f) openFile(t.dataset.f);
     };
   }
@@ -6183,7 +6262,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
   }
   function renderGuide() {
     const g = $2("guide");
-    const show = !!core && !proj.guideOff;
+    const show = !!core && !proj.guideOff && proj.active !== WELCOME;
     g.classList.toggle("hidden", !show);
     if (!show) return;
     const ci = capIn();
@@ -6660,8 +6739,13 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     const hash = location.hash;
     const exId = /ex=([\w-]+)/.exec(hash)?.[1];
     const labCode = /lab=([\w-]+)/.exec(hash)?.[1];
-    if (!projects.length) projects.push(fromExample(examples().find((e) => e.id === (exId ?? "tut_blinky")) ?? examples()[0]));
+    const firstVisit = !projects.length;
+    if (firstVisit) projects.push(fromExample(examples().find((e) => e.id === (exId ?? "tut_blinky")) ?? examples()[0]));
     proj = projects.find((p) => p.id === load("cur", "")) ?? projects[0];
+    if (firstVisit && !exId && !labCode) {
+      proj.active = WELCOME;
+      if (phone()) $2("panel").classList.add("collapsed");
+    }
     const ex = exId ? examples().find((e) => e.id === exId) : void 0;
     if (ex) {
       const have = projects.find((p) => p.from === ex.id);

@@ -464,10 +464,14 @@ function exportZip(): void {
 // ---------------------------------------------------------------- examples
 
 function renderExamples(): void {
+  const chips = $('exFilter');
+  chips.innerHTML = EX_FILTERS().map(([f, label]) => `<button class="${f === exFilter ? 'cur' : ''}" data-f="${f}" title="${attr(filterHint(f))}">${esc(label)} <small>${exCount(f)}</small></button>`).join('');
+  chips.onclick = e => { const f = (e.target as HTMLElement).closest<HTMLElement>('[data-f]')?.dataset.f as ExFilter | undefined; if (f) setExFilter(f); };
   const box = $('exList');
   box.innerHTML = '';
   let g = '';
   for (const ex of examples()) {
+    if (!exMatches(ex, exFilter)) continue;
     if (ex.group !== g) {
       g = ex.group;
       const h = document.createElement('div');
@@ -490,9 +494,61 @@ function renderExamples(): void {
   }
 }
 
+// ---------------------------------------------------------------- where to start
+
+/** what the example list shows: every example, or those that can do one thing */
+type ExFilter = 'all' | 'test' | 'board' | 'emu' | 'synth';
+let exFilter: ExFilter = load<ExFilter>('exFilter', 'all');
+const EX_FILTERS = (): [ExFilter, string][] => [['all', tr('全部', 'All')], ['test', '🧪'], ['board', '⚡'], ['emu', '🖥'], ['synth', '⚙']];
+function filterHint(f: ExFilter): string {
+  return f === 'all' ? tr('所有範例', 'every example') : f === 'test' ? tr('有 testbench：▶ 測試、看波形', 'with testbenches: ▶ Test, waveforms')
+    : f === 'board' ? tr('能放上虛擬板（有腳位）', 'go on the virtual board (have pins)') : f === 'emu' ? tr('一台機器：🖥 模擬機開機', 'a machine: boot it in the 🖥 emulator')
+    : tr('能合成：FPGA、ASIC 晶片版圖', 'can be synthesized: FPGA, ASIC layout');
+}
+function exMatches(ex: Example, f: ExFilter): boolean { return f === 'all' || caps(exCapIn(ex))[f].on; }
+const exCount = (f: ExFilter) => examples().filter(e => exMatches(e, f)).length;
+function setExFilter(f: ExFilter): void { exFilter = f; save('exFilter', f); renderExamples(); }
+
+/** the welcome page's starting points: what the user wants to do, an example to begin with, the matching examples */
+type Goal = 'learn' | 'board' | 'emu' | 'chip';
+const goals = (): { goal: Goal; icon: string; title: string; text: string; ex: string; filter: ExFilter }[] => [
+  { goal: 'learn', icon: '🧪', title: tr('學 Veryl', 'Learn Veryl'), ex: 'tut_blinky', filter: 'test',
+    text: tr('從教學第 1 課開始：寫電路和它的 testbench，跑測試、看波形。', 'Begin with lesson 1 of the tutorial: write a circuit and its testbench, run the tests, read the waveform.') },
+  { goal: 'board', icon: '⚡', title: tr('做電路，放上開發板', 'Build a circuit, put it on a board'), ex: 'lab_traffic', filter: 'board',
+    text: tr('像 Arduino：燒進虛擬 iCEBreaker 開發板，按按鈕、看 LED、接麵包板。', 'Like an Arduino: flash it to a virtual iCEBreaker, press buttons, watch LEDs, wire a breadboard.') },
+  { goal: 'emu', icon: '🖥', title: tr('開一台電腦，寫程式', 'Boot a computer, write programs'), ex: 'rv64_linux', filter: 'emu',
+    text: tr('像樹莓派：RV64 開發板開 Linux，用 MicroPython、C 控制 GPIO、麵包板和螢幕。', 'Like a Raspberry Pi: the RV64 board boots Linux; MicroPython and C drive its GPIO, breadboard and screen.') },
+  { goal: 'chip', icon: '⚙', title: tr('看電路變成晶片', 'See the circuit become a chip'), ex: 'fifo', filter: 'synth',
+    text: tr('合成成邏輯閘，放進 FPGA 佈局繞線，或做成 SKY130 晶片版圖。', 'Synthesize it to gates, place and route it on an FPGA, or make a SKY130 chip layout.') },
+];
+
+/** a starting point: its example (opened, or switched to), the first thing to do, the matching examples in the list */
+async function startGoal(goal: Goal): Promise<void> {
+  const g = goals().find(x => x.goal === goal)!;
+  exFilter = g.filter;
+  save('exFilter', g.filter);
+  const ex = examples().find(e => e.id === g.ex);
+  if (!ex) return;
+  openExample(ex);
+  renderExamples();
+  if (!core) return;
+  await check();
+  if (goal === 'learn') runTests();
+  else if (goal === 'board') flashBoard();
+  else if (goal === 'emu') openEmu();
+  else runSynth();
+}
+
 function welcome(): void {
   const recent = projects.slice(-8).reverse();
   $('welcome').innerHTML = `<h2>veryl2chip IDE</h2><p>${tr('Veryl → 模擬 → 合成 → FPGA / ASIC，全部在瀏覽器裡。', 'Veryl → simulation → synthesis → FPGA / ASIC, all in the browser.')}</p>
+    <h3 class="goal-h">${tr('你想做什麼？', 'What do you want to do?')}</h3>
+    <div class="goals">${goals().map(g => {
+      const ex = examples().find(e => e.id === g.ex);
+      return `<div class="goal"><div class="gi">${g.icon}</div><b>${esc(g.title)}</b><p>${esc(g.text)}</p>`
+        + `<button class="tb-btn primary" data-goal="${g.goal}">${esc(tr('從這裡開始：', 'Start with: '))}${esc(ex ? exTitle(ex) : g.ex)}</button>`
+        + `<a data-goalex="${g.goal}">${esc(tr(`看這一類的範例（${exCount(g.filter)} 個）`, `See the examples of this kind (${exCount(g.filter)})`))}</a></div>`;
+    }).join('')}</div>
     <div class="cols">
       <div><h3>${tr('開始', 'Start')}</h3><a data-a="newfile">${tr('＋ 新增 .veryl 檔', '＋ New .veryl file')}</a><a data-a="newproj">${tr('＋ 新專案', '＋ New project')}</a><a data-a="examples">${tr('📚 開啟範例…', '📚 Open an example…')}</a><a data-a="import">${tr('⇪ 匯入 .veryl 檔…', '⇪ Import .veryl files…')}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr('📖 從零開始的教學（寫 Veryl → 燒進 iCEBreaker）', '📖 Tutorial from scratch (write Veryl → flash an iCEBreaker)')}</a></div>
       <div><h3>${tr('最近的專案', 'Recent projects')}</h3>${recent.map(p => `<a data-p="${p.id}">${esc(projName(p))}</a>`).join('')}</div>
@@ -506,6 +562,8 @@ function welcome(): void {
     else if (a === 'examples') sideView('examples');
     else if (a === 'import') $<HTMLInputElement>('importIn').click();
     else if (a === 'flow') runSynth();
+    else if (t.dataset.goal) startGoal(t.dataset.goal as Goal);
+    else if (t.dataset.goalex) { setExFilter(goals().find(g => g.goal === t.dataset.goalex)!.filter); sideView('examples'); }
     else if (t.dataset.p) switchProject(t.dataset.p);
     else if (t.dataset.f) openFile(t.dataset.f);
   };
@@ -1248,7 +1306,8 @@ function hideWhy(): void { $('capPop').classList.add('hidden'); }
 /** the suggested steps above the editor (closed with ×, back from the command palette) */
 function renderGuide(): void {
   const g = $('guide');
-  const show = !!core && !proj.guideOff;
+  // the welcome page has its own starting points
+  const show = !!core && !proj.guideOff && proj.active !== WELCOME;
   g.classList.toggle('hidden', !show);
   if (!show) return;
   const ci = capIn();
@@ -1697,8 +1756,11 @@ async function boot(): Promise<void> {
   const hash = location.hash;
   const exId = /ex=([\w-]+)/.exec(hash)?.[1];
   const labCode = /lab=([\w-]+)/.exec(hash)?.[1];
-  if (!projects.length) projects.push(fromExample(examples().find(e => e.id === (exId ?? 'tut_blinky')) ?? examples()[0]));
+  const firstVisit = !projects.length;
+  if (firstVisit) projects.push(fromExample(examples().find(e => e.id === (exId ?? 'tut_blinky')) ?? examples()[0]));
   proj = projects.find(p => p.id === load<string>('cur', '')) ?? projects[0];
+  // the first time (no link to an example or a lab): the welcome page asks what to do
+  if (firstVisit && !exId && !labCode) { proj.active = WELCOME; if (phone()) $('panel').classList.add('collapsed'); }
   const ex = exId ? examples().find(e => e.id === exId) : undefined;
   if (ex) {
     const have = projects.find(p => p.from === ex.id);

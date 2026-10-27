@@ -127,6 +127,21 @@ button.icon:hover { background: #3a3d41; }
 #welcome a:hover { text-decoration: underline; }
 #welcome .cols { display: flex; gap: 60px; flex-wrap: wrap; margin-top: 24px; }
 #welcome h3 { color: #ccc; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+/* the starting points: what do you want to do? */
+#welcome .goal-h { margin-top: 24px; }
+#welcome .goals { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; max-width: 1000px; }
+#welcome .goal { display: flex; flex-direction: column; gap: 6px; background: #252526; border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+#welcome .goal .gi { font-size: 26px; line-height: 1; }
+#welcome .goal b { color: #fff; font-size: 15px; font-weight: 500; }
+#welcome .goal p { margin: 0; flex: 1; line-height: 1.5; font-size: 12px; }
+#welcome .goal .tb-btn { align-self: flex-start; white-space: normal; text-align: left; padding: 5px 10px; }
+#welcome .goal a { font-size: 12px; }
+/* the example list's filter */
+.chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px 6px; }
+.chips button { background: #3a3d41; border: 1px solid #4a4d51; color: var(--fg); border-radius: 12px; padding: 1px 9px; cursor: pointer; }
+.chips button small { color: var(--dim); font-size: 10px; }
+.chips button.cur { background: var(--accent); border-color: #1b8ae6; color: #fff; }
+.chips button.cur small { color: #dbe9f7; }
 
 /* code editor */
 .ed { background: var(--bg); --edfs: 13px; --edlh: 19px; }

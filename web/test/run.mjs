@@ -521,6 +521,11 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     } else if (!c.test.on || !c.verify.on || c.emu.on) errs.push(`${ex.id}: test ${c.test.on} verify ${c.verify.on} emu ${c.emu.on}`);
     if (!ex.emu && !ex.pcf && (c.board.on || !c.board.fix?.includes('addPcf'))) errs.push(`${ex.id}: no pins, but the board is ${c.board.on ? 'on' : 'off without "add pins.pcf"'}`);
   }
+  // the welcome page's starting points open these examples
+  const main = fs.readFileSync(path.join(dist, '../src/ide/main.ts'), 'utf8');
+  const goals = main.slice(main.indexOf('const goals = ')).split('\n];')[0];
+  for (const [, id] of goals.matchAll(/ex: '([\w-]+)'/g)) if (!ctx.VERYL_EXAMPLES.some((e) => e.id === id)) errs.push(`welcome: no example ${id}`);
+  if ([...goals.matchAll(/ex: '/g)].length !== 4) errs.push('welcome: not four starting points');
   const ok = !errs.length;
   if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} caps     ${ctx.VERYL_EXAMPLES.length} examples, first steps ${JSON.stringify(firsts)}${errs.length ? ': ' + errs.slice(0, 4).join('; ') : ''}`);
