@@ -167,6 +167,7 @@ function showActive(): void {
   syncStage();
   $('boardPane').classList.toggle('hidden', a !== BOARD_TAB);
   $('emuPane').classList.toggle('hidden', a !== EMU_TAB);
+  document.body.classList.toggle('tab-flow', a === FLOW_TAB);
   if (boardCmd(a) && file(a)) boardFile = a;
   // ▶ runs a script open in a board project on the board
   const onBoard = !!(machineCfg()?.files && boardCmd(a));
@@ -1050,6 +1051,103 @@ function runKey(): void {
   if (machineCfg()?.files && boardCmd(proj.active ?? '')) runOnBoard(); else runTests();
 }
 
+// ---------------------------------------------------------------- the main button and its menu
+
+/** the title bar: 'basic' (the main button, its menu; the flow menus on the flow tab) or 'full' (every control, grouped by intent) */
+let uiMode: 'basic' | 'full' = load<'basic' | 'full'>('mode', 'basic');
+function setMode(m: 'basic' | 'full'): void { uiMode = m; save('mode', m); applyMode(); }
+function applyMode(): void {
+  document.body.classList.toggle('basic', uiMode === 'basic');
+  $('modeBtn').textContent = uiMode === 'basic' ? tr('進階 ▸', 'Advanced ▸') : tr('◂ 簡易', '◂ Simple');
+  $('modeBtn').title = uiMode === 'basic'
+    ? tr('顯示所有控制：驗證（測試的頂層、閘級模擬、全面驗證）、看電路（目標、階段、頂層）、跑起來（虛擬板、模擬機）', 'Show every control: verify (simulation top, gate level, verify all), circuit (target, stage, top), run it (virtual board, emulator)')
+    : tr('簡易：只留主按鈕與它的選單（▾），合成流程分頁裡才出現合成的選單', 'Simple: only the main button and its menu (▾); the synthesis menus appear on the flow tab');
+}
+
+/** the main button: the suggested step (a board program open: run it) */
+function mainClick(): void {
+  if (!core) return;
+  const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
+  if (onBoard) runKey(); else act(start(capIn()), $('mainBtn'));
+}
+
+/** synthesize for a back end of the target menu (fpga, asic, sky130), at a stage */
+function synthOn(v: string, stage?: string): void {
+  $<HTMLSelectElement>('flowTarget').value = v;
+  synthValue();
+  fillStages();
+  runSynth(stage);
+}
+
+/** boot the machine on an engine (a running machine of the other engine boots again) */
+function bootEngine(engine: 'veryl' | 'riscv'): void {
+  if (machineCfg()?.riscv) proj.emuEngine = engine;
+  persist();
+  const e = ensureEmu();
+  openFile(EMU_TAB);
+  if (!e.running || e.engine !== emuEngine()) e.boot();
+}
+
+interface MenuItem { act: Act; label: string; hint: string; run: () => void; /** not the suggested way of its action */ alt?: boolean }
+/** every action, by what the user wants: verify, see the circuit, run it */
+function menuItems(): [string, MenuItem[]][] {
+  const ci = capIn();
+  const run = boardRun();
+  const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
+  const synth = (v: string, name: string, hint: string): MenuItem => ({ act: 'synth', label: `⚙ ${tr('合成', 'Synthesize')}${tr('：', ': ')}${name}`, hint, run: () => synthOn(v), alt: v !== 'fpga' });
+  const mc = machineCfg();
+  return [
+    [tr('驗證', 'Verify'), [
+      onBoard && run ? { act: 'test', label: tr(`▶ 執行 ${run.name}`, `▶ Run ${run.name}`), hint: tr('在板子上執行（Ctrl/⌘+Enter）', 'on the board (Ctrl/⌘+Enter)'), run: runKey }
+        : { act: 'test', label: actName('test'), hint: actHint('test', ci) + tr('（Ctrl/⌘+Enter）', ' (Ctrl/⌘+Enter)'), run: () => runTests() },
+      { act: 'verify', label: actName('verify'), hint: tr('RTL 和三種合成後的網表跑同一組 testbench，結果要一致', 'the same testbenches on the RTL and three synthesized netlists: they must agree'), run: verifyAll },
+    ]],
+    [tr('看電路', 'See the circuit'), [
+      synth('fpga', 'FPGA（iCE40）', tr('LUT、進位鏈、block RAM、佈局繞線、時序', 'LUTs, carry chains, block RAM, place and route, timing')),
+      synth('asic', 'ASIC · vlib', tr('標準元件、擺放、繞線、時序、功耗', 'standard cells, placement, routing, timing, power')),
+      synth('sky130', 'ASIC · SKY130', tr('SkyWater 130 nm 製程：DRC、GDSII 晶片版圖', 'SkyWater 130 nm: DRC, a GDSII chip layout')),
+      { act: 'synth', label: tr('⇄ FPGA 與 ASIC 比較', '⇄ FPGA vs ASIC'), hint: tr('同一個設計兩種做法的面積與速度', 'area and speed of the same design both ways'), run: () => runSynth('cmp'), alt: true },
+    ]],
+    [tr('跑起來', 'Run it'), [
+      { act: 'board', label: actName('board'), hint: actHint('board', ci), run: flashBoard },
+      ...(mc?.riscv
+        ? [{ act: 'emu' as Act, label: tr('🖥 模擬機 · riscv-emu（指令集，快）', '🖥 Emulator · riscv-emu (instruction set, fast)'), hint: tr('像 QEMU：開機幾秒，寫程式用', 'like QEMU: boots in seconds, for writing software'), run: () => bootEngine('riscv') },
+          { act: 'emu' as Act, label: tr('🖥 模擬機 · veryl-emu（硬體本身）', '🖥 Emulator · veryl-emu (the hardware itself)'), hint: tr('你的 Veryl 電路一拍一拍地跑：改了硬體用這個', 'your Veryl circuit cycle by cycle: use it after changing the hardware'), run: () => bootEngine('veryl'), alt: true }]
+        : [{ act: 'emu' as Act, label: actName('emu'), hint: actHint('emu', ci), run: openEmu }]),
+    ]],
+  ];
+}
+
+function showMenu(): void {
+  if (!core) return;
+  hideWhy();
+  const c = projCaps();
+  const first = start(capIn());
+  const groups = menuItems();
+  const items = groups.flatMap(([, it]) => it);
+  const m = $('mainMenu');
+  let k = 0;
+  m.innerHTML = groups.map(([name, it]) => `<div class="sec">${esc(name)}</div>` + it.map(x => {
+    const on = c[x.act].on;
+    const star = on && x.act === first && !x.alt ? `<i>${tr('建議', 'suggested')}</i>` : '';
+    return `<button class="mi${on ? '' : ' off'}" data-k="${k++}"><b>${esc(x.label)}${star}</b><span>${esc(on ? x.hint : c[x.act].why ?? '')}</span></button>`;
+  }).join('')).join('')
+    + `<button class="mi foot" data-k="mode"><b>${uiMode === 'basic' ? tr('進階 ▸ 標題列顯示所有控制', 'Advanced ▸ every control in the title bar') : tr('◂ 簡易：只留主按鈕', '◂ Simple: only the main button')}</b></button>`;
+  m.classList.remove('hidden');
+  const r = $('mainAct').getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  m.onclick = e => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-k]');
+    if (!b) return;
+    hideMenu();
+    if (b.dataset.k === 'mode') { setMode(uiMode === 'basic' ? 'full' : 'basic'); return; }
+    const x = items[+b.dataset.k!];
+    if (!c[x.act].on) showWhy(x.act, $('mainBtn')); else x.run();
+  };
+}
+function hideMenu(): void { $('mainMenu').classList.add('hidden'); }
+
 // ---------------------------------------------------------------- what the project can do
 
 function capIn(): CapInput { return { files: proj.files, mods: modsKnown ? mods : null, top: synthTop(), active: proj.active }; }
@@ -1076,8 +1174,13 @@ function applyCaps(): void {
     b.setAttribute('aria-disabled', String(!c[a].on));
     b.title = !c[a].on ? `${c[a].why}\n${tr('（點一下看怎麼辦）', '(click for what to do)')}`
       : id === 'cmdRun' && onBoard ? tr(`在板子上執行 ${proj.active}（Ctrl/⌘+Enter）`, `Run ${proj.active} on the board (Ctrl/⌘+Enter)`) : tr(zh, en);
-    b.classList.toggle('primary', onBoard ? id === 'cmdRun' : a === first);
+    b.classList.remove('primary');
   }
+  const mb = $<HTMLButtonElement>('mainBtn');
+  mb.disabled = $<HTMLButtonElement>('mainMore').disabled = false;
+  mb.textContent = onBoard ? tr(`▶ 執行 ${proj.active}`, `▶ Run ${proj.active}`) : actName(first);
+  mb.title = onBoard ? tr(`在板子上執行 ${proj.active}（Ctrl/⌘+Enter）`, `Run ${proj.active} on the board (Ctrl/⌘+Enter)`)
+    : tr(`這個專案建議的下一步：${actHint(first, capIn())}。▾ 有其他做法`, `The suggested next step for this project: ${actHint(first, capIn())}. ▾ has the others`);
   const fs = $<HTMLSelectElement>('flowStage');
   fs.disabled = !c.synth.on;
   fs.title = c.synth.on ? tr('合成並檢視這個階段（Ctrl/⌘+Shift+B）', 'Synthesize and view this stage (Ctrl/⌘+Shift+B)') : c.synth.why!;
@@ -1392,6 +1495,7 @@ function commands(): Cmd[] {
     { label: tr('顯示：輸出', 'View: Output'), run: () => panel('output') },
     { label: tr('顯示：波形', 'View: Waveform'), run: () => panel('wave') },
     { label: tr('歡迎頁', 'Welcome page'), run: () => openFile(WELCOME) },
+    { label: uiMode === 'basic' ? tr('標題列：顯示所有控制（進階）', 'Title bar: every control (advanced)') : tr('標題列：簡易（主按鈕與選單）', 'Title bar: simple (the main button and its menu)'), run: () => setMode(uiMode === 'basic' ? 'full' : 'basic') },
     { label: tr('顯示建議步驟', 'Show the suggested steps'), run: () => { proj.guideOff = false; persist(); renderGuide(); } },
     ...LANGS.map(([l, name]) => ({ label: `${tr('介面語言：', 'Language: ')}${name}`, run: () => switchLang(l) })),
     ...projects.filter(p => p !== proj).map(p => ({ label: `${tr('切換專案：', 'Switch project: ')}${projName(p)}`, run: () => switchProject(p.id) })),
@@ -1482,6 +1586,9 @@ function wire(): void {
   $('cmdPalette').onclick = () => palette(false);
   $('cmdRun').onclick = () => runKey();
   $('cmdVerify').onclick = () => act('verify', $('cmdVerify'));
+  $('mainBtn').onclick = () => mainClick();
+  $('mainMore').onclick = () => $('mainMenu').classList.contains('hidden') ? showMenu() : hideMenu();
+  $('modeBtn').onclick = () => setMode(uiMode === 'basic' ? 'full' : 'basic');
   $('cmdBoard').onclick = () => act('board', $('cmdBoard'));
   $('cmdEmu').onclick = () => act('emu', $('cmdEmu'));
   $('guide').onclick = e => {
@@ -1489,7 +1596,11 @@ function wire(): void {
     if (t) act(t.dataset.step as Act, t);
     else if ((e.target as HTMLElement).closest('.close')) { proj.guideOff = true; persist(); renderGuide(); }
   };
-  document.addEventListener('mousedown', e => { if (!(e.target as HTMLElement).closest('#capPop, .off, [data-step]')) hideWhy(); });
+  document.addEventListener('mousedown', e => {
+    const t = e.target as HTMLElement;
+    if (!t.closest('#capPop, .off, [data-step]')) hideWhy();
+    if (!t.closest('#mainMenu, #mainMore')) hideMenu();
+  });
   $('testsRun').onclick = () => runTests();
   $('testsVerify').onclick = verifyAll;
   $<HTMLSelectElement>('synthTop').onchange = () => {
@@ -1500,12 +1611,7 @@ function wire(): void {
     const v = $<HTMLSelectElement>('flowTarget').value;
     if (v.startsWith('emu-')) {
       // an emulator: open it with that engine (a running machine of the other engine boots again)
-      const engine = v.slice(4) as 'veryl' | 'riscv';
-      if (machineCfg()?.riscv) proj.emuEngine = engine;
-      persist();
-      const e = ensureEmu();
-      openFile(EMU_TAB);
-      if (!e.running || e.engine !== emuEngine()) e.boot();
+      bootEngine(v.slice(4) as 'veryl' | 'riscv');
       return;
     }
     if (proj.active === EMU_TAB) { openFile(FLOW_TAB); }
@@ -1587,6 +1693,7 @@ async function boot(): Promise<void> {
   for (const p of projects) migratePcf(p);
   initLang();
   wire();
+  applyMode();
   const hash = location.hash;
   const exId = /ex=([\w-]+)/.exec(hash)?.[1];
   const labCode = /lab=([\w-]+)/.exec(hash)?.[1];

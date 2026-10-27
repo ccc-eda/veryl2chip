@@ -5106,6 +5106,7 @@ ${lines.join("\n")}
     syncStage();
     $2("boardPane").classList.toggle("hidden", a !== BOARD_TAB);
     $2("emuPane").classList.toggle("hidden", a !== EMU_TAB);
+    document.body.classList.toggle("tab-flow", a === FLOW_TAB);
     if (boardCmd(a) && file(a)) boardFile = a;
     const onBoard = !!(machineCfg()?.files && boardCmd(a));
     $2("cmdRun").textContent = onBoard ? tr("\u25B6 \u57F7\u884C", "\u25B6 Run") : tr("\u25B6 \u6E2C\u8A66", "\u25B6 Test");
@@ -5988,6 +5989,96 @@ int main(void) {
     if (machineCfg()?.files && boardCmd(proj.active ?? "")) runOnBoard();
     else runTests();
   }
+  var uiMode = load("mode", "basic");
+  function setMode(m) {
+    uiMode = m;
+    save("mode", m);
+    applyMode();
+  }
+  function applyMode() {
+    document.body.classList.toggle("basic", uiMode === "basic");
+    $2("modeBtn").textContent = uiMode === "basic" ? tr("\u9032\u968E \u25B8", "Advanced \u25B8") : tr("\u25C2 \u7C21\u6613", "\u25C2 Simple");
+    $2("modeBtn").title = uiMode === "basic" ? tr("\u986F\u793A\u6240\u6709\u63A7\u5236\uFF1A\u9A57\u8B49\uFF08\u6E2C\u8A66\u7684\u9802\u5C64\u3001\u9598\u7D1A\u6A21\u64EC\u3001\u5168\u9762\u9A57\u8B49\uFF09\u3001\u770B\u96FB\u8DEF\uFF08\u76EE\u6A19\u3001\u968E\u6BB5\u3001\u9802\u5C64\uFF09\u3001\u8DD1\u8D77\u4F86\uFF08\u865B\u64EC\u677F\u3001\u6A21\u64EC\u6A5F\uFF09", "Show every control: verify (simulation top, gate level, verify all), circuit (target, stage, top), run it (virtual board, emulator)") : tr("\u7C21\u6613\uFF1A\u53EA\u7559\u4E3B\u6309\u9215\u8207\u5B83\u7684\u9078\u55AE\uFF08\u25BE\uFF09\uFF0C\u5408\u6210\u6D41\u7A0B\u5206\u9801\u88E1\u624D\u51FA\u73FE\u5408\u6210\u7684\u9078\u55AE", "Simple: only the main button and its menu (\u25BE); the synthesis menus appear on the flow tab");
+  }
+  function mainClick() {
+    if (!core) return;
+    const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
+    if (onBoard) runKey();
+    else act(start(capIn()), $2("mainBtn"));
+  }
+  function synthOn(v, stage) {
+    $2("flowTarget").value = v;
+    synthValue();
+    fillStages();
+    runSynth(stage);
+  }
+  function bootEngine(engine) {
+    if (machineCfg()?.riscv) proj.emuEngine = engine;
+    persist();
+    const e = ensureEmu();
+    openFile(EMU_TAB);
+    if (!e.running || e.engine !== emuEngine()) e.boot();
+  }
+  function menuItems() {
+    const ci = capIn();
+    const run = boardRun();
+    const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
+    const synth2 = (v, name, hint) => ({ act: "synth", label: `\u2699 ${tr("\u5408\u6210", "Synthesize")}${tr("\uFF1A", ": ")}${name}`, hint, run: () => synthOn(v), alt: v !== "fpga" });
+    const mc = machineCfg();
+    return [
+      [tr("\u9A57\u8B49", "Verify"), [
+        onBoard && run ? { act: "test", label: tr(`\u25B6 \u57F7\u884C ${run.name}`, `\u25B6 Run ${run.name}`), hint: tr("\u5728\u677F\u5B50\u4E0A\u57F7\u884C\uFF08Ctrl/\u2318+Enter\uFF09", "on the board (Ctrl/\u2318+Enter)"), run: runKey } : { act: "test", label: actName("test"), hint: actHint("test", ci) + tr("\uFF08Ctrl/\u2318+Enter\uFF09", " (Ctrl/\u2318+Enter)"), run: () => runTests() },
+        { act: "verify", label: actName("verify"), hint: tr("RTL \u548C\u4E09\u7A2E\u5408\u6210\u5F8C\u7684\u7DB2\u8868\u8DD1\u540C\u4E00\u7D44 testbench\uFF0C\u7D50\u679C\u8981\u4E00\u81F4", "the same testbenches on the RTL and three synthesized netlists: they must agree"), run: verifyAll }
+      ]],
+      [tr("\u770B\u96FB\u8DEF", "See the circuit"), [
+        synth2("fpga", "FPGA\uFF08iCE40\uFF09", tr("LUT\u3001\u9032\u4F4D\u93C8\u3001block RAM\u3001\u4F48\u5C40\u7E5E\u7DDA\u3001\u6642\u5E8F", "LUTs, carry chains, block RAM, place and route, timing")),
+        synth2("asic", "ASIC \xB7 vlib", tr("\u6A19\u6E96\u5143\u4EF6\u3001\u64FA\u653E\u3001\u7E5E\u7DDA\u3001\u6642\u5E8F\u3001\u529F\u8017", "standard cells, placement, routing, timing, power")),
+        synth2("sky130", "ASIC \xB7 SKY130", tr("SkyWater 130 nm \u88FD\u7A0B\uFF1ADRC\u3001GDSII \u6676\u7247\u7248\u5716", "SkyWater 130 nm: DRC, a GDSII chip layout")),
+        { act: "synth", label: tr("\u21C4 FPGA \u8207 ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC"), hint: tr("\u540C\u4E00\u500B\u8A2D\u8A08\u5169\u7A2E\u505A\u6CD5\u7684\u9762\u7A4D\u8207\u901F\u5EA6", "area and speed of the same design both ways"), run: () => runSynth("cmp"), alt: true }
+      ]],
+      [tr("\u8DD1\u8D77\u4F86", "Run it"), [
+        { act: "board", label: actName("board"), hint: actHint("board", ci), run: flashBoard },
+        ...mc?.riscv ? [
+          { act: "emu", label: tr("\u{1F5A5} \u6A21\u64EC\u6A5F \xB7 riscv-emu\uFF08\u6307\u4EE4\u96C6\uFF0C\u5FEB\uFF09", "\u{1F5A5} Emulator \xB7 riscv-emu (instruction set, fast)"), hint: tr("\u50CF QEMU\uFF1A\u958B\u6A5F\u5E7E\u79D2\uFF0C\u5BEB\u7A0B\u5F0F\u7528", "like QEMU: boots in seconds, for writing software"), run: () => bootEngine("riscv") },
+          { act: "emu", label: tr("\u{1F5A5} \u6A21\u64EC\u6A5F \xB7 veryl-emu\uFF08\u786C\u9AD4\u672C\u8EAB\uFF09", "\u{1F5A5} Emulator \xB7 veryl-emu (the hardware itself)"), hint: tr("\u4F60\u7684 Veryl \u96FB\u8DEF\u4E00\u62CD\u4E00\u62CD\u5730\u8DD1\uFF1A\u6539\u4E86\u786C\u9AD4\u7528\u9019\u500B", "your Veryl circuit cycle by cycle: use it after changing the hardware"), run: () => bootEngine("veryl"), alt: true }
+        ] : [{ act: "emu", label: actName("emu"), hint: actHint("emu", ci), run: openEmu }]
+      ]]
+    ];
+  }
+  function showMenu() {
+    if (!core) return;
+    hideWhy();
+    const c = projCaps();
+    const first = start(capIn());
+    const groups = menuItems();
+    const items = groups.flatMap(([, it]) => it);
+    const m = $2("mainMenu");
+    let k = 0;
+    m.innerHTML = groups.map(([name, it]) => `<div class="sec">${esc4(name)}</div>` + it.map((x) => {
+      const on = c[x.act].on;
+      const star = on && x.act === first && !x.alt ? `<i>${tr("\u5EFA\u8B70", "suggested")}</i>` : "";
+      return `<button class="mi${on ? "" : " off"}" data-k="${k++}"><b>${esc4(x.label)}${star}</b><span>${esc4(on ? x.hint : c[x.act].why ?? "")}</span></button>`;
+    }).join("")).join("") + `<button class="mi foot" data-k="mode"><b>${uiMode === "basic" ? tr("\u9032\u968E \u25B8 \u6A19\u984C\u5217\u986F\u793A\u6240\u6709\u63A7\u5236", "Advanced \u25B8 every control in the title bar") : tr("\u25C2 \u7C21\u6613\uFF1A\u53EA\u7559\u4E3B\u6309\u9215", "\u25C2 Simple: only the main button")}</b></button>`;
+    m.classList.remove("hidden");
+    const r = $2("mainAct").getBoundingClientRect();
+    m.style.top = `${r.bottom + 4}px`;
+    m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+    m.onclick = (e) => {
+      const b = e.target.closest("[data-k]");
+      if (!b) return;
+      hideMenu();
+      if (b.dataset.k === "mode") {
+        setMode(uiMode === "basic" ? "full" : "basic");
+        return;
+      }
+      const x = items[+b.dataset.k];
+      if (!c[x.act].on) showWhy(x.act, $2("mainBtn"));
+      else x.run();
+    };
+  }
+  function hideMenu() {
+    $2("mainMenu").classList.add("hidden");
+  }
   function capIn() {
     return { files: proj.files, mods: modsKnown ? mods : null, top: synthTop(), active: proj.active };
   }
@@ -6013,8 +6104,12 @@ int main(void) {
       b.setAttribute("aria-disabled", String(!c[a].on));
       b.title = !c[a].on ? `${c[a].why}
 ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what to do)")}` : id === "cmdRun" && onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${proj.active}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${proj.active} on the board (Ctrl/\u2318+Enter)`) : tr(zh, en);
-      b.classList.toggle("primary", onBoard ? id === "cmdRun" : a === first);
+      b.classList.remove("primary");
     }
+    const mb = $2("mainBtn");
+    mb.disabled = $2("mainMore").disabled = false;
+    mb.textContent = onBoard ? tr(`\u25B6 \u57F7\u884C ${proj.active}`, `\u25B6 Run ${proj.active}`) : actName(first);
+    mb.title = onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${proj.active}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${proj.active} on the board (Ctrl/\u2318+Enter)`) : tr(`\u9019\u500B\u5C08\u6848\u5EFA\u8B70\u7684\u4E0B\u4E00\u6B65\uFF1A${actHint(first, capIn())}\u3002\u25BE \u6709\u5176\u4ED6\u505A\u6CD5`, `The suggested next step for this project: ${actHint(first, capIn())}. \u25BE has the others`);
     const fs = $2("flowStage");
     fs.disabled = !c.synth.on;
     fs.title = c.synth.on ? tr("\u5408\u6210\u4E26\u6AA2\u8996\u9019\u500B\u968E\u6BB5\uFF08Ctrl/\u2318+Shift+B\uFF09", "Synthesize and view this stage (Ctrl/\u2318+Shift+B)") : c.synth.why;
@@ -6317,6 +6412,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       { label: tr("\u986F\u793A\uFF1A\u8F38\u51FA", "View: Output"), run: () => panel("output") },
       { label: tr("\u986F\u793A\uFF1A\u6CE2\u5F62", "View: Waveform"), run: () => panel("wave") },
       { label: tr("\u6B61\u8FCE\u9801", "Welcome page"), run: () => openFile(WELCOME) },
+      { label: uiMode === "basic" ? tr("\u6A19\u984C\u5217\uFF1A\u986F\u793A\u6240\u6709\u63A7\u5236\uFF08\u9032\u968E\uFF09", "Title bar: every control (advanced)") : tr("\u6A19\u984C\u5217\uFF1A\u7C21\u6613\uFF08\u4E3B\u6309\u9215\u8207\u9078\u55AE\uFF09", "Title bar: simple (the main button and its menu)"), run: () => setMode(uiMode === "basic" ? "full" : "basic") },
       { label: tr("\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F", "Show the suggested steps"), run: () => {
         proj.guideOff = false;
         persist();
@@ -6440,6 +6536,9 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("cmdPalette").onclick = () => palette(false);
     $2("cmdRun").onclick = () => runKey();
     $2("cmdVerify").onclick = () => act("verify", $2("cmdVerify"));
+    $2("mainBtn").onclick = () => mainClick();
+    $2("mainMore").onclick = () => $2("mainMenu").classList.contains("hidden") ? showMenu() : hideMenu();
+    $2("modeBtn").onclick = () => setMode(uiMode === "basic" ? "full" : "basic");
     $2("cmdBoard").onclick = () => act("board", $2("cmdBoard"));
     $2("cmdEmu").onclick = () => act("emu", $2("cmdEmu"));
     $2("guide").onclick = (e) => {
@@ -6452,7 +6551,9 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       }
     };
     document.addEventListener("mousedown", (e) => {
-      if (!e.target.closest("#capPop, .off, [data-step]")) hideWhy();
+      const t = e.target;
+      if (!t.closest("#capPop, .off, [data-step]")) hideWhy();
+      if (!t.closest("#mainMenu, #mainMore")) hideMenu();
     });
     $2("testsRun").onclick = () => runTests();
     $2("testsVerify").onclick = verifyAll;
@@ -6464,12 +6565,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("flowTarget").onchange = () => {
       const v = $2("flowTarget").value;
       if (v.startsWith("emu-")) {
-        const engine = v.slice(4);
-        if (machineCfg()?.riscv) proj.emuEngine = engine;
-        persist();
-        const e = ensureEmu();
-        openFile(EMU_TAB);
-        if (!e.running || e.engine !== emuEngine()) e.boot();
+        bootEngine(v.slice(4));
         return;
       }
       if (proj.active === EMU_TAB) {
@@ -6560,6 +6656,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     for (const p of projects) migratePcf(p);
     initLang();
     wire();
+    applyMode();
     const hash = location.hash;
     const exId = /ex=([\w-]+)/.exec(hash)?.[1];
     const labCode = /lab=([\w-]+)/.exec(hash)?.[1];

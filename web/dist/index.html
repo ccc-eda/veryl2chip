@@ -10,8 +10,12 @@
 <body class="ide">
 <div id="titlebar">
   <span class="brand">veryl2chip <b>IDE</b></span>
-  <div class="tb-group">
-    <button id="cmdRun" class="tb-btn primary" disabled title="執行測試（Ctrl/⌘+Enter）" data-en-title="Run tests (Ctrl/⌘+Enter)" data-en="▶ Test">▶ 測試</button>
+  <div id="mainAct" class="tb-split">
+    <button id="mainBtn" class="tb-btn primary" disabled title="這個專案建議的下一步" data-en-title="The suggested next step for this project">▶</button><button id="mainMore" class="tb-btn primary" disabled title="所有動作：驗證、看電路、跑起來" data-en-title="Every action: verify, see the circuit, run it">▾</button>
+  </div>
+  <div id="grpVerify" class="tb-group">
+    <span class="tb-lbl" data-en="Verify">驗證</span>
+    <button id="cmdRun" class="tb-btn" disabled title="執行測試（Ctrl/⌘+Enter）" data-en-title="Run tests (Ctrl/⌘+Enter)" data-en="▶ Test">▶ 測試</button>
     <select id="simTop" title="模擬的頂層（預設：全部 #[test]）" data-en-title="Simulation top (default: every #[test])"></select>
     <select id="simMode" title="模擬對象：RTL，或把合成頂層換成合成後的閘級網表（同一個 testbench）" data-en-title="Simulate the RTL, or the synthesis top replaced by its gate-level netlist (same testbench)">
       <option value="rtl">RTL</option>
@@ -21,15 +25,20 @@
     </select>
     <button id="cmdVerify" class="tb-btn" disabled title="RTL + 三種閘級網表全部跑一遍（驗證矩陣）" data-en-title="Run RTL and all three gate-level netlists (verification matrix)" data-en="✔ Verify all">✔ 全面驗證</button>
   </div>
-  <div class="tb-group">
+  <div id="grpFlow" class="tb-group">
+    <span class="tb-lbl" data-en="Circuit">看電路</span>
     <select id="flowTarget" disabled title="目標：合成（看電路變成什麼）或模擬機（讓機器開機、跑軟體）" data-en-title="Target: synthesis (see what the circuit becomes) or an emulator (boot a machine, run software)"><optgroup id="tgSynth"><option value="fpga">FPGA</option><option value="asic">ASIC · vlib</option><option value="sky130">ASIC · SKY130</option></optgroup><optgroup id="tgEmu"><option value="emu-veryl" data-en="veryl-emu (the hardware)">veryl-emu（硬體）</option><option value="emu-riscv" data-en="riscv-emu (instruction set)">riscv-emu（指令集）</option></optgroup></select>
     <select id="flowStage" disabled title="合成並檢視這個階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view this stage (Ctrl/⌘+Shift+B)"></select>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
+  </div>
+  <div id="grpRun" class="tb-group">
+    <span class="tb-lbl" data-en="Run it">跑起來</span>
     <button id="cmdBoard" class="tb-btn" disabled title="合成並燒錄到虛擬 iCEBreaker 開發板" data-en-title="Synthesize and flash to a virtual iCEBreaker board" data-en="⚡ Virtual board">⚡ 虛擬板</button>
     <button id="cmdEmu" class="tb-btn" disabled title="模擬機：讓一台機器開機（需要 machine.json）：veryl-emu 把設計編譯成 WebAssembly（硬體本身），riscv-emu 只模擬 RV64 開發板的指令集（快幾十倍）" data-en-title="Emulator: boot a machine (needs machine.json): veryl-emu compiles the design to WebAssembly (the hardware itself), riscv-emu emulates the RV64 board's instruction set only (tens of times faster)" data-en="🖥 Emulator">🖥 模擬機</button>
   </div>
   <span class="spacer"></span>
   <button id="cmdPalette" class="tb-btn ghost" title="命令選單（Ctrl/⌘+Shift+P）" data-en-title="Command palette (Ctrl/⌘+Shift+P)" data-en="⌘ Commands">⌘ 命令</button>
+  <button id="modeBtn" class="tb-btn ghost"></button>
   <button id="tbMore" class="tb-btn ghost" title="更多：模擬、合成的選單與語言" data-en-title="More: the simulation and synthesis menus, language">⋯</button>
   <select id="langSel" title="介面語言" data-en-title="Interface language"></select>
   <a id="demoLink" class="tb-link" href="demo.html" title="原本的展示介面" data-en-title="The original demo page (Traditional Chinese)" data-en="Demo ↗">展示版 ↗</a>
@@ -179,5 +188,6 @@
 <script src="chipdb.js"></script>
 <script src="ide.js"></script>
 <div id="capPop" class="hidden" role="dialog"></div>
+<div id="mainMenu" class="hidden" role="menu"></div>
 </body>
 </html>

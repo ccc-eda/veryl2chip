@@ -15,6 +15,28 @@ body.ide select { background: #3c3c3c; border: 1px solid #4a4a4a; border-radius:
 #titlebar .brand { font-size: 13px; color: var(--dim); white-space: nowrap; }
 #titlebar .brand b { color: #fff; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
+.tb-group + .tb-group { border-left: 1px solid #3c3c3c; padding-left: 12px; }
+.tb-lbl { color: var(--dim); font-size: 11px; white-space: nowrap; }
+/* the main button (the suggested step) and ▾ (every action) */
+.tb-split { display: flex; }
+.tb-split #mainBtn { border-radius: 3px 0 0 3px; }
+.tb-split #mainMore { border-radius: 0 3px 3px 0; border-left-color: #0a5fa3; padding: 3px 7px; }
+#mainMenu { position: fixed; z-index: 55; width: 340px; max-width: calc(100vw - 16px); max-height: calc(100vh - 60px); overflow-y: auto; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); padding: 4px 0; }
+#mainMenu .sec { padding: 8px 12px 2px; font-size: 11px; color: var(--dim); }
+#mainMenu .mi { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; background: none; border: 0; color: var(--fg); padding: 5px 12px 5px 20px; text-align: left; cursor: pointer; font: inherit; }
+#mainMenu .mi:hover { background: var(--sel); }
+#mainMenu .mi b { font-weight: 500; }
+#mainMenu .mi i { font-style: normal; font-size: 10px; margin-left: 8px; padding: 0 5px; border-radius: 3px; background: var(--accent); color: #fff; vertical-align: 1px; }
+#mainMenu .mi span { color: var(--dim); font-size: 11px; line-height: 1.4; }
+#mainMenu .mi.off { cursor: help; }
+#mainMenu .mi.off b { opacity: .45; }
+#mainMenu .mi.foot { border-top: 1px solid var(--line); margin-top: 4px; padding: 7px 12px; color: var(--dim); }
+/* simple title bar: the main button only; the synthesis menus on the flow tab */
+body.basic .tb-group { display: none; }
+body.basic.tab-flow #grpFlow { display: flex; border-left: 0; padding-left: 0; }
+/* every control: on a narrow window the groups go on to a second row instead of being cut off */
+body:not(.basic) #titlebar { flex-wrap: wrap; height: auto; min-height: 36px; row-gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+body:not(.basic) #titlebar .tb-group select { max-width: 150px; }
 .tb-btn { background: #3a3d41; color: #fff; border: 1px solid #4a4d51; border-radius: 3px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
 .tb-btn:hover:not(:disabled) { background: #45494e; }
 .tb-btn.primary { background: var(--accent); border-color: #1b8ae6; }
@@ -349,10 +371,13 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
   #titlebar { height: auto; min-height: 40px; flex-wrap: wrap; gap: 6px; padding: 4px 6px; overflow: visible; }
   #titlebar .brand, #demoLink { display: none; }
   .tb-group { display: contents; }
-  #cmdRun { order: 1; } #cmdBoard { order: 2; } #titlebar > .spacer { order: 3; } #cmdPalette { order: 4; } #tbMore { order: 5; display: inline-block; }
-  #simTop, #simMode, #cmdVerify, #cmdEmu, #flowTarget, #flowStage, #synthTop, #langSel { order: 10; display: none; }
-  #titlebar.more #simTop, #titlebar.more #simMode, #titlebar.more #flowTarget, #titlebar.more #flowStage,
-  #titlebar.more #synthTop, #titlebar.more #langSel, #titlebar.more #cmdVerify, #titlebar.more #cmdEmu { display: block; flex: 1 1 40%; max-width: none; min-width: 0; }
+  #mainAct { order: 1; } #titlebar > .spacer { order: 3; } #cmdPalette { order: 4; } #tbMore { order: 5; display: inline-block; }
+  #titlebar .tb-group, body.basic.tab-flow #grpFlow { display: none; }
+  #langSel, #modeBtn { order: 10; display: none; }
+  #titlebar.more .tb-group, body.basic.tab-flow #titlebar.more #grpFlow { order: 10; display: flex; flex-wrap: wrap; width: 100%; border-left: 0; padding-left: 0; }
+  #titlebar.more .tb-group .tb-lbl { flex: 0 0 100%; }
+  #titlebar.more .tb-group > :not(.tb-lbl), #titlebar.more #langSel { display: block; flex: 1 1 40%; max-width: none; min-width: 0; }
+  #mainMenu .mi { padding-top: 8px; padding-bottom: 8px; }
   #tbMore.on { color: #fff; background: #3a3d41; }
   .tb-btn { padding: 6px 12px; font-size: 14px; }
   body.ide select { height: 32px; font-size: 14px; }
