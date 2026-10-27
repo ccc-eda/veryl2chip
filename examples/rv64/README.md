@@ -164,7 +164,7 @@ emu/rv64emu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開
 |---|---|---|
 | riscv-tests | 196 / 196 | 196 / 196 |
 | 隨機程式（和 spike 相同） | 900 | 120 |
-| Linux 開到 busybox shell（2.3 億拍） | 32 秒（720 萬拍 / 秒） | 104 秒（220 萬拍 / 秒） |
+| Linux 開到 busybox shell（2.3 億拍） | 32 秒（720 萬拍 / 秒） | 55 秒（420 萬拍 / 秒；v2.13 是 104 秒） |
 
 ## FPGA：佈局繞線之後再模擬
 

@@ -7,7 +7,11 @@
 //!
 //! - `settle()`: the combinational processes in dependency order, each once; a group
 //!   that depends on itself (a combinational cycle between processes) repeats until
-//!   its outputs stop changing.
+//!   its outputs stop changing. Only dirty processes run: a store that changes a
+//!   signal marks the processes that read it (a byte flag each, 0 = dirty), and
+//!   `settle` first compares the signals no process writes (the inputs) with their
+//!   last values. Debugging: VERYL_EMU_CHUNK=1 gives every process its own (named)
+//!   function for profilers, VERYL_EMU_COUNT counts the runs of each process.
 //! - `posedge()`: the `always_ff` processes (one clock, rising edge), then `settle()`.
 //!   Non-blocking assignment: a register that some `always_ff` also reads is written
 //!   to its shadow copy (initialized from the register at the edge, copied back
@@ -43,6 +47,10 @@ pub struct Layout {
     pub qbase: u32,
     pub qend: u32,
     pub scratch: u32,
+    /// dirty flags of the combinational processes (a byte each, 0 = dirty)
+    pub flags: u32,
+    /// last values of the signals no process writes (inputs), to see them change
+    pub prev: u32,
     pub size: u32,
 }
 
@@ -63,13 +71,41 @@ struct Cg<'a> {
     ff: bool,
     /// wasm index of user function i
     fbase: u32,
+    /// activity: the combinational processes that read each signal, the dirty flags
+    /// (a byte per process, 0 = dirty), the processes not to mark (the one being compiled)
+    cons: &'a [Vec<usize>],
+    skip: Vec<usize>,
 }
 
 fn mask_bits(w: u32) -> u64 { if w >= 64 { u64::MAX } else { (1u64 << w) - 1 } }
 
 impl<'a> Cg<'a> {
-    fn new(lay: &'a Layout, lw: &'a Lower<'a>, ty: u32, ff: bool, fbase: u32) -> Self {
-        Cg { lay, lw, f: WFunc::new(ty), free: vec![], free32: vec![], ff, fbase }
+    fn new(lay: &'a Layout, lw: &'a Lower<'a>, ty: u32, ff: bool, fbase: u32, cons: &'a [Vec<usize>]) -> Self {
+        Cg { lay, lw, f: WFunc::new(ty), free: vec![], free32: vec![], ff, fbase, cons, skip: vec![] }
+    }
+
+    /// the processes a change of `sig` makes dirty
+    fn marks(&self, sig: usize) -> Vec<usize> {
+        self.cons.get(sig).map(|c| c.iter().copied().filter(|p| !self.skip.contains(p)).collect()).unwrap_or_default()
+    }
+    fn emit_marks(&mut self, ps: &[usize]) {
+        for &p in ps { self.f.i32c(0).i32c(0).store8(self.lay.flags + p as u32); }
+    }
+    /// store limbs (index, local) of `sig` at `dest`; when they differ from the signal's
+    /// current value, its readers become dirty
+    fn put(&mut self, sig: usize, dest: u32, limbs: &[(u32, u32)]) {
+        let m = self.marks(sig);
+        if !m.is_empty() {
+            let cur = self.lay.off[sig];
+            for (i, &(k, l)) in limbs.iter().enumerate() {
+                self.f.i32c(0).load64(cur + 8 * k).local_get(l).op(I64_NE);
+                if i > 0 { self.f.op(I32_OR); }
+            }
+            self.f.if_();
+            self.emit_marks(&m);
+            self.f.end();
+        }
+        for &(k, l) in limbs { self.f.i32c(0).local_get(l).store64(dest + 8 * k); }
     }
     fn l64(&mut self) -> u32 { self.free.pop().unwrap_or_else(|| self.f.local(I64)) }
     fn l32(&mut self) -> u32 { self.free32.pop().unwrap_or_else(|| self.f.local(I32)) }
@@ -256,6 +292,33 @@ impl<'a> Cg<'a> {
         out
     }
 
+    /// i32 local: is the value non-zero (conditions without a detour through i64)
+    fn cond(&mut self, e: &E) -> R<u32> {
+        Ok(match &e.k {
+            K::Cmp(op, sg, a, b) => {
+                let (va, vb) = (self.ex(a)?, self.ex(b)?);
+                let c = self.cmp(op, *sg, &va, &vb, a.w);
+                self.rel(va);
+                self.rel(vb);
+                c
+            }
+            K::LNot(a) => { let c = self.cond(a)?; self.f.local_get(c).op(I32_EQZ).local_set(c); c }
+            K::LAnd(a, b) | K::LOr(a, b) => {
+                let ca = self.cond(a)?;
+                let cb = self.cond(b)?;
+                self.f.local_get(ca).local_get(cb).op(if matches!(e.k, K::LAnd(..)) { I32_AND } else { I32_OR }).local_set(ca);
+                self.rel32(cb);
+                ca
+            }
+            _ => {
+                let v = self.ex(e)?;
+                let c = self.nonzero(&v);
+                self.rel(v);
+                c
+            }
+        })
+    }
+
     /// sign-extended copy of a single-limb value of width w
     fn sext64(&mut self, x: u32, w: u32) -> u32 {
         let o = self.l64();
@@ -272,6 +335,12 @@ impl<'a> Cg<'a> {
         Ok(match &e.k {
             K::Const(l) => l.iter().map(|&x| self.konst(x)).collect(),
             K::Sig(s) => { let (off, nl) = (self.lay.off[*s], self.lay.nl[*s]); self.load(off, nl, None) }
+            K::Elem(s, idx) if idx.const_u64().is_some() => {
+                // a fixed element: a fixed address (out of range: 0)
+                let k = idx.const_u64().unwrap();
+                let (nl, n) = (self.lay.nl[*s], self.lw.sigs[*s].arr.unwrap_or(1) as u64);
+                if k >= n { self.zeros(nl) } else { self.load(self.lay.off[*s] + (k as u32) * 8 * nl, nl, None) }
+            }
             K::Elem(s, idx) => {
                 let (addr, ok) = self.elem_addr(*s, idx)?;
                 let v = self.load(self.lay.off[*s], self.lay.nl[*s], Some(addr));
@@ -316,12 +385,10 @@ impl<'a> Cg<'a> {
                 self.mask_top(&r, w);
                 r
             }
-            K::LNot(a) => {
-                let v = self.ex(a)?;
-                let c = self.nonzero(&v);
-                self.rel(v);
+            K::LNot(_) | K::LAnd(..) | K::LOr(..) => {
+                let c = self.cond(e)?;
                 let o = self.l64();
-                self.f.local_get(c).op(I32_EQZ).op(I64_EXTEND_I32_U).local_set(o);
+                self.f.local_get(c).op(I64_EXTEND_I32_U).local_set(o);
                 self.rel32(c);
                 vec![o]
             }
@@ -397,19 +464,6 @@ impl<'a> Cg<'a> {
                 self.rel32(c);
                 vec![o]
             }
-            K::LAnd(a, b) | K::LOr(a, b) => {
-                let va = self.ex(a)?;
-                let ca = self.nonzero(&va);
-                self.rel(va);
-                let vb = self.ex(b)?;
-                let cb = self.nonzero(&vb);
-                self.rel(vb);
-                let o = self.l64();
-                self.f.local_get(ca).local_get(cb).op(if matches!(e.k, K::LAnd(..)) { I32_AND } else { I32_OR }).op(I64_EXTEND_I32_U).local_set(o);
-                self.rel32(ca);
-                self.rel32(cb);
-                vec![o]
-            }
             K::Shift(op, a, b) => {
                 let va = self.ex(a)?;
                 let r = if let Some(c) = b.const_u64() {
@@ -454,9 +508,7 @@ impl<'a> Cg<'a> {
                 r
             }
             K::Tern(c, a, b) => {
-                let cv = self.ex(c)?;
-                let cc = self.nonzero(&cv);
-                self.rel(cv);
+                let cc = self.cond(c)?;
                 let out: V = (0..n).map(|_| self.l64()).collect();
                 self.f.local_get(cc).if_();
                 self.rel32(cc);
@@ -493,6 +545,36 @@ impl<'a> Cg<'a> {
             K::Resize(a) => {
                 let v = self.ex(a)?;
                 self.resize(v, a.w, a.s, w)
+            }
+            K::Rep(cnt, a) => {
+                let v = self.ex(a)?;
+                if a.w == 1 {
+                    // one bit n times: 0 - bit, masked
+                    let f = self.l64();
+                    self.f.i64c(0).local_get(v[0]).op(I64_SUB).local_set(f);
+                    let r: V = (0..n).map(|_| { let l = self.l64(); self.f.local_get(f).local_set(l); l }).collect();
+                    self.rel(vec![f]);
+                    self.rel(v);
+                    self.mask_top(&r, w);
+                    r
+                } else {
+                    let res = self.zeros(n);
+                    for c in 0..*cnt {
+                        let pos = c * a.w;
+                        for (j, &x) in v.iter().enumerate() {
+                            let b = pos + 64 * j as u32;
+                            if b >= w { break; }
+                            let (t, sh) = ((b / 64) as usize, b % 64);
+                            self.f.local_get(res[t]).local_get(x).i64c(sh as u64).op(I64_SHL).op(I64_OR).local_set(res[t]);
+                            if sh > 0 && t + 1 < res.len() {
+                                self.f.local_get(res[t + 1]).local_get(x).i64c(64 - sh as u64).op(I64_SHR_U).op(I64_OR).local_set(res[t + 1]);
+                            }
+                        }
+                    }
+                    self.rel(v);
+                    self.mask_top(&res, w);
+                    res
+                }
             }
             K::Call(fi, args) => {
                 self.call_args(*fi, args)?;
@@ -649,9 +731,7 @@ impl<'a> Cg<'a> {
             S::If(arms, els) => {
                 let mut opened = 0;
                 for (c, b) in arms {
-                    let cv = self.ex(c)?;
-                    let cc = self.nonzero(&cv);
-                    self.rel(cv);
+                    let cc = self.cond(c)?;
                     self.f.local_get(cc).if_();
                     self.rel32(cc);
                     self.stmts(b)?;
@@ -695,11 +775,24 @@ impl<'a> Cg<'a> {
 
     fn assign(&mut self, t: &Target, e: &E) -> R<()> {
         match t {
+            Target::Elem { sig, idx } if idx.const_u64().is_some() && !(self.ff && self.lay.queued[*sig]) => {
+                let k = idx.const_u64().unwrap();
+                let v = self.ex(e)?;
+                if k < self.lw.sigs[*sig].arr.unwrap_or(1) as u64 {
+                    let off = self.lay.off[*sig] + (k as u32) * 8 * self.lay.nl[*sig];
+                    let m = self.marks(*sig);
+                    self.emit_marks(&m);
+                    self.store(off, &v, None);
+                }
+                self.rel(v);
+            }
             Target::Elem { sig, idx } => {
                 let v = self.ex(e)?;
                 let (addr, ok) = self.elem_addr(*sig, idx)?;
                 let off = self.lay.off[*sig];
                 self.f.local_get(ok).if_();
+                let m = self.marks(*sig);
+                self.emit_marks(&m);
                 if self.ff && self.lay.queued[*sig] {
                     // queue entry: [address, limbs, value...]
                     let p = self.l32();
@@ -726,20 +819,28 @@ impl<'a> Cg<'a> {
                 let off = if self.ff { self.lay.shadow[sig].unwrap_or(self.lay.off[sig]) } else { self.lay.off[sig] };
                 let v = self.ex(e)?;
                 if let Some(l) = lo.const_u64() {
-                    if l == 0 && *w == sw { self.store(off, &v, None); self.rel(v); return Ok(()); }
+                    if l == 0 && *w == sw {
+                        let ls: Vec<(u32, u32)> = v.iter().enumerate().map(|(k, &x)| (k as u32, x)).collect();
+                        self.put(sig, off, &ls);
+                        self.rel(v);
+                        return Ok(());
+                    }
                     if l + *w as u64 > sw as u64 { self.rel(v); return Ok(()); }
                     // read-modify-write of the limbs the field touches
                     let vx = self.resize(v, *w, false, sw);
                     let sv = self.shl_const(&vx, l, nl);
                     self.rel(vx);
+                    let mut ls = vec![];
                     for k in 0..nl {
                         let (b0, b1) = (64 * k as u64, 64 * k as u64 + 64);
                         let (f0, f1) = (l, l + *w as u64);
                         if f1 <= b0 || f0 >= b1 { continue; }
                         let (s0, s1) = (f0.max(b0) - b0, f1.min(b1) - b0);
                         let m = if s1 - s0 == 64 { u64::MAX } else { ((1u64 << (s1 - s0)) - 1) << s0 };
-                        self.f.i32c(0).i32c(0).load64(off + 8 * k).i64c(!m).op(I64_AND).local_get(sv[k as usize]).i64c(m).op(I64_AND).op(I64_OR).store64(off + 8 * k);
+                        self.f.i32c(0).load64(off + 8 * k).i64c(!m).op(I64_AND).local_get(sv[k as usize]).i64c(m).op(I64_AND).op(I64_OR).local_set(sv[k as usize]);
+                        ls.push((k, sv[k as usize]));
                     }
+                    self.put(sig, off, &ls);
                     self.rel(sv);
                     return Ok(());
                 }
@@ -760,9 +861,12 @@ impl<'a> Cg<'a> {
                 }
                 let sm = self.shl_dyn(&mk, a);
                 self.rel(mk);
+                let mut ls = vec![];
                 for k in 0..nl as usize {
-                    self.f.i32c(0).i32c(0).load64(off + 8 * k as u32).local_get(sm[k]).i64c(u64::MAX).op(I64_XOR).op(I64_AND).local_get(sv[k]).local_get(sm[k]).op(I64_AND).op(I64_OR).store64(off + 8 * k as u32);
+                    self.f.i32c(0).load64(off + 8 * k as u32).local_get(sm[k]).i64c(u64::MAX).op(I64_XOR).op(I64_AND).local_get(sv[k]).local_get(sm[k]).op(I64_AND).op(I64_OR).local_set(sv[k]);
+                    ls.push((k as u32, sv[k]));
                 }
+                self.put(sig, off, &ls);
                 self.f.end();
                 self.rel(sv);
                 self.rel(sm);
@@ -786,9 +890,7 @@ impl<'a> Cg<'a> {
                 S::If(arms, els) => {
                     let mut opened = 0;
                     for (c, b) in arms {
-                        let cv = self.ex(c)?;
-                        let cc = self.nonzero(&cv);
-                        self.rel(cv);
+                        let cc = self.cond(c)?;
                         self.f.local_get(cc).if_();
                         self.rel32(cc);
                         self.func_stmts(b, ret)?;
@@ -910,7 +1012,7 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
     let deferred: HashSet<usize> = ff_writes.iter().copied().filter(|s| ff_reads.contains(s)).collect();
 
     // layout: deferred registers first (one region, copied to / from the shadow), then the rest
-    let mut lay = Layout { off: vec![0; nsig], nl: vec![0; nsig], shadow: vec![None; nsig], queued: vec![false; nsig], region: (0, 0), shadow_base: 0, qbase: 0, qend: 0, scratch: 0, size: 0 };
+    let mut lay = Layout { off: vec![0; nsig], nl: vec![0; nsig], shadow: vec![None; nsig], queued: vec![false; nsig], region: (0, 0), shadow_base: 0, qbase: 0, qend: 0, scratch: 0, flags: 0, prev: 0, size: 0 };
     let mut at = BASE;
     let mut order: Vec<usize> = (0..nsig).filter(|s| deferred.contains(s) && lw.sigs[*s].arr.is_none()).collect();
     let rest: Vec<usize> = (0..nsig).filter(|s| !(deferred.contains(s) && lw.sigs[*s].arr.is_none())).collect();
@@ -964,19 +1066,34 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
         scratch_need = scratch_need.max(sz);
     }
     at += scratch_need + 64;
+    // activity: readers of every signal, the dirty flags, the inputs (signals no process writes)
+    let mut cons: Vec<Vec<usize>> = vec![vec![]; nsig];
+    for (i, (r, _)) in rw.iter().enumerate() { for &s in r { cons[s].push(i); } }
+    let mut written: HashSet<usize> = internal.clone();
+    for (_, w) in &rw { written.extend(w.iter().copied()); }
+    written.extend(ff_writes.iter().copied());
+    let inputs: Vec<usize> = (0..nsig).filter(|s| !written.contains(s) && lw.sigs[*s].arr.is_none() && !cons[*s].is_empty()).collect();
+    let count = std::env::var("VERYL_EMU_COUNT").is_ok();
+    lay.flags = at;
+    at += (n as u32 + 8) & !7;
+    if count { at += 4 * n as u32; }
+    lay.prev = at;
+    for &s in &inputs { at += 8 * lay.nl[s]; }
     lay.size = at;
 
     // ---- functions ----
     // wasm function indices: user functions, then process chunks, then settle / posedge / run
     let mut wf: Vec<WFunc> = vec![];
     for (i, f) in lw.funcs.iter().enumerate() {
-        let mut cg = Cg::new(&lay, &lw, wasm::T_VOID, false, 0);
+        let mut cg = Cg::new(&lay, &lw, wasm::T_VOID, false, 0, &cons);
+        cg.f.name = format!("fn:{}", f.name);
         cg.func_stmts(&f.body, f.ret).map_err(|e| format!("function {}: {}", f.name, e))?;
         let _ = i;
         wf.push(cg.f);
     }
     // combinational chunks: consecutive acyclic processes share a function
-    const CHUNK: usize = 60_000;
+    // (VERYL_EMU_CHUNK=1: a function per process, for profiling)
+    let chunk: usize = std::env::var("VERYL_EMU_CHUNK").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000);
     let mut settle_plan: Vec<Result<u32, Vec<u32>>> = vec![]; // Ok(chunk) or Err(chunks of a cyclic group)
     let mut cur: Option<Cg> = None;
     let flush = |cur: &mut Option<Cg>, wf: &mut Vec<WFunc>| -> Option<u32> {
@@ -984,13 +1101,23 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
     };
     for g in &groups {
         if g.len() == 1 {
-            let c = cur.get_or_insert_with(|| Cg::new(&lay, &lw, wasm::T_VOID, false, 0));
-            c.stmts(&combs[g[0]]).map_err(|e| format!("combinational process: {}", e))?;
-            if c.f.code.len() > CHUNK { if let Some(i) = flush(&mut cur, &mut wf) { settle_plan.push(Ok(i)); } }
+            let c = cur.get_or_insert_with(|| Cg::new(&lay, &lw, wasm::T_VOID, false, 0, &cons));
+            if c.f.name.is_empty() { c.f.name = format!("comb:{}", rw[g[0]].1.first().map(|s| lw.sigs[*s].name.as_str()).unwrap_or("?")); }
+            // only when dirty: clean it, then run it
+            let p = g[0];
+            c.f.i32c(0).load8(lay.flags + p as u32).op(I32_EQZ).if_();
+            c.f.i32c(0).i32c(1).store8(lay.flags + p as u32);
+            // (VERYL_EMU_COUNT: how often each process runs, 32-bit counters after the flags)
+            if count { c.f.i32c(0).i32c(0).load32(lay.prev - 4 * n as u32 + 4 * p as u32 - 8 * 0).i32c(1).op(I32_ADD).store32(lay.prev - 4 * n as u32 + 4 * p as u32); }
+            c.skip = vec![p];
+            c.stmts(&combs[p]).map_err(|e| format!("combinational process: {}", e))?;
+            c.f.end();
+            if c.f.code.len() > chunk { if let Some(i) = flush(&mut cur, &mut wf) { settle_plan.push(Ok(i)); } }
         } else {
             if let Some(i) = flush(&mut cur, &mut wf) { settle_plan.push(Ok(i)); }
             let mut parts = vec![];
-            let mut cg = Cg::new(&lay, &lw, wasm::T_VOID, false, 0);
+            let mut cg = Cg::new(&lay, &lw, wasm::T_VOID, false, 0, &cons);
+            cg.skip = g.clone();
             for &p in g { cg.stmts(&combs[p]).map_err(|e| format!("combinational process: {}", e))?; }
             wf.push(cg.f);
             parts.push(wf.len() as u32 - 1);
@@ -1002,15 +1129,32 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
     let mut ff_funcs = vec![];
     let mut cur_ff: Option<Cg> = None;
     for b in &ffs {
-        let c = cur_ff.get_or_insert_with(|| Cg::new(&lay, &lw, wasm::T_VOID, true, 0));
+        let c = cur_ff.get_or_insert_with(|| Cg::new(&lay, &lw, wasm::T_VOID, true, 0, &cons));
         c.stmts(b).map_err(|e| format!("always_ff: {}", e))?;
-        if c.f.code.len() > CHUNK { wf.push(cur_ff.take().unwrap().f); ff_funcs.push(wf.len() as u32 - 1); }
+        if c.f.name.is_empty() { c.f.name = "ff".into(); }
+        if c.f.code.len() > chunk { wf.push(cur_ff.take().unwrap().f); ff_funcs.push(wf.len() as u32 - 1); }
     }
     if let Some(c) = cur_ff.take() { wf.push(c.f); ff_funcs.push(wf.len() as u32 - 1); }
 
     // settle
     let groups_cyclic: Vec<&Vec<usize>> = groups.iter().filter(|g| g.len() > 1).collect();
     let mut settle = WFunc::new(wasm::T_VOID);
+    settle.name = "settle".into();
+    // inputs that changed since the last settle: their readers become dirty
+    {
+        let mut po = lay.prev;
+        for &s in &inputs {
+            for k in 0..lay.nl[s] {
+                settle.i32c(0).load64(lay.off[s] + 8 * k).i32c(0).load64(po + 8 * k).op(I64_NE);
+                if k > 0 { settle.op(I32_OR); }
+            }
+            settle.if_();
+            for k in 0..lay.nl[s] { settle.i32c(0).i32c(0).load64(lay.off[s] + 8 * k).store64(po + 8 * k); }
+            for &p in &cons[s] { settle.i32c(0).i32c(0).store8(lay.flags + p as u32); }
+            settle.end();
+            po += 8 * lay.nl[s];
+        }
+    }
     let mut gi = 0;
     for step in &settle_plan {
         match step {
@@ -1022,6 +1166,10 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
                 let mut outs: Vec<usize> = vec![];
                 for &p in g.iter() { for &s in &rw[p].1 { if lw.sigs[s].arr.is_none() && !outs.contains(&s) { outs.push(s); } } }
                 let (cnt, ch) = (settle.local(I32), settle.local(I32));
+                // only when a member is dirty; the members are clean afterwards
+                for (j, &p) in g.iter().enumerate() { settle.i32c(0).load8(lay.flags + p as u32).op(I32_EQZ); if j > 0 { settle.op(I32_OR); } }
+                settle.if_();
+                for &p in g.iter() { settle.i32c(0).i32c(1).store8(lay.flags + p as u32); }
                 settle.i32c(100).local_set(cnt);
                 settle.loop_();
                 let mut so = lay.scratch;
@@ -1031,6 +1179,7 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
                 let mut so = lay.scratch;
                 for &s in &outs { for k in 0..lay.nl[s] { settle.local_get(ch).i32c(0).load64(lay.off[s] + 8 * k).i32c(0).load64(so).op(I64_NE).op(I32_OR).local_set(ch); so += 8; } }
                 settle.local_get(cnt).i32c(1).op(I32_SUB).local_tee(cnt).i32c(0).op(I32_NE).local_get(ch).op(I32_AND).br_if(0);
+                settle.end();
                 settle.end();
             }
         }
@@ -1091,7 +1240,9 @@ pub fn compile(sim: &veryl_sim::sim::Sim, procs: &[Proc], stops: &[String]) -> R
 
     // metadata for the harness
     let stops_json: Vec<String> = stops.iter().enumerate().map(|(j, s)| format!("\"{}\": {}", s, MUTE + 4 * j as u32)).collect();
-    let mut json = format!("{{\n  \"finish\": 0,\n  \"mute\": {{{}}},\n  \"signals\": {{\n", stops_json.join(", "));
+    let procs_json: Vec<String> = rw.iter().map(|(_, w)| format!("\"{}\"", w.first().map(|s| lw.sigs[*s].name.replace('"', "")).unwrap_or_default())).collect();
+    let mut json = format!("{{\n  \"finish\": 0,\n  \"mute\": {{{}}},\n  \"flags\": {},\n  \"counters\": {},\n  \"procs\": [{}],\n  \"signals\": {{\n",
+        stops_json.join(", "), lay.flags, if count { lay.prev - 4 * n as u32 } else { 0 }, procs_json.join(", "));
     let mut first = true;
     for (i, s) in lw.sigs.iter().enumerate() {
         if s.name.contains('$') { continue; }

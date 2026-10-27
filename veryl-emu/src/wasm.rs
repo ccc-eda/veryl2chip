@@ -30,6 +30,8 @@ pub fn sleb(out: &mut Vec<u8>, mut v: i64) {
 
 /// the body of one function: its extra locals (after the parameters) and its code
 pub struct Func {
+    /// shown by profilers and debuggers (the "name" section)
+    pub name: String,
     pub ty: u32,
     pub params: u32,
     pub locals: Vec<u8>,
@@ -37,7 +39,7 @@ pub struct Func {
 }
 
 impl Func {
-    pub fn new(ty: u32) -> Self { Func { ty, params: if ty == T_I32_I32 { 1 } else { 0 }, locals: vec![], code: vec![] } }
+    pub fn new(ty: u32) -> Self { Func { name: String::new(), ty, params: if ty == T_I32_I32 { 1 } else { 0 }, locals: vec![], code: vec![] } }
     /// a new local of type `t`; returns its index
     pub fn local(&mut self, t: u8) -> u32 { self.locals.push(t); self.params + self.locals.len() as u32 - 1 }
     pub fn op(&mut self, b: u8) -> &mut Self { self.code.push(b); self }
@@ -52,6 +54,8 @@ impl Func {
     pub fn store64(&mut self, off: u32) -> &mut Self { self.op(0x37).u(3).u(off as u64) }
     pub fn load32(&mut self, off: u32) -> &mut Self { self.op(0x28).u(2).u(off as u64) }
     pub fn store32(&mut self, off: u32) -> &mut Self { self.op(0x36).u(2).u(off as u64) }
+    pub fn load8(&mut self, off: u32) -> &mut Self { self.op(0x2d).u(0).u(off as u64) }
+    pub fn store8(&mut self, off: u32) -> &mut Self { self.op(0x3a).u(0).u(off as u64) }
     pub fn call(&mut self, f: u32) -> &mut Self { self.op(0x10).u(f as u64) }
     pub fn block(&mut self) -> &mut Self { self.op(0x02).op(0x40) }
     pub fn loop_(&mut self) -> &mut Self { self.op(0x03).op(0x40) }
@@ -162,5 +166,21 @@ pub fn module(pages: u32, funcs: &[Func], exports: &[(String, u32)]) -> Vec<u8> 
     uleb(&mut c, funcs.len() as u64);
     for fu in funcs { c.extend(fu.encode()); }
     section(&mut m, 10, c);
+    // names: custom section "name", subsection 1 (function names)
+    let mut names = vec![];
+    uleb(&mut names, funcs.len() as u64);
+    for (i, fu) in funcs.iter().enumerate() {
+        uleb(&mut names, i as u64);
+        let n = if fu.name.is_empty() { format!("f{}", i) } else { fu.name.clone() };
+        uleb(&mut names, n.len() as u64);
+        names.extend(n.as_bytes());
+    }
+    let mut ns = vec![];
+    uleb(&mut ns, 4);
+    ns.extend(b"name");
+    ns.push(1);
+    uleb(&mut ns, names.len() as u64);
+    ns.extend(names);
+    section(&mut m, 0, ns);
     m
 }

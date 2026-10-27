@@ -34,6 +34,8 @@ const n = emu.run(1_000_000);   // cycles until a --stop signal is set (checked 
 | elaborate | `src/elab.rs`: the module hierarchy flattened into veryl-sim's IR (`Proc::Comb`, `Proc::Ff`, signals) |
 | type | `src/ir.rs`: every expression gets its width and signedness at compile time, by the rules veryl-sim's `Sim::eval` applies at run time (context-determined widths for arithmetic, comparisons at the wider operand, shifts at the left operand's width, sign extension of signed values); `case` / `switch` become `if` chains; two-state (x / z are 0, an x result such as division by zero is 0) |
 | schedule | `src/gen.rs`: combinational processes in dependency order (Tarjan); a group that depends on itself repeats until its outputs stop changing; clocks that reach instances through port connections are followed to one clock |
+| activity | every combinational process has a dirty flag; a store that changes a signal (combinational, `always_ff`, or an input seen by `settle`) marks its readers, and `settle` runs only the dirty processes, in order, so one pass is enough |
+| unroll | `for` loops with constant bounds (up to 128 iterations) are unrolled with the variable as a constant, so array indices and bit selects by it become fixed addresses and shifts; `{x repeat n}` is computed once; conditions go straight to i32 |
 | non-blocking | a register that an `always_ff` also reads is written to a shadow copy and copied back after the edge; an array element that an `always_ff` reads goes through a write queue; everything else is written in place |
 | code | `src/gen.rs` + `src/wasm.rs` (a minimal WebAssembly writer, no dependencies): every value is 64-bit limbs in i64 locals (one limb up to 64 bits, up to four for 256 bits), carries, multi-limb shifts and comparisons inline; signals live in linear memory |
 
@@ -54,7 +56,7 @@ non-zero; `emu.mute(name, true)` turns one off), and the memory `mem`.
 | Linux boot to the shell (230 M cycles) | cycles / s |
 |---|---|
 | Verilator (C++, `-O3`) | 7.2 M |
-| veryl-emu (WebAssembly in Node 24) | 2.2 M |
+| veryl-emu (WebAssembly in Node 24) | 4.2 M (2.2 M before v2.14) |
 | veryl-sim (interpreter, four-state) | a few thousand |
 
 ## Limits

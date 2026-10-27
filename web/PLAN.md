@@ -60,7 +60,7 @@ PDK 來源：OpenROAD-flow-scripts 的 `platforms/sky130hd`（Liberty `tt_025C_1
 
 每個 M 完成就 commit。
 
-### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.13 完成）
+### 往 v3.0：RV64 處理器，跑 xv6 與 Linux（進行中：v2.14 完成）
 
 **目標**：一顆用 Veryl 寫的 RV64 處理器，先跑起 **xv6-riscv**，再跑 **Linux**。重點是 HDL 本身正確；
 EDA（v2c 的模擬、合成、FPGA）等 CPU 做對了再跟上。
@@ -99,7 +99,8 @@ C++ 測試平台模擬 QEMU `virt` 機器的記憶體映射與周邊，所以 xv
 | v2.11 ✓ | **Linux + busybox**：musl 1.2.5（只用 make 編）、busybox 1.36（靜態、defconfig）當 initramfs，`/init` 開 shell；kernel 加上腳本、多使用者、futex、tmpfs | Verilator 上開機到 shell 約 30 秒，`linux/test.sh` 打指令、關機 |
 | v2.12 ✓ | **veryl-emu**：自己的編譯式模擬器（另一個 crate，veryl-sim 不動）：Veryl → 有寬度的 IR → WebAssembly（自寫編碼器），2 態、以週期為單位、組合邏輯排序、只延後 always_ff 會讀的暫存器 / 陣列；Node 的測試平台 `js/emu.mjs` | 和 veryl-sim 的差分測試（21 個輸出 × 300 拍）；Rv64Soc：196 支 riscv-tests、隨機程式與 spike 相同、中斷測試、Linux 開到 shell，220 萬拍 / 秒（Verilator 720 萬） |
 | v2.13 ✓ | **IDE 的模擬機（🖥）**：第三種實體化方式（FPGA、ASIC 之外），veryl-emu 編進核心 wasm（`emu_compile`），機器在自己的 worker 跑（`emu_machine.ts`、`emu_worker.ts`），分頁裡的終端機接 UART；專案的 `machine.json` 描述腳位；範例「RV64 + Linux」，Linux 映像 `img_linux.js` 開機時才載入 | 瀏覽器裡開到 busybox 並打指令；npm test 在 Node 用同一個機器跑到 OpenSBI 的橫幅 |
-| 之後 | veryl-emu 的速度（活動偵測、跳過沒變的組合邏輯）；xv6 映像 | |
+| v2.14 ✓ | **veryl-emu 加速**：剖析（VERYL_EMU_CHUNK / VERYL_EMU_COUNT、wasm name 區段）後展開常數範圍的迴圈、常數索引陣列、`repeat` 只算一次、條件直接 i32；活動偵測（髒旗標，值有變才重算讀它的程序） | Node 上 Linux 開機 104 → 55 秒（420 萬拍 / 秒，Verilator 720 萬）；差分測試、riscv-tests、隨機、中斷、Linux、npm test |
+| 之後 | veryl-emu 再加速（同一訊號只載入一次等）；xv6 映像 | |
 | v2.14 | **上板**：時序（PLL 12.5 MHz 或縮短關鍵路徑）、UART 載入器取代載入埠，ULX3S 實機 | 實機跑 riscv-tests 與小程式 |
 | 之後 | 回到 v2c（veryl-sim 跑得動 Rv64：記憶體、事件驅動，修補檔已存）；F / D 與 busybox；ULX3S 實機 | |
 

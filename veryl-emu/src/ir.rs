@@ -41,6 +41,8 @@ pub enum K {
     Tern(Box<E>, Box<E>, Box<E>),
     /// most significant item first
     Concat(Vec<E>),
+    /// `n` copies of a value
+    Rep(u32, Box<E>),
     /// to the node's width: truncate, or extend (sign extension if the inner value is signed)
     Resize(Box<E>),
     /// user function: index, arguments (already at the parameters' widths)
@@ -148,6 +150,55 @@ fn is_const(e: &Expr) -> bool {
     }
 }
 
+/// loops with constant bounds and at most this many iterations are unrolled
+const UNROLL: u32 = 128;
+
+/// `e` with signal `var` replaced by the constant `v`
+fn subst_e(e: &Expr, var: usize, v: &Val) -> Expr {
+    let b = |x: &Expr| Box::new(subst_e(x, var, v));
+    match e {
+        Expr::Sig(s) if *s == var => Expr::Num(*v),
+        Expr::Num(_) | Expr::AllBit(_) | Expr::Str(_) | Expr::Sig(_) => e.clone(),
+        Expr::Elem(s, i) => Expr::Elem(*s, b(i)),
+        Expr::Index(a, i) => Expr::Index(b(a), b(i)),
+        Expr::Slice(a, x, y, k) => Expr::Slice(b(a), b(x), b(y), *k),
+        Expr::Un(o, a) => Expr::Un(o.clone(), b(a)),
+        Expr::Bin(o, a, c) => Expr::Bin(o.clone(), b(a), b(c)),
+        Expr::Tern(a, x, y) => Expr::Tern(b(a), b(x), b(y)),
+        Expr::Concat(v2) => Expr::Concat(v2.iter().map(|(c, x)| (subst_e(c, var, v), subst_e(x, var, v))).collect()),
+        Expr::Call(n, a) => Expr::Call(n.clone(), a.iter().map(|x| subst_e(x, var, v)).collect()),
+    }
+}
+
+fn subst_s(s: &Stmt, var: usize, v: &Val) -> Stmt {
+    let e = |x: &Expr| subst_e(x, var, v);
+    let b = |x: &Expr| Box::new(subst_e(x, var, v));
+    let body = |x: &[Stmt]| x.iter().map(|y| subst_s(y, var, v)).collect::<Vec<_>>();
+    match s {
+        Stmt::Assign(lv, x) => {
+            let sel = match &lv.sel {
+                Sel::All => Sel::All,
+                Sel::Bit(i) => Sel::Bit(b(i)),
+                Sel::Range(h, l) => Sel::Range(b(h), b(l)),
+                Sel::Plus(a, w) => Sel::Plus(b(a), b(w)),
+                Sel::Minus(a, w) => Sel::Minus(b(a), b(w)),
+                Sel::Elem(i) => Sel::Elem(b(i)),
+            };
+            Stmt::Assign(LValue { sig: lv.sig, sel }, e(x))
+        }
+        Stmt::If(arms, els) => Stmt::If(arms.iter().map(|(c, x)| (e(c), body(x))).collect(), body(els)),
+        Stmt::Case(sel, arms, def) => Stmt::Case(e(sel), arms.iter().map(|(items, x)| (items.iter().map(|it| match it {
+            CaseArm::V(y) => CaseArm::V(e(y)),
+            CaseArm::R(l, h, inc) => CaseArm::R(e(l), e(h), *inc),
+        }).collect(), body(x))).collect(), body(def)),
+        Stmt::Switch(arms, def) => Stmt::Switch(arms.iter().map(|(cs, x)| (cs.iter().map(e).collect(), body(x))).collect(), body(def)),
+        Stmt::For { var: w, from, to, incl, body: x } => Stmt::For { var: *w, from: e(from), to: e(to), incl: *incl, body: body(x) },
+        Stmt::Call(n, a) => Stmt::Call(n.clone(), a.iter().map(e).collect()),
+        Stmt::Return(x) => Stmt::Return(e(x)),
+        Stmt::Wait(c, x) => Stmt::Wait(*c, e(x)),
+    }
+}
+
 fn const_eval(e: &Expr, ctx: u32) -> Val {
     let mut s = Sim::new();
     s.eval(e, ctx)
@@ -240,11 +291,11 @@ impl<'a> Lower<'a> {
                 for (cnt, it) in items {
                     let c = self.const_int(cnt, "a repeat count")?;
                     let iv = self.expr(it, 0)?;
-                    for _ in 0..c {
-                        if w + iv.w > MAXW { break; }
-                        w += iv.w;
-                        v.push(iv.clone());
-                    }
+                    // as many copies as fit
+                    let n = (c as u32).min((MAXW - w) / iv.w.max(1));
+                    if n == 0 { continue; }
+                    w += n * iv.w;
+                    if n == 1 { v.push(iv); } else { let iw = iv.w; v.push(E { k: K::Rep(n, Box::new(iv)), w: n * iw, s: false }); }
                 }
                 if w == 0 { return Ok(E::num(1, 0)); }
                 E { k: K::Concat(v), w, s: false }
@@ -430,6 +481,23 @@ impl<'a> Lower<'a> {
                     out.push(S::If(a, self.stmts(def, func)?));
                 }
                 Stmt::For { var, from, to, incl, body } => {
+                    // constant bounds and few iterations: unrolled with the variable as a constant
+                    // (array indices and bit selects by it become fixed addresses and shifts)
+                    if is_const(from) && is_const(to) {
+                        let (f, t) = (const_eval(from, 0).v.sat(), const_eval(to, 0).v.sat());
+                        let t = if *incl { t.saturating_add(1) } else { t };
+                        if t.saturating_sub(f) <= UNROLL as u128 {
+                            let (vw, vs) = (self.sigs[*var].w, self.sigs[*var].signed);
+                            for i in f..t {
+                                let v = Val::new(vw, i).signed(vs);
+                                let b: Vec<Stmt> = body.iter().map(|x| subst_s(x, *var, &v)).collect();
+                                out.extend(self.stmts(&b, func)?);
+                            }
+                            // the variable keeps its last value, as in veryl-sim
+                            if t > f { out.push(S::Assign(Target::Sig { sig: *var, lo: E::num(32, 0), w: vw }, E::konst(vw, &Val::new(vw, t - 1)))); }
+                            continue;
+                        }
+                    }
                     out.push(S::For { var: *var, from: self.expr(from, 0)?, to: self.expr(to, 0)?, incl: *incl, body: self.stmts(body, func)? });
                 }
                 Stmt::Call(name, args) => match name.as_str() {
@@ -465,7 +533,7 @@ pub fn reads_e(e: &E, out: &mut Vec<usize>, funcs: &[Func]) {
         K::Sig(s) => out.push(*s),
         K::Elem(s, i) => { out.push(*s); reads_e(i, out, funcs); }
         K::Bit(a, b) | K::Slice(a, b) | K::Bin(_, a, b) | K::Cmp(_, _, a, b) | K::LAnd(a, b) | K::LOr(a, b) | K::Shift(_, a, b) => { reads_e(a, out, funcs); reads_e(b, out, funcs); }
-        K::Not(a) | K::Neg(a) | K::LNot(a) | K::Red(_, _, a) | K::Resize(a) => reads_e(a, out, funcs),
+        K::Not(a) | K::Neg(a) | K::LNot(a) | K::Red(_, _, a) | K::Resize(a) | K::Rep(_, a) => reads_e(a, out, funcs),
         K::Tern(a, b, c) => { reads_e(a, out, funcs); reads_e(b, out, funcs); reads_e(c, out, funcs); }
         K::Concat(v) => for x in v { reads_e(x, out, funcs) },
         K::Call(f, args) => { for a in args { reads_e(a, out, funcs); } out.push(funcs[*f].ret); }
