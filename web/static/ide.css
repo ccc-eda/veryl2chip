@@ -221,6 +221,12 @@ button.icon:hover { background: #3a3d41; }
 .pi-btn-cap { fill: #888; }
 .pi-btn.down .pi-btn-cap { fill: #555; }
 .pi-bb { margin-top: 6px; }
+/* keyboard control of the board's buttons: while the board has the focus */
+.pi-keys { color: #999; font: 11px ui-monospace, Menlo, monospace; margin: 4px 2px 0; line-height: 1.6; }
+.pi-keys b { font-weight: normal; }
+.em-board:focus { outline: none; }
+.em-board:focus-within .pi-keys { color: #e8f3ec; }
+.em-board:focus-within .pi-svg, .em-board:focus-within .pi-lcd { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 .pi-lcd { margin: 8px auto 0; width: max-content; max-width: 100%; padding: 10px 10px 4px; background: #1b1b1b; border: 1px solid #000; border-radius: 6px; text-align: center; }
 .pi-lcd canvas { display: block; width: 320px; max-width: 100%; image-rendering: pixelated; background: #000; }
 .pi-t2 { color: #999; font: 10px ui-monospace, Menlo, monospace; margin-top: 3px; }

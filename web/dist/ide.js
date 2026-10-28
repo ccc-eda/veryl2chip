@@ -3009,6 +3009,14 @@ target = { type = "directory", path = "target" }
       this.pressed.clear();
       this.render();
     }
+    /** hold or let go of a button (from the keyboard) */
+    hold(id, on) {
+      if (on === this.pressed.has(id)) return;
+      if (on) this.pressed.add(id);
+      else this.pressed.delete(id);
+      this.render();
+      this.onChange(false);
+    }
     setTool(t) {
       this.tool = t;
       this.first = null;
@@ -3913,6 +3921,7 @@ ${lines.join("\n")}
     { id: 13, kind: "led", a: "h:9:c", b: "h:10:c", color: "#34c759" },
     { id: 14, kind: "res", a: "h:10:e", b: "r:top-:10" }
   ];
+  var HOLD_MS = 120;
   var PiBoard = class {
     constructor(host) {
       __publicField(this, "svg");
@@ -3928,39 +3937,105 @@ ${lines.join("\n")}
       /** the breadboard's layout changed (save it with the project) */
       __publicField(this, "onLayout", () => {
       });
+      /** breadboard buttons held from the keyboard */
+      __publicField(this, "held", /* @__PURE__ */ new Set());
+      /** when each key-held button went down: a tap is held at least HOLD_MS, or a program that polls would miss it */
+      __publicField(this, "since", /* @__PURE__ */ new Map());
       __publicField(this, "lcd");
       __publicField(this, "img", null);
       __publicField(this, "hiKey", "");
-      host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg><div class="pi-lcd hidden"><canvas width="320" height="240"></canvas><div class="pi-t2">${tr("\u87A2\u5E55 320 \xD7 240\uFF08/dev/fb0\uFF09", "Screen 320 \xD7 240 (/dev/fb0)")}</div></div><div class="pi-bb"></div>`;
+      host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg><div class="pi-keys"></div><div class="pi-lcd hidden"><canvas width="320" height="240"></canvas><div class="pi-t2">${tr("\u87A2\u5E55 320 \xD7 240\uFF08/dev/fb0\uFF09", "Screen 320 \xD7 240 (/dev/fb0)")}</div></div><div class="pi-bb"></div>`;
       this.svg = host.querySelector(".pi-svg");
       this.lcd = host.querySelector(".pi-lcd canvas");
       this.bb = new Breadboard(host.querySelector(".pi-bb"), BB_HEADER);
       this.bb.onChange = (layout) => {
-        if (layout) this.onLayout(this.bb.parts);
+        if (layout) {
+          this.onLayout(this.bb.parts);
+          this.keyHint();
+        }
         this.solve();
       };
       this.draw();
-      const press = (on) => {
-        if (this.button !== on) {
-          this.button = on;
-          this.draw();
-          this.send();
-        }
-      };
       this.svg.addEventListener("mousedown", (e) => {
+        host.focus();
         if (e.target.closest('[data-a="btn"]')) {
           e.preventDefault();
-          press(true);
+          this.press(true);
         }
       });
       this.svg.addEventListener("touchstart", (e) => {
         if (e.target.closest('[data-a="btn"]')) {
           e.preventDefault();
-          press(true);
+          this.press(true);
         }
       });
-      window.addEventListener("mouseup", () => press(false));
-      window.addEventListener("touchend", () => press(false));
+      window.addEventListener("mouseup", () => this.press(false));
+      window.addEventListener("touchend", () => this.press(false));
+      host.tabIndex = 0;
+      this.lcd.addEventListener("mousedown", () => host.focus());
+      host.addEventListener("keydown", (e) => this.key(e, true));
+      host.addEventListener("keyup", (e) => this.key(e, false));
+      host.addEventListener("blur", () => {
+        for (const id of [...this.held]) this.bb.hold(id, false);
+        this.held.clear();
+        this.press(false);
+      }, true);
+    }
+    press(on) {
+      if (this.button !== on) {
+        this.button = on;
+        this.draw();
+        this.send();
+      }
+    }
+    /** the keys: ← / Space the first breadboard button (left to right), → the second, ↑ ↓ the third and fourth, 1-9 by number; B the board's button */
+    keys() {
+      const col = (p) => Math.min(...[p.a, p.b].map((x) => +(/:(\d+)(:|$)/.exec(x)?.[1] ?? 99)));
+      const btns = this.bb.parts.filter((p) => p.kind === "btn").sort((x, y) => col(x) - col(y));
+      const gpioOf = (b) => {
+        const ends = /* @__PURE__ */ new Set([node(b.a), node(b.b)]);
+        for (const w of this.bb.parts.filter((p) => p.kind === "wire")) {
+          if (w.a.startsWith("p:") && ends.has(node(w.b))) return +w.a.slice(2);
+          if (w.b.startsWith("p:") && ends.has(node(w.a))) return +w.b.slice(2);
+        }
+        return null;
+      };
+      const extra = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+      return [
+        ...btns.slice(0, 9).map((b, k) => ({ keys: [...k < 4 ? [extra[k]] : [], ...k === 0 ? [" "] : [], String(k + 1)], id: b.id, gpio: gpioOf(b) })),
+        { keys: ["b", "B"], id: null, gpio: 2 }
+      ];
+    }
+    key(e, down) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = this.keys().find((x) => x.keys.includes(e.key));
+      if (!k) return;
+      e.preventDefault();
+      if (e.repeat) return;
+      const set = (on) => {
+        if (k.id === null) {
+          this.press(on);
+          return;
+        }
+        if (on) this.held.add(k.id);
+        else this.held.delete(k.id);
+        this.bb.hold(k.id, on);
+      };
+      if (down) {
+        this.since.set(k.id, performance.now());
+        set(true);
+        return;
+      }
+      const t = this.since.get(k.id) ?? 0;
+      setTimeout(() => {
+        if (this.since.get(k.id) === t) set(false);
+      }, Math.max(0, HOLD_MS - (performance.now() - t)));
+    }
+    /** the line under the board: which key presses which button */
+    keyHint() {
+      const name = (k) => ({ ArrowLeft: "\u2190", ArrowRight: "\u2192", ArrowUp: "\u2191", ArrowDown: "\u2193", " ": tr("\u7A7A\u767D\u9375", "Space") })[k] ?? k;
+      const list = this.keys().map((k) => `${k.keys.filter((x) => x !== "B").map(name).join(" / ")}\uFF1A${k.id === null ? tr("\u677F\u4E0A\u7684 BTN\uFF08GPIO 2\uFF09", "the board's BTN (GPIO 2)") : k.gpio !== null ? `GPIO ${k.gpio}` : tr("\u6309\u9215", "button")}`);
+      this.svg.parentElement.querySelector(".pi-keys").innerHTML = `<b>\u2328</b> ${tr("\u9EDE\u4E00\u4E0B\u677F\u5B50\u6216\u87A2\u5E55\uFF0C\u7528\u9375\u76E4\u6309\u6309\u9215", "Click the board or the screen, then press the buttons with the keyboard")}\u3000${list.join("\u3000")}`;
     }
     /** show the screen (its size in pixels), or hide it (null) */
     setScreenSize(size) {
@@ -3993,6 +4068,7 @@ ${lines.join("\n")}
       this.bb.parts = parts.map((p) => ({ ...p }));
       this.bb.render();
       this.solve();
+      this.keyHint();
     }
     get parts() {
       return this.bb.parts;

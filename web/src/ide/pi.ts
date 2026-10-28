@@ -6,7 +6,7 @@
 // (machine.json "fb") gets an LCD between the board and the breadboard.
 
 import { tr } from '../i18n';
-import { Part, solve } from './bbmodel';
+import { node, Part, solve } from './bbmodel';
 import { Breadboard, Header } from './breadboard';
 
 /** header pins 1..40: what each one is (GPIO n = the SoC's pin n, as BCM n on a Raspberry Pi) */
@@ -39,6 +39,9 @@ export const PI_DEFAULT_BB: Part[] = [
   { id: 14, kind: 'res', a: 'h:10:e', b: 'r:top-:10' },
 ];
 
+/** the shortest press from the keyboard (programs read the buttons every few tens of ms) */
+const HOLD_MS = 120;
+
 export class PiBoard {
   private svg: SVGSVGElement;
   private bb: Breadboard;
@@ -53,18 +56,74 @@ export class PiBoard {
   onLayout: (parts: Part[]) => void = () => {};
 
   constructor(host: HTMLElement) {
-    host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg>`
+    host.innerHTML = `<svg class="pi-svg" viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg"></svg><div class="pi-keys"></div>`
       + `<div class="pi-lcd hidden"><canvas width="320" height="240"></canvas><div class="pi-t2">${tr('螢幕 320 × 240（/dev/fb0）', 'Screen 320 × 240 (/dev/fb0)')}</div></div><div class="pi-bb"></div>`;
     this.svg = host.querySelector('.pi-svg')!;
     this.lcd = host.querySelector('.pi-lcd canvas')!;
     this.bb = new Breadboard(host.querySelector('.pi-bb')!, BB_HEADER);
-    this.bb.onChange = (layout) => { if (layout) this.onLayout(this.bb.parts); this.solve(); };
+    this.bb.onChange = (layout) => { if (layout) { this.onLayout(this.bb.parts); this.keyHint(); } this.solve(); };
     this.draw();
-    const press = (on: boolean) => { if (this.button !== on) { this.button = on; this.draw(); this.send(); } };
-    this.svg.addEventListener('mousedown', (e) => { if ((e.target as Element).closest('[data-a="btn"]')) { e.preventDefault(); press(true); } });
-    this.svg.addEventListener('touchstart', (e) => { if ((e.target as Element).closest('[data-a="btn"]')) { e.preventDefault(); press(true); } });
-    window.addEventListener('mouseup', () => press(false));
-    window.addEventListener('touchend', () => press(false));
+    this.svg.addEventListener('mousedown', (e) => { host.focus(); if ((e.target as Element).closest('[data-a="btn"]')) { e.preventDefault(); this.press(true); } });
+    this.svg.addEventListener('touchstart', (e) => { if ((e.target as Element).closest('[data-a="btn"]')) { e.preventDefault(); this.press(true); } });
+    window.addEventListener('mouseup', () => this.press(false));
+    window.addEventListener('touchend', () => this.press(false));
+    // the keyboard holds the buttons while the board has the focus (a click on it); the terminal keeps its keys
+    host.tabIndex = 0;
+    this.lcd.addEventListener('mousedown', () => host.focus());
+    host.addEventListener('keydown', (e) => this.key(e, true));
+    host.addEventListener('keyup', (e) => this.key(e, false));
+    host.addEventListener('blur', () => { for (const id of [...this.held]) this.bb.hold(id, false); this.held.clear(); this.press(false); }, true);
+  }
+
+  private press(on: boolean): void { if (this.button !== on) { this.button = on; this.draw(); this.send(); } }
+
+  /** breadboard buttons held from the keyboard */
+  private held = new Set<number>();
+
+  /** the keys: ← / Space the first breadboard button (left to right), → the second, ↑ ↓ the third and fourth, 1-9 by number; B the board's button */
+  private keys(): { keys: string[]; id: number | null; gpio: number | null }[] {
+    const col = (p: Part) => Math.min(...[p.a, p.b].map((x) => +(/:(\d+)(:|$)/.exec(x)?.[1] ?? 99)));
+    const btns = this.bb.parts.filter((p) => p.kind === 'btn').sort((x, y) => col(x) - col(y));
+    // the GPIO pin a button is wired to (a wire from its strip to the header)
+    const gpioOf = (b: Part) => {
+      const ends = new Set([node(b.a), node(b.b)]);
+      for (const w of this.bb.parts.filter((p) => p.kind === 'wire')) {
+        if (w.a.startsWith('p:') && ends.has(node(w.b))) return +w.a.slice(2);
+        if (w.b.startsWith('p:') && ends.has(node(w.a))) return +w.b.slice(2);
+      }
+      return null;
+    };
+    const extra = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+    return [
+      ...btns.slice(0, 9).map((b, k) => ({ keys: [...(k < 4 ? [extra[k]] : []), ...(k === 0 ? [' '] : []), String(k + 1)], id: b.id, gpio: gpioOf(b) })),
+      { keys: ['b', 'B'], id: null, gpio: 2 },
+    ];
+  }
+
+  /** when each key-held button went down: a tap is held at least HOLD_MS, or a program that polls would miss it */
+  private since = new Map<number | null, number>();
+
+  private key(e: KeyboardEvent, down: boolean): void {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = this.keys().find((x) => x.keys.includes(e.key));
+    if (!k) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    const set = (on: boolean) => {
+      if (k.id === null) { this.press(on); return; }
+      if (on) this.held.add(k.id); else this.held.delete(k.id);
+      this.bb.hold(k.id, on);
+    };
+    if (down) { this.since.set(k.id, performance.now()); set(true); return; }
+    const t = this.since.get(k.id) ?? 0;
+    setTimeout(() => { if (this.since.get(k.id) === t) set(false); }, Math.max(0, HOLD_MS - (performance.now() - t)));
+  }
+
+  /** the line under the board: which key presses which button */
+  private keyHint(): void {
+    const name = (k: string) => ({ ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', ' ': tr('空白鍵', 'Space') } as Record<string, string>)[k] ?? k;
+    const list = this.keys().map((k) => `${k.keys.filter((x) => x !== 'B').map(name).join(' / ')}：${k.id === null ? tr('板上的 BTN（GPIO 2）', 'the board\'s BTN (GPIO 2)') : k.gpio !== null ? `GPIO ${k.gpio}` : tr('按鈕', 'button')}`);
+    (this.svg.parentElement!.querySelector('.pi-keys') as HTMLElement).innerHTML = `<b>⌨</b> ${tr('點一下板子或螢幕，用鍵盤按按鈕', 'Click the board or the screen, then press the buttons with the keyboard')}　${list.join('　')}`;
   }
 
   private lcd: HTMLCanvasElement;
@@ -97,7 +156,7 @@ export class PiBoard {
     this.lcd.getContext('2d')!.putImageData(img, 0, 0);
   }
 
-  setParts(parts: Part[]): void { this.bb.parts = parts.map((p) => ({ ...p })); this.bb.render(); this.solve(); }
+  setParts(parts: Part[]): void { this.bb.parts = parts.map((p) => ({ ...p })); this.bb.render(); this.solve(); this.keyHint(); }
   get parts(): Part[] { return this.bb.parts; }
 
   /** the machine is running (PWR LED) */

@@ -90,6 +90,14 @@ export class Breadboard {
 
   setParts(parts: Part[]): void { this.parts = parts.map(p => ({ ...p })); this.pressed.clear(); this.render(); }
 
+  /** hold or let go of a button (from the keyboard) */
+  hold(id: number, on: boolean): void {
+    if (on === this.pressed.has(id)) return;
+    if (on) this.pressed.add(id); else this.pressed.delete(id);
+    this.render();
+    this.onChange(false);
+  }
+
   private setTool(t: Tool): void {
     this.tool = t;
     this.first = null;
