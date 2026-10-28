@@ -105,7 +105,7 @@ button.icon:hover { background: #3a3d41; }
 .dirty-dot { color: #e2c08d; }
 
 .resizer.v { flex: 0 0 4px; cursor: col-resize; background: transparent; margin-left: -2px; margin-right: -2px; z-index: 5; }
-.resizer.h { flex: 0 0 4px; cursor: row-resize; background: transparent; margin-top: -2px; margin-bottom: -2px; z-index: 5; }
+.resizer.h { flex: 0 0 6px; cursor: row-resize; background: transparent; margin-top: -3px; margin-bottom: -3px; z-index: 5; }
 .resizer:hover, .resizer.drag { background: var(--accent); }
 
 #center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -331,7 +331,7 @@ button.icon:hover { background: #3a3d41; }
 .vb-pins-act { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
 
 /* bottom panel */
-#panel { flex: 0 0 var(--panelh, 220px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); min-height: 30px; }
+#panel { flex: 0 0 var(--panelh, clamp(240px, 36vh, 420px)); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); min-height: 30px; }
 #panel.collapsed { flex-basis: 30px !important; }
 #panel.collapsed #panelBody { display: none; }
 #panelTabs { display: flex; align-items: center; gap: 2px; padding: 0 8px; height: 30px; flex: 0 0 auto; }

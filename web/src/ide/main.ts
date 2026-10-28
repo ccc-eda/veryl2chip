@@ -944,8 +944,8 @@ function runSynth(stage?: string): void {
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
   const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
   openFile(FLOW_TAB);
-  // the chip views need the room on small screens; the panel comes back with the next run
-  if (window.innerHeight < 900) $('panel').classList.add('collapsed');
+  // the chip views need the room on a phone; the panel comes back with the next run
+  if (phone()) $('panel').classList.add('collapsed');
   synth.setPdk(flowPdk());
   if (key !== synthKey || !synth.synthesized) {
     synthKey = key;
@@ -1458,7 +1458,7 @@ async function flashBoard(): Promise<void> {
   const exBoard = examples().find(e => e.id === proj.from)?.board;
   board!.setSetup({ ...(proj.board ?? exBoard ?? DEFAULT_SETUP), mode: proj.board?.mode ?? exBoard?.mode ?? board!.mode });
   openFile(BOARD_TAB);
-  if (window.innerHeight < 900) $('panel').classList.add('collapsed');
+  if (phone()) $('panel').classList.add('collapsed');
   setBusy(true, tr('⚡ 燒錄到虛擬板…', '⚡ Flashing the virtual board…'));
   try {
     // a C program: compile it; when only the program changed, swap it in (no synthesis, no place and route)
@@ -1506,7 +1506,7 @@ async function flashBoard(): Promise<void> {
 let curPanel = 'problems';
 function panel(p: string): void {
   curPanel = p;
-  $('panel').classList.remove('collapsed');
+  collapsePanel(false);
   for (const b of $('panelTabs').querySelectorAll<HTMLElement>('button[data-panel]')) b.classList.toggle('cur', b.dataset.panel === p);
   for (const v of ['problems', 'output', 'results', 'wave']) $('p-' + v).classList.toggle('hidden', v !== p);
   $('waveTop').classList.toggle('hidden', p !== 'wave' || vcds.length < 2);
@@ -1545,6 +1545,8 @@ function resizer(id: string, prop: string, axis: 'x' | 'y', min: number, max: ()
     const start = axis === 'x' ? e.clientX : e.clientY;
     const target = id === 'sideResize' ? $('sidebar') : $('panel');
     const s0 = axis === 'x' ? target.getBoundingClientRect().width : target.getBoundingClientRect().height;
+    // dragging a collapsed panel opens it from its strip
+    if (target.id === 'panel' && target.classList.contains('collapsed')) { document.body.style.setProperty(prop, Math.max(min, s0) + 'px'); collapsePanel(false); }
     const move = (ev: PointerEvent) => {
       const d = (axis === 'x' ? ev.clientX : ev.clientY) - start;
       const v = Math.max(min, Math.min(max(), s0 + (invert ? -d : d)));
@@ -1555,6 +1557,14 @@ function resizer(id: string, prop: string, axis: 'x' | 'y', min: number, max: ()
     r.addEventListener('pointermove', move);
     r.addEventListener('pointerup', up);
   });
+  // a double click goes back to the default size (as VS Code's sashes do)
+  r.addEventListener('dblclick', () => { document.body.style.removeProperty(prop); save(prop, 0); });
+}
+
+/** collapse / open the bottom panel (no argument: toggle); the choice is kept */
+function collapsePanel(on?: boolean): void {
+  const c = $('panel').classList.toggle('collapsed', on);
+  save('panelCollapsed', c);
 }
 
 /** the next / previous stage of the current back end */
@@ -1590,7 +1600,7 @@ function commands(): Cmd[] {
     { label: tr('重新命名專案', 'Rename project'), run: renameProject },
     { label: tr('還原成範例原始碼', 'Revert to the example source'), run: revertProject },
     { label: tr('刪除專案', 'Delete project'), run: deleteProject },
-    { label: tr('切換面板', 'Toggle panel'), key: 'Ctrl+J', run: () => $('panel').classList.toggle('collapsed') },
+    { label: tr('切換面板', 'Toggle panel'), key: 'Ctrl+J', run: () => collapsePanel() },
     { label: tr('顯示：問題', 'View: Problems'), run: () => panel('problems') },
     { label: tr('顯示：輸出', 'View: Output'), run: () => panel('output') },
     { label: tr('顯示：波形', 'View: Waveform'), run: () => panel('wave') },
@@ -1650,7 +1660,7 @@ function globalKey(e: KeyboardEvent): boolean {
   if (mod(e) && e.shiftKey && (e.key === 'P' || e.key === 'p')) { palette(false); return true; }
   if (mod(e) && !e.shiftKey && (e.key === 'p' || e.key === 'P')) { palette(true); return true; }
   if (mod(e) && (e.key === 's' || e.key === 'S')) { persist(); $('sbTest').textContent = tr('已儲存（在瀏覽器）', 'Saved (in the browser)'); return true; }
-  if (mod(e) && (e.key === 'j' || e.key === 'J')) { $('panel').classList.toggle('collapsed'); return true; }
+  if (mod(e) && (e.key === 'j' || e.key === 'J')) { collapsePanel(); return true; }
   return false;
 }
 
@@ -1758,7 +1768,8 @@ function wire(): void {
   $('center').addEventListener('pointerdown', () => drawer(false));
   $('tbMore').onclick = () => moreMenu(!$('titlebar').classList.contains('more'));
   for (const b of $('panelTabs').querySelectorAll<HTMLElement>('button[data-panel]')) b.onclick = () => panel(b.dataset.panel!);
-  $('panelToggle').onclick = () => $('panel').classList.toggle('collapsed');
+  $('panelToggle').onclick = () => collapsePanel();
+  if (load('panelCollapsed', false)) $('panel').classList.add('collapsed');
   $('sbProblems').onclick = () => panel('problems');
   $<HTMLSelectElement>('projSel').onchange = () => switchProject($<HTMLSelectElement>('projSel').value);
   $('projNew').onclick = newProject;

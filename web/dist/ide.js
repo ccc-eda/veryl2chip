@@ -6013,7 +6013,7 @@ int main(void) {
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
     const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
     openFile(FLOW_TAB);
-    if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
+    if (phone()) $2("panel").classList.add("collapsed");
     synth.setPdk(flowPdk());
     if (key !== synthKey || !synth.synthesized) {
       synthKey = key;
@@ -6510,7 +6510,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     const exBoard = examples().find((e) => e.id === proj.from)?.board;
     board.setSetup({ ...proj.board ?? exBoard ?? DEFAULT_SETUP, mode: proj.board?.mode ?? exBoard?.mode ?? board.mode });
     openFile(BOARD_TAB);
-    if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
+    if (phone()) $2("panel").classList.add("collapsed");
     setBusy(true, tr("\u26A1 \u71D2\u9304\u5230\u865B\u64EC\u677F\u2026", "\u26A1 Flashing the virtual board\u2026"));
     try {
       let program;
@@ -6552,7 +6552,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
   var curPanel = "problems";
   function panel(p) {
     curPanel = p;
-    $2("panel").classList.remove("collapsed");
+    collapsePanel(false);
     for (const b of $2("panelTabs").querySelectorAll("button[data-panel]")) b.classList.toggle("cur", b.dataset.panel === p);
     for (const v of ["problems", "output", "results", "wave"]) $2("p-" + v).classList.toggle("hidden", v !== p);
     $2("waveTop").classList.toggle("hidden", p !== "wave" || vcds.length < 2);
@@ -6586,6 +6586,10 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       const start2 = axis === "x" ? e.clientX : e.clientY;
       const target = id === "sideResize" ? $2("sidebar") : $2("panel");
       const s0 = axis === "x" ? target.getBoundingClientRect().width : target.getBoundingClientRect().height;
+      if (target.id === "panel" && target.classList.contains("collapsed")) {
+        document.body.style.setProperty(prop, Math.max(min, s0) + "px");
+        collapsePanel(false);
+      }
       const move = (ev) => {
         const d = (axis === "x" ? ev.clientX : ev.clientY) - start2;
         const v = Math.max(min, Math.min(max(), s0 + (invert ? -d : d)));
@@ -6600,6 +6604,14 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       r.addEventListener("pointermove", move);
       r.addEventListener("pointerup", up);
     });
+    r.addEventListener("dblclick", () => {
+      document.body.style.removeProperty(prop);
+      save(prop, 0);
+    });
+  }
+  function collapsePanel(on) {
+    const c = $2("panel").classList.toggle("collapsed", on);
+    save("panelCollapsed", c);
   }
   function stepStage(d) {
     const keys = flow(flowTarget() === "asic").map(([k]) => k);
@@ -6628,7 +6640,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       { label: tr("\u91CD\u65B0\u547D\u540D\u5C08\u6848", "Rename project"), run: renameProject },
       { label: tr("\u9084\u539F\u6210\u7BC4\u4F8B\u539F\u59CB\u78BC", "Revert to the example source"), run: revertProject },
       { label: tr("\u522A\u9664\u5C08\u6848", "Delete project"), run: deleteProject },
-      { label: tr("\u5207\u63DB\u9762\u677F", "Toggle panel"), key: "Ctrl+J", run: () => $2("panel").classList.toggle("collapsed") },
+      { label: tr("\u5207\u63DB\u9762\u677F", "Toggle panel"), key: "Ctrl+J", run: () => collapsePanel() },
       { label: tr("\u986F\u793A\uFF1A\u554F\u984C", "View: Problems"), run: () => panel("problems") },
       { label: tr("\u986F\u793A\uFF1A\u8F38\u51FA", "View: Output"), run: () => panel("output") },
       { label: tr("\u986F\u793A\uFF1A\u6CE2\u5F62", "View: Waveform"), run: () => panel("wave") },
@@ -6708,7 +6720,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       return true;
     }
     if (mod(e) && (e.key === "j" || e.key === "J")) {
-      $2("panel").classList.toggle("collapsed");
+      collapsePanel();
       return true;
     }
     return false;
@@ -6845,7 +6857,8 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("center").addEventListener("pointerdown", () => drawer(false));
     $2("tbMore").onclick = () => moreMenu(!$2("titlebar").classList.contains("more"));
     for (const b of $2("panelTabs").querySelectorAll("button[data-panel]")) b.onclick = () => panel(b.dataset.panel);
-    $2("panelToggle").onclick = () => $2("panel").classList.toggle("collapsed");
+    $2("panelToggle").onclick = () => collapsePanel();
+    if (load("panelCollapsed", false)) $2("panel").classList.add("collapsed");
     $2("sbProblems").onclick = () => panel("problems");
     $2("projSel").onchange = () => switchProject($2("projSel").value);
     $2("projNew").onclick = newProject;
