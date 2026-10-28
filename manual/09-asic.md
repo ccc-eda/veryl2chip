@@ -32,14 +32,15 @@ asic: technology sky130_fd_sc_hd (2.72 µm rows, 0.46 µm sites)
     ...
 asic: area 187.7 µm² (cells), die 17.9 × 19.0 µm, 7 rows, utilization 55%, ...
 asic: wirelength 186 µm, 71 vias, overflow 0 after 1 routing iterations
-power: 0.057 mW at 750.1 MHz = dynamic 0.057 + leakage 0.0000; ...
+power: 0.057 mW at 752.6 MHz = dynamic 0.057 + leakage 0.0000; ...
 asic: power grid 8 rails, 2 straps, 8 via stacks; 31 filler cells
 asic: DRC 2022 shapes: 0 shorts, 0 spacing, 0 min-area, 0 opens; 11 taps (0 sites too far)
 asic: LVS 19 nets, 170 terminals, 14 devices: 0 opens, 0 shorts, 0 device errors, layout matches the netlist (19 pieces, 0 floating)
 asic: antenna 197 pieces with gates checked: 0 violations (worst 11% of its limit); 0 diodes inserted
 asic: detailed routing 267 µm (met1 56 / met2 132 / met3 51 / met4 29), 142 vias, 0 conflicts, 0 opens after 3 iterations
-asic: clock tree 0 buffers (), insertion 0.000 ns, skew 0.000 ns; hold: worst slack 0.342 ns, 0 delay buffers
-timing: critical path 1.333 ns, Fmax 750.1 MHz (8 endpoints; ideal clock 756.3 MHz, wirelength-only placement 751.1 MHz)
+asic: clock tree 0 buffers (), insertion 0.000 ns, skew 0.000 ns; hold: worst slack 0.341 ns, 0 delay buffers
+asic: extraction 17 nets from the detailed routing: 0.018 pF of wire, the longest wire delay 0.2 ps
+timing: critical path 1.329 ns, Fmax 752.6 MHz (8 endpoints; ideal clock 756.3 MHz, wirelength-only placement 751.1 MHz)
 ```
 
 | 行 | 意思 |
@@ -54,6 +55,7 @@ timing: critical path 1.333 ns, Fmax 750.1 MHz (8 endpoints; ideal clock 756.3 M
 | `antenna` | （SKY130）天線規則：檢查了幾塊接到閘極的金屬、違規數（應該是 0）、最接近上限的一塊是上限的百分之幾、插了幾個 diode |
 | `detailed routing` | 每層的線長；`conflicts` 與 `opens` 都應該是 0 |
 | `clock tree` | 時脈樹緩衝器數、插入延遲、skew；hold 最差餘裕與修正用的延遲緩衝器 |
+| `extraction` | （SKY130）從細部繞線實際畫出的線算 RC：幾條網路、總線電容、最長的線延遲；最後的時序用它 |
 | `timing` | 關鍵路徑與 Fmax；也列出理想時脈下與只看線長的佈局下的 Fmax，看得出時序導向與時脈樹的影響 |
 
 `-v` 另外印出關鍵路徑的每一級（元件延遲、線延遲）與 DRC 違規的例子；LVS 有錯時一定會列出例子。
@@ -124,7 +126,28 @@ timing: constraints clk 2.000 ns (500.0 MHz, 61 endpoints): WNS -1.752 ns, TNS -
 - 每個正反器依它的時脈腳追回 `create_clock` 指定的腳（經過時脈樹的緩衝器），用那個時脈的週期；沒有腳的 `create_clock` 是給 IO 用的虛擬時脈。
 
 限制：例外（false path、multicycle）只能指定輸入腳、輸出腳。合成與對應之後的網表已經攤平、改了名字，沒有暫存器名稱可以指定暫存器之間的路徑。
-約束只用來報告，不改變佈局繞線（讓工具依約束修時序是下一版的事）。
+
+### 時序收斂（v2.36）
+
+**寄生萃取**：細部繞線之後，每條網路依實際畫出的線（每一段的層、長度，每個 via）算出電阻與電容（LEF 的每層 R/□、面積電容、
+邊緣電容，via 的接觸電阻），從驅動端到每個負載用 Elmore 延遲（沿路每段電阻 × 它下游的全部電容）。最後的時序用這些數字，
+不再用依距離的估計（`extraction` 那一行）。
+
+**時序修正**：有約束而且沒達成（WNS < 0）時，流程會試著修：
+
+- 關鍵路徑上的元件換成驅動力較強的版本（例如 `nand2_1` → `nand2_2` → `nand2_4`，同一列旁邊有空位才換）；
+- 關鍵路徑上負載很多的網路，把不在關鍵路徑上的負載移到一個新的緩衝器後面，讓關鍵路徑推的負載變輕。
+
+較強的元件輸入電容也較大，會讓前一級變慢，所以不是每個改動都有用：每個改動單獨試，實際繞線、萃取、算時序後有改善才保留
+（很大的設計改用全域繞線的估計），每一輪結束再確認繞線沒有變差。例如 Ram 在 450 MHz：
+
+```
+timing: constraints clk 2.222 ns (450.0 MHz, 128 endpoints): WNS +0.098 ns, TNS 0.000 ns, 0 of 136 endpoints failing, met
+timing: repair 10 cells made stronger, 2 buffers: WNS -0.240 -> +0.098 ns
+```
+
+修不了的路徑主要是邏輯太深（例如 UartLoop 在 300 MHz 只從 −0.422 改善到 −0.382 ns）：那要改電路本身，例如加一級暫存器。
+沒有給約束時流程不做修正，結果和以前一樣。
 
 ## 流程做了什麼
 

@@ -249,6 +249,13 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   failing endpoints (input delays and `-from` exceptions move an input's launch, so propagating one arrival per net stays exact;
   flip-flops find their clock through the clock pin back to the clock port); the FPGA flows report the slack to the target and give
   nextpnr `--freq`. The wasm `asic` / `pnr` take `sdc`; the IDE has a target MHz box or the project's `.sdc`.
+- Timing closure (v2.36): `src/asic/extract.rs` extracts every net's RC tree from the detailed routing (the LEF's per-layer R per
+  square, area / edge capacitance, the vias' cut resistance); the final STA uses its Elmore delays and wire capacitance
+  (`sta::analyze_with`). With constraints and WNS < 0 (a library technology) the critical path's cells get stronger versions
+  (`NAND2@2` / `@4`; the built-in subset gained SKY130's _2 / _4 cells, `netlist::base` lets the simulators treat them as the
+  original) and heavily loaded critical nets move their other loads behind a buffer (`cts::upsize` / `isolate`); each change is
+  tried on its own (small designs on the detailed routing and extraction, large ones on the estimate) and kept if it helps, and
+  every round checks that the routing is no worse.
 - GDSII (v1.7): `--gds OUT.gds` (`src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
   places them (mirrored on the FS rows) and draws the routing, vias, power grid and labelled IO pins on SKY130's layer numbers
   (met1 68/20, via 68/44, ...). Same-net via pads closer than the spacing are joined by small fills, so the metal has no notches.

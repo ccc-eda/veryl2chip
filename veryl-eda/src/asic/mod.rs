@@ -6,6 +6,7 @@ pub mod antenna;
 pub mod cts;
 pub mod detail;
 pub mod drc;
+pub mod extract;
 pub mod gds;
 pub mod layout;
 pub mod lib;
@@ -38,10 +39,23 @@ pub struct Output {
     pub hold_bufs: usize,
     /// diodes inserted for the antenna rules
     pub diodes: usize,
+    /// the parasitics of the detailed routing the final timing used (a library technology)
+    pub extraction: Option<extract::Extraction>,
+    /// the timing repair (with constraints)
+    pub repair: Repair,
     pub detail: detail::Detail,
     pub pdn: pdn::Pdn,
     pub power: power::Power,
 }
+
+/// rounds of timing repair
+const REPAIR_ROUNDS: usize = 6;
+/// designs with fewer cells try each repair on the detailed routing and extraction
+const REPAIR_EXACT: usize = 3000;
+
+/// what the timing repair did: cells made stronger, buffers added, the worst slack before it
+#[derive(Debug, Default, Clone)]
+pub struct Repair { pub upsized: usize, pub buffers: usize, pub before: Option<f64> }
 
 /// rounds of antenna fixing (each reroutes, which can bring new pieces over the limit)
 const ANTENNA_ROUNDS: usize = 12;
@@ -75,6 +89,62 @@ pub fn flow_opts(opt: &Netlist, seed: u64, extra_hold: f64, antenna_fix: bool) -
         if !lib_tech || (r.8.conflicts == 0 && r.8.opens == 0) || attempt >= 4 || r.9 < 0.2 { break (r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8); }
         util = r.9 * 0.85;
     };
+    // timing repair (a library technology with timing constraints the routed design misses): the critical
+    // path's cells one drive strength up, its heavily loaded nets' other loads behind a buffer; then the
+    // routing again, a round kept only if the routing stays as clean and the worst slack gets better
+    let mut repair = Repair::default();
+    if lib_tech && crate::sdc::current().is_some() {
+        for _ in 0..REPAIR_ROUNDS {
+            let t0 = now();
+            let ext = extract::extract(&mapped, &placement, &detail);
+            let tm = sta::analyze_with(&mapped, &placement, &routing, extra_hold, Some(&ext));
+            let Some(s) = tm.slack.clone() else { break };
+            if repair.before.is_none() { repair.before = Some(s.wns); }
+            if s.wns >= 0.0 { break; }
+            // greedy: each change on its own against a quick estimate (global routing + STA), kept if it helps
+            // (a stronger cell also loads its driver more: not every one does)
+            let (mut m2, mut p2) = (mapped.clone(), placement.clone());
+            // (a design small enough: judged on its detailed routing and extraction, as the final timing is; a
+            // larger one on the global routing's estimate)
+            let small = mapped.cells.len() < REPAIR_EXACT;
+            let base_conflicts = (detail.conflicts, detail.opens);
+            let quick = |m: &Netlist, p: &place::RowPlacement| -> f64 {
+                let r = route::route(m, p);
+                if !small { return sta::analyze(m, p, &r, extra_hold).slack.map(|x| x.wns).unwrap_or(f64::NEG_INFINITY); }
+                let d = detail::route(m, p, &r, &pdn::build(m, p, &pdn.taps));
+                if (d.conflicts, d.opens) > base_conflicts { return f64::NEG_INFINITY; }
+                sta::analyze_with(m, p, &r, extra_hold, Some(&extract::extract(m, p, &d))).slack.map(|x| x.wns).unwrap_or(f64::NEG_INFINITY)
+            };
+            let mut best = quick(&m2, &p2);
+            let (mut up, mut bufs) = (0, 0);
+            // (net j of the path is driven by its cell j and read by cell j - 1)
+            let nets: Vec<(crate::netlist::Bit, usize, usize)> = (1..tm.crit_cells.len()).map(|j| (tm.crit_nets[j], tm.crit_cells[j], tm.crit_cells[j - 1])).collect();
+            for &i in &tm.crit_cells {
+                let (mut m3, mut p3) = (m2.clone(), p2.clone());
+                if cts::upsize(&mut m3, &mut p3, &pdn.taps, &[i]) == 0 { continue; }
+                let w = quick(&m3, &p3);
+                if w > best + 1e-6 { best = w; m2 = m3; p2 = p3; up += 1; }
+            }
+            for n in &nets {
+                let (mut m3, mut p3) = (m2.clone(), p2.clone());
+                if cts::isolate(&mut m3, &mut p3, &pdn.taps, &[*n], 4) == 0 { continue; }
+                let w = quick(&m3, &p3);
+                if w > best + 1e-6 { best = w; m2 = m3; p2 = p3; bufs += 1; }
+            }
+            if up + bufs == 0 { break; }
+            let r2 = route::route(&m2, &p2);
+            let pdn2 = pdn::build(&m2, &p2, &pdn.taps);
+            let d2 = detail::route(&m2, &p2, &r2, &pdn2);
+            let tm2 = sta::analyze_with(&m2, &p2, &r2, extra_hold, Some(&extract::extract(&m2, &p2, &d2)));
+            let wns2 = tm2.slack.as_ref().map(|x| x.wns).unwrap_or(f64::NEG_INFINITY);
+            t("timing repair", t0);
+            if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("  repair: WNS {:.3} -> {:.3} ns ({} upsized, {} buffers; routing {} / {} conflicts)", s.wns, wns2, up, bufs, d2.conflicts, detail.conflicts); }
+            if d2.conflicts > detail.conflicts || d2.opens > detail.opens || wns2 <= s.wns + 1e-6 { break; }
+            (mapped, placement, routing, pdn, detail) = (m2, p2, r2, pdn2, d2);
+            repair.upsized += up;
+            repair.buffers += bufs;
+        }
+    }
     // antenna rules (a library with a diode cell): a diode next to each gate whose piece of metal breaks
     // them, then the routing again; a fix that leaves the detailed routing worse is not kept
     let mut diodes = 0;
@@ -118,7 +188,9 @@ pub fn flow_opts(opt: &Netlist, seed: u64, extra_hold: f64, antenna_fix: bool) -
     }
     let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
     for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
-    let timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
+    // the final timing: with the parasitics of the detailed routing (a library technology)
+    let extraction = if lib_tech { Some(extract::extract(&mapped, &placement, &detail)) } else { None };
+    let timing = sta::analyze_with(&mapped, &placement, &routing, extra_hold, extraction.as_ref());
     // power at Fmax, from a random-input simulation of the final netlist
     let t0 = now();
     let cycles = (2_000_000 / mapped.cells.len().max(1)).clamp(100, 1000);
@@ -130,7 +202,7 @@ pub fn flow_opts(opt: &Netlist, seed: u64, extra_hold: f64, antenna_fix: bool) -
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, diodes, detail, pdn, power })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, diodes, detail, pdn, power, extraction, repair })
 }
 
 /// placement, global routing, timing-driven refinement, clock tree, hold

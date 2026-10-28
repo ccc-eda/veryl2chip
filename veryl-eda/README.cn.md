@@ -234,6 +234,10 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
   对象是引脚、`all_inputs` / `all_outputs`、通配符），`--sdc FILE` 或 `--clock MHZ`。ASIC 的 STA 据此报告 WNS / TNS / 没达成的端点
   （输入延迟与 `-from` 例外改变输入的出发时间，所以单一到达时间的传递仍是精确的；触发器依时钟引脚追回时钟端口），FPGA 报告对目标的余量、
   nextpnr 拿到 `--freq`。wasm `asic` / `pnr` 接受 `sdc`，IDE 有目标 MHz 方框或项目的 `.sdc`。
+- 时序收敛（v2.36）：`src/asic/extract.rs` 从详细布线提取每条网络的 RC 树（LEF 每层 R/□、面积 / 边缘电容，via 的接触电阻），最后的 STA
+  用 Elmore 延迟与实际线电容（`sta::analyze_with`）。有约束且 WNS < 0 时（库工艺）：关键路径的单元换成较强的版本（`NAND2@2` / `@4`，
+  内置子集加了 SKY130 的 _2 / _4 单元，`netlist::base` 让仿真器把它们当原型）、负载多的关键网络把其他负载移到缓冲器后面（`cts::upsize` /
+  `isolate`）；每个改动单独试（小设计用详细布线 + 提取，大设计用估计），有改善才留，每轮确认布线没变差。
 - GDSII（v1.7）：`--gds OUT.gds`（`src/asic/gds.rs`）写出 PDK 自己的单元版图（从它的 GDS 拷贝）以及一个顶层 cell：
   放置它们（FS 列镜像），并以 SKY130 的层号（met1 68/20、via 68/44…）画出布线、via、电源网格与有标签的 IO 引脚。
   同一网络距离小于间距的 via 垫片之间会补上小块金属，金属不会留下缺口。`tools/gds_check.py` 用 KLayout 的 Python 模块

@@ -310,8 +310,12 @@ pub fn main(all: Vec<String>) {
             d.wirelength, per.join(" / "), d.vias, d.conflicts, d.opens, d.iters.len());
         println!("asic: clock tree {} buffers ({}), insertion {:.3} ns, skew {:.3} ns; hold: worst slack {:.3} ns, {} delay buffers",
             o.cts.buffers, o.cts.trees.iter().map(|t| format!("{} sinks / {} levels", t.1, t.3)).collect::<Vec<_>>().join(", "), tm.insertion, tm.skew, tm.hold_slack, o.hold_bufs);
+        if let Some(e) = &o.extraction { println!("asic: extraction {} nets from the detailed routing: {:.3} pF of wire, the longest wire delay {:.1} ps", e.nets, e.cap.values().sum::<f64>(), e.worst * 1000.0); }
         println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints; ideal clock {:.1} MHz, wirelength-only placement {:.1} MHz)", tm.period, tm.fmax, tm.endpoints, o.fmax_ideal, o.fmax_wl);
         if let Some(s) = &tm.slack { println!("{}", slack_line(s)); }
+        if let (Some(b), Some(s)) = (o.repair.before, &tm.slack) {
+            if o.repair.upsized + o.repair.buffers > 0 || b < 0.0 { println!("timing: repair {} cells made stronger, {} buffers: WNS {:+.3} -> {:+.3} ns", o.repair.upsized, o.repair.buffers, b, s.wns); }
+        }
         if verbose { for s in &tm.path { println!("  {:8.3} {:+7.3}  {}", s.at, s.delay, s.what); } }
     }
 

@@ -231,6 +231,8 @@ fn asic_in(v: &Value) -> R<Value> {
             "slack": tm.slack.as_ref().map(|s| json!({ "wns": s.wns, "tns": s.tns, "failing": s.failing, "checked": s.checked, "worst": s.worst,
                 "clocks": s.clocks.iter().map(|(n, p, e)| json!({ "name": n, "period": p, "endpoints": e })).collect::<Vec<_>>() })) },
         "antenna": { "diodes": o.diodes },
+        "repair": { "upsized": o.repair.upsized, "buffers": o.repair.buffers, "before": o.repair.before },
+        "extraction": o.extraction.as_ref().map(|e| json!({ "nets": e.nets, "cap": e.cap.values().sum::<f64>(), "worst": e.worst })),
         "verilog": verilog,
         "def": asic::def(&o),
     }))

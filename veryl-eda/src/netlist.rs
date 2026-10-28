@@ -29,6 +29,9 @@ pub struct Cell {
     pub params: Vec<(&'static str, String)>,
 }
 
+/// a cell type without its drive strength: the timing repair's stronger versions ("NAND2@2") are the cell
+pub fn base(typ: &str) -> &str { typ.split('@').next().unwrap_or(typ) }
+
 /// the "output" of a cell that has none (`Cell::out`)
 pub const NO_OUT: Bit = Bit::W(u32::MAX);
 

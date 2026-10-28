@@ -61,6 +61,7 @@ pub const EXTRA: &[StdCell] = &[
 ];
 
 pub fn cell(name: &str) -> &'static StdCell {
+    let name = crate::netlist::base(name);
     LIB.iter().chain(EXTRA).find(|c| c.name == name).unwrap_or_else(|| panic!("no standard cell {}", name))
 }
 

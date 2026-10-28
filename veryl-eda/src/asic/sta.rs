@@ -112,7 +112,10 @@ pub(crate) fn apply(nl: &Netlist, c: &crate::sdc::Constraints) -> Applied {
 }
 
 /// `extra_hold`: added to every hold requirement (to exercise hold fixing)
-pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -> Timing {
+pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -> Timing { analyze_with(nl, pl, rt, extra_hold, None) }
+
+/// with the parasitics extracted from the detailed routing: the wires' real capacitance and RC delays
+pub fn analyze_with(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64, ext: Option<&super::extract::Extraction>) -> Timing {
     let len: HashMap<Bit, f64> = rt.nets.iter().map(|n| (n.bit, n.length)).collect();
     let mut fanout: HashMap<Bit, u32> = HashMap::new();
     for c in &nl.cells { for (p, b) in &c.conns { if !is_out(p) { *fanout.entry(*b).or_default() += 1; } } }
@@ -134,9 +137,13 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
     if nldm {
         for c in &nl.cells { for (p, b) in &c.conns { if !is_out(p) { *load.entry(*b).or_default() += tech.pin_cap(&c.typ, p); } } }
         for p in nl.ports.iter().filter(|p| p.dir == Dir::Out) { for b in &p.bits { *load.entry(*b).or_default() += 0.002; } }
-        for (b, l) in &len { *load.entry(*b).or_default() += cpu * l; }
+        match ext {
+            Some(e) => for (b, c) in &e.cap { *load.entry(*b).or_default() += c; },
+            None => for (b, l) in &len { *load.entry(*b).or_default() += cpu * l; },
+        }
     }
     let wire = |b: Bit, to: (f64, f64)| {
+        if let Some(t) = ext.and_then(|e| e.delay.get(&(b, super::extract::key(to.0, to.1)))) { return *t; }
         let s = src(b);
         let dist = (s.0 - to.0).abs() + (s.1 - to.1).abs();
         // Elmore: the driver-to-sink resistance charging half its own wire and a typical pin (Ω·pF = ps)

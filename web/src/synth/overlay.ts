@@ -708,7 +708,11 @@ export class SynthOverlay {
         `With the clock tree (propagated clock): paths start at the launching flip-flop's clock arrival and check setup against the capturing clock → ${t.fmax.toFixed(1)} MHz; skew ${(t.skew * 1000).toFixed(0)} ps.`),
       tr(`Hold 檢查（最短路徑：最早到達 ≥ 接收時脈 + hold）：最差餘裕 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `，插入 ${a.cts.hold_bufs} 個延遲 BUF 修正` : '，沒有違規'}。`,
         `Hold check (shortest paths: earliest arrival ≥ capture clock + hold): worst slack ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `, fixed by inserting ${a.cts.hold_bufs} delay BUFs` : ', no violations'}.`),
+      ...(a.extraction ? [tr(`繞線後的寄生萃取：${a.extraction.nets} 條網路依實際畫出的線算 RC（共 ${a.extraction.cap.toFixed(3)} pF 的線電容），每個負載的線延遲用 Elmore 延遲（最長 ${(a.extraction.worst * 1000).toFixed(1)} ps），取代依距離的估計。`,
+        `Parasitics extracted from the detailed routing: the RC of ${a.extraction.nets} nets from the wires as drawn (${a.extraction.cap.toFixed(3)} pF of wire), each load's wire delay as an Elmore delay (the longest ${(a.extraction.worst * 1000).toFixed(1)} ps), instead of the estimate from distances.`)] : []),
       ...(t.slack ? [slackText(t.slack)] : []),
+      ...(a.repair && a.repair.before != null && (a.repair.upsized + a.repair.buffers > 0 || a.repair.before < 0) ? [tr(`時序修正：關鍵路徑上 ${a.repair.upsized} 個元件換成驅動力較強的版本、${a.repair.buffers} 個緩衝器把非關鍵的負載隔開；WNS ${a.repair.before.toFixed(3)} → ${t.slack?.wns.toFixed(3)} ns（每個改動都在實際繞線後確認有改善才保留）`,
+        `Timing repair: ${a.repair.upsized} cells on the critical path swapped for stronger versions, ${a.repair.buffers} buffers taking the non-critical loads off; WNS ${a.repair.before.toFixed(3)} → ${t.slack?.wns.toFixed(3)} ns (each change kept only when the routed result is better)`)] : []),
     ];
   }
 

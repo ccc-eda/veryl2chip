@@ -354,6 +354,36 @@ fn sdc_slack() {
 }
 
 #[test]
+fn timing_repair_ram() {
+    // Ram on SKY130 at 450 MHz misses timing; stronger cells and buffers on its critical path make it (each
+    // change checked on the detailed routing and extraction), with DRC / LVS / antenna still clean
+    let t = crate::pdk::sky130_builtin().unwrap();
+    crate::pdk::with_tech(t, || {
+        let path = format!("{}/../examples/src/ram.veryl", env!("CARGO_MANIFEST_DIR"));
+        let p = Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
+        let mut lib = Lib::new();
+        lib.add(&p.veryl);
+        let nl = synthesize(&lib, "Ram").unwrap().0;
+        crate::sdc::set(Some(crate::sdc::parse("create_clock -name clk -period 2.2222 [get_ports i_clk]\n").unwrap()));
+        let o = crate::asic::flow(&nl, 1);
+        crate::sdc::set(None);
+        let o = o.unwrap();
+        let s = o.timing.slack.clone().unwrap();
+        let before = o.repair.before.unwrap();
+        assert!(before < 0.0 && s.wns > before && o.repair.upsized > 0, "WNS {} -> {} ({:?})", before, s.wns, o.repair);
+        assert!(o.mapped.cells.iter().any(|c| c.typ.contains('@')));
+        let e = o.extraction.as_ref().unwrap();
+        assert!(e.nets > 500 && e.worst > 0.0 && e.worst < 0.1);
+        let l = crate::asic::layout::build(&o).unwrap();
+        assert_eq!(crate::asic::drc::check(&l, &o.mapped).total(), 0);
+        assert_eq!(crate::asic::lvs::check(&l, &o).errors(), 0);
+        assert!(crate::asic::antenna::check(&l, &o.mapped).violations.is_empty());
+        // a stronger cell is the same function: the library binding was checked against its Liberty function
+        assert!(o.mapped.cells.iter().filter(|c| c.typ.contains('@')).all(|c| crate::pdk::tech().binding(&c.typ).is_some()));
+    });
+}
+
+#[test]
 fn antenna_pwl() {
     // SKY130's met1 limit: 400 with no diffusion, 2609 at 0.0225 µm², linear up to 11600 at 22.5
     let t = crate::pdk::sky130_builtin().unwrap();

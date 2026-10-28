@@ -2,6 +2,7 @@
 # into veryl-eda/pdk/sky130hd/ (built into the program, also the web page).
 #   tools/sky130.sh                 # downloads the full files (OpenROAD-flow-scripts platforms/sky130hd)
 #   python3 tools/sky130_subset.py /path/to/sky130hd veryl-eda/pdk/sky130hd
+# (the _2 / _4 cells: stronger versions the timing repair can swap in)
 # Liberty: the library header and the listed cells, without power tables
 # (internal_power, leakage_power per state) to keep it small. LEF: the tech
 # LEF as it is, and the listed MACROs. GDS: the listed cells' structures.
@@ -9,7 +10,9 @@ import os, re, struct, sys
 
 CELLS = """inv_1 inv_2 inv_4 buf_1 buf_2 buf_4 buf_8 clkbuf_1 clkbuf_2 clkbuf_4 clkbuf_8 nand2_1 nor2_1 and2_1 or2_1 xor2_1
 xnor2_1 a21oi_1 o21ai_1 mux2_1 nand3_1 nor3_1 and3_1 or3_1 a22oi_1 o22ai_1 a21o_1 o21a_1 conb_1 dfxtp_1 dfrtp_1 dfstp_1 dfrtn_1 diode_2 fill_1 fill_2 fill_4 fill_8 tapvpwrvgnd_1
-decap_3 decap_4 decap_6 decap_8 decap_12""".split()
+decap_3 decap_4 decap_6 decap_8 decap_12
+nand2_2 nand2_4 nor2_2 nor2_4 and2_2 and2_4 or2_2 or2_4 xor2_2 xor2_4 xnor2_2 xnor2_4 a21oi_2 a21oi_4 o21ai_2 o21ai_4
+mux2_2 mux2_4 nand3_2 nand3_4 nor3_2 nor3_4 and3_2 and3_4 or3_2 or3_4 a22oi_2 a22oi_4 o22ai_2 o22ai_4 a21o_2 a21o_4 o21a_2 o21a_4""".split()
 PRE = "sky130_fd_sc_hd__"
 names = [PRE + c for c in CELLS]
 src, dst = sys.argv[1], sys.argv[2]

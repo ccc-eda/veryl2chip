@@ -2171,7 +2171,15 @@
           `Hold \u6AA2\u67E5\uFF08\u6700\u77ED\u8DEF\u5F91\uFF1A\u6700\u65E9\u5230\u9054 \u2265 \u63A5\u6536\u6642\u8108 + hold\uFF09\uFF1A\u6700\u5DEE\u9918\u88D5 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `\uFF0C\u63D2\u5165 ${a.cts.hold_bufs} \u500B\u5EF6\u9072 BUF \u4FEE\u6B63` : "\uFF0C\u6C92\u6709\u9055\u898F"}\u3002`,
           `Hold check (shortest paths: earliest arrival \u2265 capture clock + hold): worst slack ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `, fixed by inserting ${a.cts.hold_bufs} delay BUFs` : ", no violations"}.`
         ),
-        ...t.slack ? [slackText(t.slack)] : []
+        ...a.extraction ? [tr(
+          `\u7E5E\u7DDA\u5F8C\u7684\u5BC4\u751F\u8403\u53D6\uFF1A${a.extraction.nets} \u689D\u7DB2\u8DEF\u4F9D\u5BE6\u969B\u756B\u51FA\u7684\u7DDA\u7B97 RC\uFF08\u5171 ${a.extraction.cap.toFixed(3)} pF \u7684\u7DDA\u96FB\u5BB9\uFF09\uFF0C\u6BCF\u500B\u8CA0\u8F09\u7684\u7DDA\u5EF6\u9072\u7528 Elmore \u5EF6\u9072\uFF08\u6700\u9577 ${(a.extraction.worst * 1e3).toFixed(1)} ps\uFF09\uFF0C\u53D6\u4EE3\u4F9D\u8DDD\u96E2\u7684\u4F30\u8A08\u3002`,
+          `Parasitics extracted from the detailed routing: the RC of ${a.extraction.nets} nets from the wires as drawn (${a.extraction.cap.toFixed(3)} pF of wire), each load's wire delay as an Elmore delay (the longest ${(a.extraction.worst * 1e3).toFixed(1)} ps), instead of the estimate from distances.`
+        )] : [],
+        ...t.slack ? [slackText(t.slack)] : [],
+        ...a.repair && a.repair.before != null && (a.repair.upsized + a.repair.buffers > 0 || a.repair.before < 0) ? [tr(
+          `\u6642\u5E8F\u4FEE\u6B63\uFF1A\u95DC\u9375\u8DEF\u5F91\u4E0A ${a.repair.upsized} \u500B\u5143\u4EF6\u63DB\u6210\u9A45\u52D5\u529B\u8F03\u5F37\u7684\u7248\u672C\u3001${a.repair.buffers} \u500B\u7DE9\u885D\u5668\u628A\u975E\u95DC\u9375\u7684\u8CA0\u8F09\u9694\u958B\uFF1BWNS ${a.repair.before.toFixed(3)} \u2192 ${t.slack?.wns.toFixed(3)} ns\uFF08\u6BCF\u500B\u6539\u52D5\u90FD\u5728\u5BE6\u969B\u7E5E\u7DDA\u5F8C\u78BA\u8A8D\u6709\u6539\u5584\u624D\u4FDD\u7559\uFF09`,
+          `Timing repair: ${a.repair.upsized} cells on the critical path swapped for stronger versions, ${a.repair.buffers} buffers taking the non-critical loads off; WNS ${a.repair.before.toFixed(3)} \u2192 ${t.slack?.wns.toFixed(3)} ns (each change kept only when the routed result is better)`
+        )] : []
       ];
     }
     asicSide(key) {

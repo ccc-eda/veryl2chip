@@ -324,6 +324,20 @@ pub fn sky130(lib: liberty::Library, lef: lef::Lef) -> Result<Tech, String> {
         let access = access_points(m, &pins, "li1", site.w, site.w / 2.0, site.h, tracks, ty0, 0.085)?;
         cells.insert(logical.to_string(), Binding { cell: full.clone(), pins, width: (m.w / site.w).round() as u32, access, area: lc.area });
     }
+    // stronger versions of the logic cells (_2, _4) where the library has them: "NAND2@2", "NAND2@4"
+    // (the timing repair swaps them in on critical paths)
+    for (logical, name, pins, kind) in SKY130_HD {
+        let Kind::Comb(_) = kind else { continue };
+        if !name.ends_with("_1") || matches!(*logical, "TIEL" | "TIEH" | "CLKBUF") { continue; }
+        for s in [2, 4] {
+            let full = format!("{}{}_{}", SKY130_PREFIX, &name[..name.len() - 2], s);
+            let (Some(lc), Some(m)) = (lib.cell(&full), lef.macro_(&full)) else { continue };
+            check_binding(lc, pins, kind)?;
+            let pins: Vec<(&'static str, String)> = pins.iter().map(|(l, p)| (static_pin(l), p.to_string())).collect();
+            let Ok(access) = access_points(m, &pins, "li1", site.w, site.w / 2.0, site.h, tracks, ty0, 0.085) else { continue };
+            cells.insert(format!("{}@{}", logical, s), Binding { cell: full.clone(), pins, width: (m.w / site.w).round() as u32, access, area: lc.area });
+        }
+    }
     // the antenna diode (no function to check): only when the library has it
     let diode = format!("{}diode_2", SKY130_PREFIX);
     if let (Some(lc), Some(m)) = (lib.cell(&diode), lef.macro_(&diode)) {
@@ -463,8 +477,10 @@ mod tests {
     #[test]
     fn sky130_builtin_subset() {
         let t = sky130_builtin().unwrap();
-        // the table's cells and the antenna diode
-        assert_eq!(t.cells.len(), SKY130_HD.len() + 1);
+        // the table's cells, their stronger versions and the antenna diode
+        assert!(t.cells.len() > SKY130_HD.len() + 20, "{} bindings", t.cells.len());
+        assert_eq!(t.binding("NAND2@2").map(|b| b.cell.as_str()), Some("sky130_fd_sc_hd__nand2_2"));
+        assert_eq!(t.binding("INV@4").map(|b| b.cell.as_str()), Some("sky130_fd_sc_hd__inv_4"));
         assert_eq!(t.binding("DIODE").map(|b| b.cell.as_str()), Some("sky130_fd_sc_hd__diode_2"));
         let m = with_tech(t, verilog_models);
         assert!(m.contains("module sky130_fd_sc_hd__dfrtp_1 (input CLK, input D, input RESET_B, output reg Q);"), "{}", m);

@@ -98,7 +98,7 @@ impl<'n> NetSim<'n> {
                     continue;
                 }
                 let g = |p: &str, s: &Self| s.get_bit(c.port(p).unwrap());
-                let y = match c.typ.as_str() {
+                let y = match crate::netlist::base(&c.typ) {
                     "$_NOT_" => !g("A", self),
                     "$_AND_" => g("A", self) & g("B", self),
                     "$_OR_" => g("A", self) | g("B", self),

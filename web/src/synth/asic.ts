@@ -37,6 +37,10 @@ export interface AsicResult {
   timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[];
     /** against the timing constraints (.sdc / the target clock), when there are any */
     slack?: { wns: number; tns: number; failing: number; checked: number; worst: string; clocks: { name: string; period: number; endpoints: number }[] } | null };
+  /** the timing repair (with constraints): cells made stronger, buffers added, the worst slack before */
+  repair?: { upsized: number; buffers: number; before: number | null };
+  /** the parasitics the final timing used (a library technology): nets, wire capacitance (pF), the longest wire delay (ns) */
+  extraction?: { nets: number; cap: number; worst: number } | null;
   verilog: string;
   def: string;
   /** the technology ("vlib", "sky130_fd_sc_hd"), its four routing layers, and (a PDK) the design rule check */

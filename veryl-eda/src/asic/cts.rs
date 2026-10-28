@@ -9,7 +9,7 @@
 
 use super::lib::{dims, row_h, site_w};
 use super::place::{special_nets, RowPlacement};
-use crate::netlist::{Bit, Cell, Netlist};
+use crate::netlist::{is_out, Bit, Cell, Netlist};
 
 pub const MAX_LEAF: usize = 16;
 
@@ -70,6 +70,59 @@ pub fn add_diodes(nl: &mut Netlist, pl: &mut RowPlacement, taps: &[(u32, u32)], 
         let (cx, cy) = center(nl, pl, i);
         nl.cells.push(Cell { typ: "DIODE".into(), conns: vec![("A", b)], params: vec![] });
         pl.pos.push(grid.take(cx, cy, dw));
+        n += 1;
+    }
+    n
+}
+
+/// timing repair: each cell of `cells` (the critical path) one drive strength up ("NAND2" -> "NAND2@2" ->
+/// "NAND2@4") where the library has it and its row has the room (it grows to the right, else to the left);
+/// their number
+pub fn upsize(nl: &mut Netlist, pl: &mut RowPlacement, taps: &[(u32, u32)], cells: &[usize]) -> usize {
+    let tech = crate::pdk::tech();
+    let mut grid = Grid::of(nl, pl);
+    let tw = tech.tap.as_ref().map(|t| t.1).unwrap_or(1);
+    for &(r, x) in taps { for t in x..(x + tw).min(pl.sites) { grid.occ[r as usize][t as usize] = true; } }
+    let width = super::lib::width;
+    let mut n = 0;
+    for &i in cells {
+        let c = &nl.cells[i];
+        if c.is_ff() || dims(c).1 != 1 || matches!(crate::netlist::base(&c.typ), "CLKBUF" | "TIEL" | "TIEH" | "DIODE" | "SRAM") { continue; }
+        let next = match c.typ.split_once('@') { None => format!("{}@2", c.typ), Some((b, "2")) => format!("{}@4", b), _ => continue };
+        if tech.binding(&next).is_none() { continue; }
+        let (w0, w1) = (width(&c.typ), width(&next));
+        let (r, x) = pl.pos[i];
+        let row = &grid.occ[r as usize];
+        let free = |a: u32, b: u32| b <= pl.sites && (a..b).all(|t| !row[t as usize]);
+        let dw = w1.saturating_sub(w0);
+        let nx = if free(x + w0, x + w1) { x } else if x >= dw && free(x - dw, x) { x - dw } else { continue };
+        for t in nx..nx + w1 { grid.occ[r as usize][t as usize] = true; }
+        nl.cells[i].typ = next;
+        pl.pos[i] = (r, nx);
+        n += 1;
+    }
+    n
+}
+
+/// timing repair: on each critical (net, critical sink cell) with `min` or more cell loads, the loads but the
+/// critical one move behind a new buffer next to the driver, so the critical path drives a lighter net; their number
+pub fn isolate(nl: &mut Netlist, pl: &mut RowPlacement, taps: &[(u32, u32)], nets: &[(Bit, usize, usize)], min: usize) -> usize {
+    let mut grid = Grid::of(nl, pl);
+    let tw = crate::pdk::tech().tap.as_ref().map(|t| t.1).unwrap_or(1);
+    for &(r, x) in taps { for t in x..(x + tw).min(pl.sites) { grid.occ[r as usize][t as usize] = true; } }
+    let mut wire = next_wire(nl);
+    let bw = super::lib::width("BUF");
+    let mut n = 0;
+    for &(b, driver, crit) in nets {
+        let loads: Vec<(usize, usize)> = nl.cells.iter().enumerate().flat_map(|(i, c)| c.conns.iter().enumerate()
+            .filter(move |(_, (p, x))| *x == b && !is_out(p) && !matches!(*p, "CK" | "RN" | "SN")).map(move |(k, _)| (i, k))).collect();
+        if loads.len() < min || nl.cells[driver].typ == "CLKBUF" { continue; }
+        let y = Bit::W(wire);
+        wire += 1;
+        for (i, k) in loads.into_iter().filter(|(i, _)| *i != crit) { nl.cells[i].conns[k].1 = y; }
+        let (cx, cy) = center(nl, pl, driver);
+        nl.cells.push(Cell { typ: "BUF".into(), conns: vec![("A", b), ("Y", y)], params: vec![] });
+        pl.pos.push(grid.take(cx, cy, bw));
         n += 1;
     }
     n
