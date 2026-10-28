@@ -74,7 +74,7 @@ function uid(): string { return Date.now().toString(36) + Math.random().toString
 function fromExample(ex: Example): Project {
   const files = ex.files.map(f => ({ ...f }));
   if (ex.pcf) files.push({ name: PCF, src: ex.pcf });
-  return { id: uid(), name: ex.title, files, synth: ex.synth, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
+  return { id: uid(), name: ex.title, files, synth: ex.synth, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board, piBoard: ex.piBoard?.map(p => ({ ...p })) };
 }
 
 function blankProject(name: string): Project {
@@ -405,6 +405,7 @@ function revertProject(): void {
   if (!confirm(tr('捨棄所有修改，回到範例原始碼？', 'Discard all changes and go back to the example\'s source?'))) return;
   proj.files = ex.files.map(f => ({ ...f }));
   proj.synth = ex.synth;
+  proj.piBoard = ex.piBoard?.map(p => ({ ...p }));
   if (ex.pcf) proj.files.push({ name: PCF, src: ex.pcf });
   showActive();
   changed();

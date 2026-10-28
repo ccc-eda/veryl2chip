@@ -5028,7 +5028,7 @@ ${lines.join("\n")}
   function fromExample(ex) {
     const files = ex.files.map((f) => ({ ...f }));
     if (ex.pcf) files.push({ name: PCF, src: ex.pcf });
-    return { id: uid(), name: ex.title, files, synth: ex.synth, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board };
+    return { id: uid(), name: ex.title, files, synth: ex.synth, from: ex.id, open: [ex.files[0].name], active: ex.files[0].name, board: ex.board, piBoard: ex.piBoard?.map((p) => ({ ...p })) };
   }
   function blankProject(name) {
     const m = name.replace(/[^A-Za-z0-9_]/g, "").replace(/^[^A-Za-z]+/, "") || "Top";
@@ -5368,6 +5368,7 @@ ${lines.join("\n")}
     if (!confirm(tr("\u6368\u68C4\u6240\u6709\u4FEE\u6539\uFF0C\u56DE\u5230\u7BC4\u4F8B\u539F\u59CB\u78BC\uFF1F", "Discard all changes and go back to the example's source?"))) return;
     proj.files = ex.files.map((f) => ({ ...f }));
     proj.synth = ex.synth;
+    proj.piBoard = ex.piBoard?.map((p) => ({ ...p }));
     if (ex.pcf) proj.files.push({ name: PCF, src: ex.pcf });
     showActive();
     changed();

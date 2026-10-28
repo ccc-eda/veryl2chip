@@ -1,0 +1,14 @@
+apple red 30
+banana yellow 15
+cherry red 80
+grape purple 45
+kiwi green 25
+lemon yellow 20
+lime green 18
+mango orange 60
+orange orange 22
+peach orange 35
+pear green 28
+plum purple 40
+strawberry red 70
+watermelon green 90

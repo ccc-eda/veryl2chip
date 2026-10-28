@@ -22,7 +22,8 @@ const { Veryl, fromBase64 } = req(path.join(dist, 'api.cjs'));
 const { Machine, machineStops, fingerprint } = req(path.join(dist, 'emu_machine.cjs'));
 const core = await Veryl.load(fromBase64(ctx.VERYL_WASM_B64));
 
-for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu)) {
+// examples on the same machine (same_hw) share its snapshot
+for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw)) {
   const cfg = JSON.parse(ex.files.find((f) => f.name === 'machine.json').src);
   if (!cfg.snapshot) continue;
   const files = ex.files.filter((f) => f.name.endsWith('.veryl'));

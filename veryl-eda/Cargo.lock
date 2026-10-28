@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "veryl2chip-eda"
-version = "2.28.0"
+version = "2.29.0"
 dependencies = [
  "veryl-parser",
  "veryl2chip-sim",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "veryl2chip-sim"
-version = "2.28.0"
+version = "2.29.0"
 dependencies = [
  "veryl-parser",
 ]

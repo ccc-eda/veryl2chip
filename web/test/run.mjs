@@ -517,7 +517,8 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     for (const [a, v] of Object.entries(c)) if (!v.on && !v.why) errs.push(`${ex.id}: ${a} off without a reason`);
     if (ex.emu) {
       if (c.test.on || c.board.on || c.verify.on) errs.push(`${ex.id}: a machine offers test / board`);
-      if (!caps({ ...i, active: 'main.py' }).test.on) errs.push(`${ex.id}: ▶ is off with main.py open`);
+      const prog = files.find((f) => /\.(py|sh|c)$/.test(f.name))?.name;
+      if (!prog || !caps({ ...i, active: prog }).test.on) errs.push(`${ex.id}: ▶ is off with ${prog} open`);
     } else if (!c.test.on || !c.verify.on || c.emu.on) errs.push(`${ex.id}: test ${c.test.on} verify ${c.verify.on} emu ${c.emu.on}`);
     if (!ex.emu && !ex.pcf && (c.board.on || !c.board.fix?.includes('addPcf'))) errs.push(`${ex.id}: no pins, but the board is ${c.board.on ? 'on' : 'off without "add pins.pcf"'}`);
   }
@@ -547,7 +548,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     { id: 1, kind: 'wire', a: 'gnd', b: 'r:top-:1' },
   ];
   if (fs.existsSync(path.join(dist, 'img_linux.js'))) vm.runInContext(fs.readFileSync(path.join(dist, 'img_linux.js'), 'utf8'), ctx);
-  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu)) {
+  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw)) {
     const t0 = Date.now();
     let line;
     try {
@@ -682,6 +683,86 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
       line = `FAIL ${ex.id.padEnd(9)} emulator: ${e.message}`;
     }
     console.log(`${line}  (${Date.now() - t0} ms)`);
+  }
+
+  // the RV64 board's examples (same_hw: the board's machine, checked above): each one's programs
+  // run on riscv-emu, as ▶ Run does (the project's files into /root, C compiled for Linux)
+  const boardEx = ctx.VERYL_EXAMPLES.filter((e) => e.emu && e.same_hw);
+  if (boardEx.length && ctx.VERYL_IMAGES?.linux) {
+    const t0 = Date.now();
+    const { RvMachine } = createRequire(import.meta.url)(path.join(dist, 'rv_machine.cjs'));
+    vm.runInContext(fs.readFileSync(path.join(dist, 'rvemu.js'), 'utf8'), ctx);
+    const T = createRequire(import.meta.url)(tarPath);
+    const { solve } = createRequire(import.meta.url)(bbPath);
+    const cfg = JSON.parse(boardEx[0].files.find((f) => f.name === 'machine.json').src);
+    const rm = await RvMachine.create(fromBase64(ctx.VERYL_RVEMU_B64), cfg, { jit: true });
+    for (const l of cfg.load ?? []) rm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+    rm.reset();
+    let o = '';
+    while (rm.cycle < 400_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...rm.step(1_000_000).out);
+    const lit = () => { const b = rm.screen(); let n = 0; for (let i = 0; i < b.length; i += 2) if (b[i] | b[i + 1]) n++; return n; };
+    /** type a command, wait for `want` (then Ctrl-C and the prompt for a program that runs on); the output and the GPIO over the run */
+    const run = (cmd, want, stop) => {
+      let out = '', r = null;
+      rm.input([...cmd + '\r'].map((c) => c.charCodeAt(0)));
+      const end = rm.cycle + 600_000_000;
+      while (rm.cycle < end && !out.includes(want)) { r = rm.step(1_000_000); out += String.fromCharCode(...r.out); }
+      const ok = out.includes(want);
+      // let it run a little, sampling the GPIO
+      const g = stop ? rm.step(30_000_000) : null;
+      if (stop) rm.input([3]);
+      let tail = '';
+      while (rm.cycle < end + 200_000_000 && !tail.endsWith(cfg.prompt)) tail += String.fromCharCode(...rm.step(1_000_000).out);
+      return { ok, out: out + tail, g };
+    };
+    // what each example's programs must print (C files are compiled first)
+    const CHECKS = {
+      pi_chaser: [['micropython chaser.py', 'chaser: GPIO 6', true], ['./chaser', 'chaser (C): GPIO 6', true]],
+      pi_reaction: [['micropython reaction.py', 'Round 1 : wait for green', true]],
+      pi_breathe: [['./breathe', 'breathing: red, yellow, green', true]],
+      pi_snake: [['./snake', 'snake: GPIO 6 turns left', true]],
+      pi_sysmon: [['micropython sysmon.py', 'processes ', true]],
+      pi_linux: [['sh hello.sh', 'Hello from Linux', false], ['sort -k3 -n fruits.txt | tail -1; sh count.sh 2', 'watermelon green 90', false]],
+    };
+    const res = [];
+    let fail = '';
+    for (const ex of boardEx) {
+      const checks = CHECKS[ex.id];
+      if (!checks) { fail ||= `${ex.id}: no check`; continue; }
+      const progs = [];
+      for (const f of ex.files.filter((x) => x.name.endsWith('.c'))) {
+        const c = core.call({ cmd: 'cc', name: f.name, linux: true, src: f.src });
+        if (!c.compiled) { fail ||= `${ex.id}: ${f.name}: ${JSON.stringify(c.errors.slice(0, 2))}`; continue; }
+        progs.push({ name: f.name.slice(0, -2), src: fromBase64(c.elf), mode: 0o755 });
+      }
+      const files = ex.files.filter((f) => !f.name.endsWith('.veryl') && f.name !== 'machine.json');
+      rm.writeArea(T.exchangeArea(T.tarFiles([...files, ...progs])));
+      run('cd /root && getfiles > /dev/null; echo GOT$((1+1))', 'GOT2', false);
+      const before = lit();
+      for (const [cmd, want, stop] of checks) {
+        const r = run(cmd, want, stop);
+        if (!r.ok) { fail ||= `${ex.id}: ${cmd}: ${JSON.stringify(r.out.slice(-200))}`; continue; }
+        // what the program did besides printing
+        if (ex.id === 'pi_chaser' && (r.g.oe & 0xfb8) !== 0xfb8) fail ||= `${ex.id}: ${cmd}: LEDs not outputs (oe ${r.g.oe.toString(16)})`;
+        if (ex.id === 'pi_breathe') {
+          // software PWM: partly lit LEDs on the breadboard (default: red, yellow, green on GPIO 5, 12, 13)
+          const d = [5, 12, 13].map((p) => r.g.duty[p]);
+          if (!d.every((x) => x > 0.03 && x < 0.97)) fail ||= `${ex.id}: duty ${d.map((x) => x.toFixed(2))}`;
+          else res.push(`PWM duty ${d.map((x) => x.toFixed(2)).join(' / ')}`);
+        }
+        if ((ex.id === 'pi_snake' || ex.id === 'pi_sysmon') && lit() < 2000) fail ||= `${ex.id}: the screen is not drawn (${lit()} pixels, ${before} before)`;
+        if (ex.id === 'pi_chaser' && cmd.startsWith('./')) {
+          // the example's breadboard: the LED of a lit pin lights
+          const on = [3, 4, 5, 7, 8, 9, 10, 11].filter((p) => r.g.duty[p] > 0.05);
+          const leds = solve(ex.piBoard, new Map(on.map((p) => [p, r.g.duty[p]])), new Set([6, 13]), new Set()).led;
+          if (![...leds.values()].some((v) => v > 0.05)) fail ||= `${ex.id}: no breadboard LED lights (pins ${on})`;
+        }
+      }
+      res.push(ex.id);
+    }
+    const ok = !fail;
+    if (!ok) bad++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} board examples on riscv-emu: ${ok ? res.join(', ') : fail}  (${Date.now() - t0} ms)`);
   }
 }
 

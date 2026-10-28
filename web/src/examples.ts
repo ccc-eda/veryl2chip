@@ -22,6 +22,8 @@ export interface Example {
   board?: import('./ide/board').BoardSetup;
   /** runs in the emulator (machine.json), not in the testbench simulator */
   emu?: boolean;
+  /** the development board's breadboard (machine.json "board": "pi"; default: pi.ts's) */
+  piBoard?: import('./ide/bbmodel').Part[];
 }
 
 declare const VERYL_EXAMPLES: Example[];

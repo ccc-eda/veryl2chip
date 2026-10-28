@@ -45,7 +45,7 @@ console.log(`rvemu.js     ${(rvWasm.length / 1e3).toFixed(0)} KB wasm`);
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
 // English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
-const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 其他: 'Other' };
+const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 'RV64 開發板': 'RV64 board', 其他: 'Other' };
 const EN = {
   lab_gates: { title_en: 'Breadboard lab: logic gates', note_en: 'two switches (PMOD1B, each with a pull-down) → four LEDs for AND, OR, XOR, NOT (PMOD1A, each with a series resistor); the breadboard comes wired' },
   lab_counter: { title_en: 'Lab: one press, plus one', note_en: 'each BTN1 press adds one (synchronizer + rising edge); the 8-bit count on the LED module in PMOD1A; BTN2 clears' },
@@ -82,6 +82,32 @@ const EN = {
   soc: { title_en: 'RISC-V SoC (FPGA)', note_en: 'Fibonacci(10) = 55 → LEDs; iCEBreaker pins (LEDs on PMOD1A)' },
   alu_fail: { title_en: 'Alu (with an assertion that fails on purpose)', note_en: 'What a failing assertion looks like: tb_alu has a "should fail on purpose" assertion' },
 };
+// the RV64 board (examples/rv64): one machine for every board example, booted from one snapshot
+const RV64_MACHINE = { top: 'Rv64Soc', reset: { port: 'i_rst', active: 0, cycles: 2 },
+      uart: { tx_valid: 'o_tx_valid', tx_data: 'o_tx_data', rx_valid: 'i_rx_valid', rx_data: 'i_rx_data', rx_ready: 'o_rx_ready' },
+      finish: { valid: 'o_finish', code: 'o_finish_code', pass: 0x5555 }, ram: { array: 'mem', base: '0x80000000' }, load: [{ image: 'linux' }],
+      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi', snapshot: 'linux', prompt: 'rv64:~$ ', files: { addr: '0x8F000000', size: 16777216 }, fb: { addr: '0x8EF00000', width: 320, height: 240 }, riscv: true };
+const RV64_HW = ['examples/rv64/src/rv64core.veryl', 'examples/rv64/src/rv64soc.veryl'];
+/** a breadboard for the board: LEDs [gpio, color] in the top half (each with its resistor), then buttons on gpio pins (each with a pull-down) */
+function piBB(leds, buttons) {
+  const parts = [{ kind: 'wire', a: 'gnd', b: 'r:top-:1', color: '#3e63dd' }, { kind: 'wire', a: 'vcc', b: 'r:top+:30', color: '#e5484d' }];
+  leds.forEach(([g, color], k) => {
+    const c = 2 + 3 * k;
+    parts.push({ kind: 'wire', a: `p:${g}`, b: `h:${c}:a`, color: '#f76b15' }, { kind: 'led', a: `h:${c}:c`, b: `h:${c + 1}:c`, color }, { kind: 'res', a: `h:${c + 1}:e`, b: `r:top-:${c + 1}` });
+  });
+  buttons.forEach((g, k) => {
+    const c = (leds.length ? 3 * leds.length + 2 : 3) + 3 * k;
+    parts.push({ kind: 'btn', a: `r:top+:${c}`, b: `h:${c}:b` }, { kind: 'wire', a: `h:${c}:a`, b: `p:${g}`, color: '#8e4ec6' }, { kind: 'res', a: `h:${c}:e`, b: `r:top-:${c + 1}` });
+  });
+  return parts.map((p, i) => ({ id: i + 1, ...p }));
+}
+const LED_COLORS = ['#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2', '#ff2d55'];
+/** an example on the RV64 board: its programs (examples/rv64/apps/DIR/...), the board's hardware, the shared machine; a breadboard of its own (default: pi.ts's) */
+const piEx = (id, dir, files, title, title_en, note, note_en, piBoard) => ({
+  id, group: 'RV64 開發板', title, title_en, note, note_en, files: [...files.map((f) => `examples/rv64/apps/${dir}/${f}`), ...RV64_HW],
+  synth: 'Rv64Core', asic: false, emu: true, same_hw: 'rv64_linux', machine: RV64_MACHINE, ...(piBoard ? { piBoard } : {}),
+});
+
 const EX = [
   { id: 'tut_blinky', group: '教學', title: '第 1 課 Blinky 閃爍 LED', files: ['tutorial/src/blinky.veryl'], synth: 'Blinky', pcf: 'tutorial/icebreaker.pcf',
     note: 'tutorial/README.tw.md 第 1 課：計數器讓 LED 閃爍；iCEBreaker 腳位（板上與擴充板 LED）' },
@@ -132,12 +158,29 @@ const EX = [
   { id: 'uart', group: '周邊', title: 'UART 收發器（迴路測試）', files: ['examples/src/uart.veryl'], synth: 'UartLoop', note: 'UartTx → UartRx 迴路，8N1，每位元 8 個時脈' },
   { id: 'vga', group: '周邊', title: 'VGA 640×480 時序 + 色條', files: ['examples/src/vga.veryl'], synth: 'VgaDemo', pcf: 'examples/vga.pcf',
     note: '測試用縮小的 24×12 畫面；合成用預設的 800×525；虛擬板上接 PMOD1A+1B 的 VGA 螢幕', board: { uart: false, baud: 115200, pmod1a: 'vga', pmod1b: '' } },
-  { id: 'rv64_linux', group: 'RISC-V', title: 'RV64 開發板：Linux + MicroPython + C + 螢幕（模擬機）', files: ['examples/rv64/src/rv64core.veryl', 'examples/rv64/src/rv64soc.veryl', 'examples/rv64/board/main.py', 'examples/rv64/board/button.py', 'examples/rv64/board/traffic.py', 'examples/rv64/board/clock.py', 'examples/rv64/board/blink.c', 'examples/rv64/board/count.c', 'examples/rv64/board/lights.c', 'examples/rv64/board/shapes.c', 'examples/rv64/board/blink.sh', 'examples/rv64/board/button.sh'], synth: 'Rv64Core', asic: false, emu: true,
-    machine: { top: 'Rv64Soc', reset: { port: 'i_rst', active: 0, cycles: 2 },
-      uart: { tx_valid: 'o_tx_valid', tx_data: 'o_tx_data', rx_valid: 'i_rx_valid', rx_data: 'i_rx_data', rx_ready: 'o_rx_ready' },
-      finish: { valid: 'o_finish', code: 'o_finish_code', pass: 0x5555 }, ram: { array: 'mem', base: '0x80000000' }, load: [{ image: 'linux' }],
-      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi', snapshot: 'linux', prompt: 'rv64:~$ ', files: { addr: '0x8F000000', size: 16777216 }, fb: { addr: '0x8EF00000', width: 320, height: 240 }, riscv: true },
+  { id: 'rv64_linux', group: 'RV64 開發板', title: 'RV64 開發板：Linux + MicroPython + C + 螢幕（模擬機）', files: ['examples/rv64/src/rv64core.veryl', 'examples/rv64/src/rv64soc.veryl', 'examples/rv64/board/main.py', 'examples/rv64/board/button.py', 'examples/rv64/board/traffic.py', 'examples/rv64/board/clock.py', 'examples/rv64/board/blink.c', 'examples/rv64/board/count.c', 'examples/rv64/board/lights.c', 'examples/rv64/board/shapes.c', 'examples/rv64/board/blink.sh', 'examples/rv64/board/button.sh'], synth: 'Rv64Core', asic: false, emu: true,
+    machine: RV64_MACHINE,
     note: '像樹莓派的開發板：Rv64Core（RV64IMAC、M / S / U、SV39）放在有 256 MB RAM 與 16 支腳 GPIO 的 Rv64Soc 裡，用模擬機（🖥）跑：veryl-emu 把它編成 WebAssembly，開 OpenSBI + Linux 6.12 + busybox；板上 ACT / USER LED（GPIO 0、1）、按鈕（GPIO 2），排針與麵包板上是 GPIO 3–15（和樹莓派同樣的 BCM 編號）。打開 main.py 按「▶ 執行」：專案的檔案放進 /root，MicroPython 用 pi 模組（LED、Button、Pin）跑它；button.py 數按鈕次數，traffic.py 是麵包板上的紅綠燈；blink.c、count.c、lights.c 是 C 版（▶ 執行時在瀏覽器裡編譯）；clock.py、shapes.c 在 320 × 240 的螢幕上畫圖；打 micropython 進 REPL，sh blink.sh 是 shell 版；板子上打 savefiles 送回專案' },
+  piEx('pi_chaser', 'chaser', ['chaser.py', 'chaser.c'], '開發板：8 顆 LED 跑馬燈', 'Board: 8-LED chaser',
+    '麵包板上 8 顆 LED（GPIO 3、4、5、7–11）輪流亮；GPIO 6 的按鈕換速度、GPIO 13 換方向。打開 chaser.py 或 chaser.c 按「▶ 執行」（同一個程式的 MicroPython 版與 C 版）',
+    'Eight LEDs on the breadboard (GPIO 3, 4, 5, 7-11) light in turn; the button on GPIO 6 changes the speed, GPIO 13 the direction. Open chaser.py or chaser.c and press ▶ Run (the same program in MicroPython and in C)',
+    piBB([[3, LED_COLORS[0]], [4, LED_COLORS[1]], [5, LED_COLORS[2]], [7, LED_COLORS[3]], [8, LED_COLORS[4]], [9, LED_COLORS[5]], [10, LED_COLORS[6]], [11, LED_COLORS[7]]], [6, 13])),
+  piEx('pi_reaction', 'reaction', ['reaction.py'], '開發板：反應時間遊戲', 'Board: reaction time game',
+    '紅燈（GPIO 5）亮時等，綠燈（GPIO 13）一亮就按麵包板上的按鈕（GPIO 6），量幾毫秒；太早按黃燈（GPIO 12）亮。最佳成績存在 best.txt，在板子上打 savefiles 送回專案',
+    'Wait while red (GPIO 5) is on; when green (GPIO 13) lights, press the breadboard button (GPIO 6): the time in milliseconds; too early lights yellow (GPIO 12). The best time is kept in best.txt; type savefiles on the board to send it to the project'),
+  piEx('pi_breathe', 'breathe', ['breathe.c'], '開發板：呼吸燈（軟體 PWM）', 'Board: breathing LEDs (software PWM)',
+    '用 C 快速開關 LED：開著的時間比例（工作週期）決定亮度，紅、黃、綠三顆輪流慢慢變亮又變暗；開發板依工作週期畫出 LED 的亮度。試著改 LEVELS、SLICE、HOLD',
+    'C switches the LEDs on and off quickly: the share of time on (the duty cycle) sets the brightness, and red, yellow and green slowly brighten and dim in turn; the board draws each LED by its duty cycle. Try changing LEVELS, SLICE and HOLD'),
+  piEx('pi_snake', 'snake', ['snake.c'], '開發板：貪食蛇（螢幕遊戲）', 'Board: snake (a screen game)',
+    'C 寫的螢幕遊戲：蛇自己往前走，麵包板上的兩個按鈕讓它左轉（GPIO 6）或右轉（GPIO 13），吃紅點變長；撞牆或撞到自己就結束，按任一個按鈕重來',
+    'A screen game in C: the snake moves by itself, the two breadboard buttons turn it left (GPIO 6) or right (GPIO 13); eat the red dots to grow; hitting a wall or itself ends the game, a button starts again',
+    piBB([], [6, 13])),
+  piEx('pi_sysmon', 'sysmon', ['sysmon.py'], '開發板：系統監視器', 'Board: system monitor',
+    'MicroPython 讀 Linux 的 /proc，在螢幕上即時顯示 CPU 使用率（含歷史圖）、記憶體、負載、開機時間與行程數；在 shell 裡同時跑別的程式看 CPU 變化',
+    'MicroPython reads Linux\'s /proc and shows CPU use (with a history graph), memory, the load, the uptime and the number of processes on the screen; run another program in the shell at the same time and watch the CPU'),
+  piEx('pi_linux', 'linux', ['exercises.txt', 'hello.sh', 'count.sh', 'fruits.txt'], '開發板：Linux 指令入門', 'Board: Linux command line',
+    '不碰硬體，練習 Linux 的終端機：檔案與目錄、看文字檔、管線 |、排序與統計、背景行程（&、jobs、kill）、/proc 與 /sys。照 exercises.txt 一題一題在模擬機的終端機打指令；hello.sh 按「▶ 執行」',
+    'No hardware, just the Linux command line: files and directories, text files, pipes |, sorting and counting, background processes (&, jobs, kill), /proc and /sys. Follow exercises.txt in the emulator\'s terminal; press ▶ Run on hello.sh'),
   { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
   { id: 'soc', group: 'RISC-V', title: 'RISC-V SoC（FPGA）', files: ['examples/src/rv32i.veryl', 'examples/src/rv32i_rom.veryl', 'veryl-eda/examples/soc.veryl'],

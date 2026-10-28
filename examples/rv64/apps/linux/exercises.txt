@@ -1,0 +1,57 @@
+Linux 指令入門：練習題
+====================
+
+在板子的終端機（🖥 模擬機分頁）打指令。開機時專案的檔案已經放在 /root（就是你現在的目錄）。
+看這份練習：cat exercises.txt     一頁一頁看：more exercises.txt（空白鍵下一頁，q 離開）
+每個指令的說明：指令 --help（例如 ls --help）
+
+1. 我在哪裡、有什麼
+   pwd                      目前的目錄
+   ls                       這裡的檔案；ls -l 看大小與權限
+   sh hello.sh              跑一個 shell 腳本，看看這台機器
+   cat hello.sh             它的內容（也可以在 IDE 裡打開 hello.sh 改，按 ▶ 執行）
+
+2. 目錄與檔案
+   mkdir notes              建一個目錄
+   cd notes ; pwd ; cd ..   進去、看看、回來（.. 是上一層）
+   echo "my first note" > notes/a.txt     > 把輸出寫進檔案
+   echo "second line" >> notes/a.txt      >> 接在後面
+   cat notes/a.txt
+   cp notes/a.txt b.txt ; mv b.txt c.txt ; rm c.txt
+   問題：ls notes 會看到什麼？rm 之後 c.txt 還在嗎？
+
+3. 看文字檔：fruits.txt 每行是「名字 顏色 價錢」
+   cat fruits.txt           全部
+   head -3 fruits.txt       前三行；tail -3 fruits.txt 後三行
+   wc -l fruits.txt         幾行
+   grep red fruits.txt      有 red 的行
+   grep -c green fruits.txt 有幾行有 green
+   問題：哪些水果是 yellow 的？
+
+4. 管線 |：一個指令的輸出變成下一個指令的輸入
+   sort fruits.txt                       照名字排序
+   sort -k3 -n fruits.txt                照第 3 欄（價錢）的數字排序
+   sort -k3 -n fruits.txt | tail -1      最貴的
+   cut -d' ' -f2 fruits.txt | sort | uniq -c     每種顏色有幾個
+   awk '{ s += $3 } END { print s }' fruits.txt  價錢加起來
+   問題：最便宜的三個是哪些？（提示：sort 和 head）
+
+5. 行程（同時跑好幾個程式）
+   sh count.sh 5            數到 5，一秒一個（Ctrl-C 可以中斷）
+   sh count.sh 100 > n.txt &      & 讓它在背景跑，你可以繼續打指令
+   jobs                     背景工作；ps 看所有行程
+   cat n.txt                它已經數到哪裡
+   kill %1                  停掉第 1 個背景工作
+   top                      即時看行程與 CPU（q 離開）
+   問題：同時在背景跑兩個 count.sh，ps 看得到幾個 sh？
+
+6. 系統的資訊都在檔案裡（/proc、/sys）
+   cat /proc/cpuinfo        處理器（rv64imac）
+   cat /proc/meminfo        記憶體
+   cat /proc/uptime         開機幾秒
+   ls /sys/class/leds       板子上的 LED：act、user
+   echo 1 > /sys/class/leds/user/brightness     把 USER 燈點亮（看板子），echo 0 熄掉
+
+7. 把結果帶回 IDE
+   ls -l > report.txt ; savefiles
+   savefiles 把 /root 的檔案送回專案：在 IDE 的檔案清單裡打開 report.txt 看看。

@@ -87,7 +87,7 @@ veryl-eda 自己的合成測試用的設計，也是看合成結果的好例子�
 |---|---|---|---|
 | [rv32i](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=rv32i) | 單週期 RV32I CPU；測試跑 `examples/sw/rv32i_test.S`，41 個結果和 spike 交叉比對過 | `examples/src/rv32i.veryl` + `rv32i_rom.veryl`（`RiscvCore`） | `v2c sim examples/src/rv32i.veryl examples/src/rv32i_rom.veryl` |
 | [soc](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=soc&board=1) | 上面的 CPU 加 ROM / RAM 做成 SoC：算 Fibonacci(10) = 55 顯示在 LED | `examples/src/rv32i.veryl` + `rv32i_rom.veryl` + `veryl-eda/examples/soc.veryl`（`RiscvSoc`）、`veryl-eda/examples/icebreaker.pcf` | `v2c sim --top TestRiscvSoc examples/src/rv32i.veryl examples/src/rv32i_rom.veryl veryl-eda/examples/soc.veryl`<br>`veryl-eda/fpga/flow.sh`（位元流 + 繞線後模擬） |
-| [rv64_linux](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=rv64_linux) | RV64 開發板（像樹莓派）：Linux、MicroPython、C、GPIO、螢幕。見下面〈RV64 開發板〉 | `examples/rv64/src/`（`Rv64Soc`）、`examples/rv64/board/` | 見下面 |
+| [rv64_linux](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=rv64_linux) | RV64 開發板（像樹莓派）：Linux、MicroPython、C、GPIO、螢幕。見下面〈RV64 開發板〉；另外 6 個開發板範例也在那裡 | `examples/rv64/src/`（`Rv64Soc`）、`examples/rv64/board/` | 見下面 |
 
 多週期 RV32IMA 的 SoC（`examples/src/rvsoc.veryl`，`RvBoard`）在下一節和 C 程式一起用。改了 `examples/sw/*.S` 之後要跑
 `examples/sw/build.sh`（需要 riscv64-unknown-elf 工具鏈與 spike）重新產生 ROM。
@@ -148,6 +148,22 @@ riscv-emu / veryl-emu，第 15 章）。打開下面任何一個檔案按「▶ 
 | `shapes.c` | 螢幕上畫色條、圖形、文字、一顆彈跳的球 | `./shapes` |
 | `blink.sh` | 用 `/sys/class/gpio` 閃 GPIO 5 的 LED 五次 | `sh blink.sh` |
 | `button.sh` | 數按鈕次數，USER 燈顯示最低位元 | `sh button.sh` |
+
+### 開發板的其他範例（v2.29）
+
+同一塊板子、同一份開機快照，各自帶自己的程式（`examples/rv64/apps/`）與接好的麵包板。開啟後按主按鈕「🖥 模擬機」開機，
+打開程式檔按「▶ 執行」。
+
+| ID | 做什麼 | 檔案 | 在板子上的指令 |
+|---|---|---|---|
+| [pi_chaser](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_chaser) | 8 顆 LED 跑馬燈（GPIO 3、4、5、7–11）；GPIO 6 的按鈕換速度、GPIO 13 換方向 | `chaser.py`、`chaser.c`（同一個程式兩種語言） | `micropython chaser.py`、`./chaser` |
+| [pi_reaction](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_reaction) | 反應時間遊戲：綠燈亮就按按鈕，量毫秒；最佳成績存在 `best.txt`，`savefiles` 送回專案 | `reaction.py` | `micropython reaction.py` |
+| [pi_breathe](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_breathe) | 呼吸燈：軟體 PWM，工作週期決定亮度，三顆 LED 輪流變亮變暗 | `breathe.c` | `./breathe` |
+| [pi_snake](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_snake) | 貪食蛇：螢幕遊戲，兩個按鈕左轉 / 右轉 | `snake.c` | `./snake` |
+| [pi_sysmon](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_sysmon) | 系統監視器：讀 `/proc`，螢幕上顯示 CPU（含歷史圖）、記憶體、負載、開機時間、行程數 | `sysmon.py` | `micropython sysmon.py` |
+| [pi_linux](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_linux) | Linux 指令入門：檔案、文字處理、管線、背景行程、`/proc`；照 `exercises.txt` 練習 | `exercises.txt`、`hello.sh`、`count.sh`、`fruits.txt` | `sh hello.sh`、`cat exercises.txt` |
+
+命令列一樣用 `linux/mkarea.py` 打包，例如 `python3 linux/mkarea.py -o area.img apps/chaser/chaser.py`（麵包板只在 IDE 裡）。
 
 Ctrl-C 停止程式；打 `micropython` 進 REPL。MicroPython 的 `pi` 模組有 `LED`、`Button`、`Pin`、`Screen`，
 C 的函式庫有 `gpio_write`、`gpio_read`、`delay_ms`、`fb_*`（第 10、11 章）。
