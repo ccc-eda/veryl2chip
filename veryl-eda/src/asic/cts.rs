@@ -56,6 +56,25 @@ impl Grid {
     }
 }
 
+/// antenna diodes: one on the net of each (cell, pin), placed in the free run of sites nearest to that
+/// cell (not on a well tap, nor on a site in `avoid`: places tried before); their number
+pub fn add_diodes(nl: &mut Netlist, pl: &mut RowPlacement, taps: &[(u32, u32)], fixes: &[(usize, &'static str)], avoid: &[(u32, u32)]) -> usize {
+    let mut grid = Grid::of(nl, pl);
+    let tw = crate::pdk::tech().tap.as_ref().map(|t| t.1).unwrap_or(1);
+    for &(r, x) in taps { for t in x..(x + tw).min(pl.sites) { grid.occ[r as usize][t as usize] = true; } }
+    for &(r, x) in avoid { if r < pl.rows && x < pl.sites { grid.occ[r as usize][x as usize] = true; } }
+    let dw = super::lib::width("DIODE");
+    let mut n = 0;
+    for &(i, pin) in fixes {
+        let Some(b) = nl.cells.get(i).and_then(|c| c.port(pin)) else { continue };
+        let (cx, cy) = center(nl, pl, i);
+        nl.cells.push(Cell { typ: "DIODE".into(), conns: vec![("A", b)], params: vec![] });
+        pl.pos.push(grid.take(cx, cy, dw));
+        n += 1;
+    }
+    n
+}
+
 fn next_wire(nl: &Netlist) -> u32 {
     nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()))
         .chain(nl.nets.iter().flat_map(|n| n.1.iter().copied()))

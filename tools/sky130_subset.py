@@ -8,7 +8,7 @@
 import os, re, struct, sys
 
 CELLS = """inv_1 inv_2 inv_4 buf_1 buf_2 buf_4 buf_8 clkbuf_1 clkbuf_2 clkbuf_4 clkbuf_8 nand2_1 nor2_1 and2_1 or2_1 xor2_1
-xnor2_1 a21oi_1 o21ai_1 mux2_1 nand3_1 nor3_1 and3_1 or3_1 a22oi_1 o22ai_1 a21o_1 o21a_1 conb_1 dfxtp_1 dfrtp_1 dfstp_1 dfrtn_1 fill_1 fill_2 fill_4 fill_8 tapvpwrvgnd_1
+xnor2_1 a21oi_1 o21ai_1 mux2_1 nand3_1 nor3_1 and3_1 or3_1 a22oi_1 o22ai_1 a21o_1 o21a_1 conb_1 dfxtp_1 dfrtp_1 dfstp_1 dfrtn_1 diode_2 fill_1 fill_2 fill_4 fill_8 tapvpwrvgnd_1
 decap_3 decap_4 decap_6 decap_8 decap_12""".split()
 PRE = "sky130_fd_sc_hd__"
 names = [PRE + c for c in CELLS]

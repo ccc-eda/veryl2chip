@@ -8,6 +8,18 @@
 use super::detail::{self, TRACKS};
 use super::lib::{dims, row_h, site_w};
 use super::{pdn, Output};
+
+/// what the layout is made of (an Output's, or the flow's while it is still working on them)
+pub struct Parts<'a> {
+    pub mapped: &'a crate::netlist::Netlist,
+    pub placement: &'a super::place::RowPlacement,
+    pub pdn: &'a pdn::Pdn,
+    pub detail: &'a detail::Detail,
+}
+
+impl<'a> Parts<'a> {
+    pub fn of(o: &'a Output) -> Parts<'a> { Parts { mapped: &o.mapped, placement: &o.placement, pdn: &o.pdn, detail: &o.detail } }
+}
 use crate::netlist::Bit;
 use std::collections::HashMap;
 
@@ -39,7 +51,7 @@ pub fn layer_index(n: &str) -> Option<u8> { LAYERS.iter().position(|l| *l == n).
 fn nm(x: f64) -> i64 { (x * 1000.0).round() as i64 }
 
 /// cell instances: logic cells, fillers, taps (the DEF's components)
-pub fn instances(o: &Output) -> Vec<Inst> {
+pub fn instances(o: &Parts) -> Vec<Inst> {
     let tech = crate::pdk::tech();
     let pl = &o.placement;
     let (sw, rh) = (site_w(), row_h());
@@ -79,7 +91,9 @@ pub fn pin_rect(x: i64, y: i64, w: i64, h: i64) -> (i64, i64, i64, i64) {
     }
 }
 
-pub fn build(o: &Output) -> Result<Layout, String> {
+pub fn build(o: &Output) -> Result<Layout, String> { build_parts(&Parts::of(o)) }
+
+pub fn build_parts(o: &Parts) -> Result<Layout, String> {
     let tech = crate::pdk::tech();
     let lef = tech.lef.as_ref().ok_or("the layout needs a LEF technology")?;
     let pl = &o.placement;

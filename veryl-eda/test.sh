@@ -71,10 +71,18 @@ for d in $DESIGNS; do
     grep -E "^timing" "$OUT/${m}_sky130.log" | sed 's/^/  sky130 /' || true
     grep -qE "DRC .* 0 shorts, 0 spacing, 0 min-area, 0 opens" "$OUT/${m}_sky130.log" || { grep -q "^asic: DRC" "$OUT/${m}_sky130.log" && { echo "  sky130 DRC FAILED: $(grep '^asic: DRC' "$OUT/${m}_sky130.log")"; fail=1; }; }
     grep -q "^asic: LVS .*layout matches the netlist" "$OUT/${m}_sky130.log" || { grep -q "^asic: LVS" "$OUT/${m}_sky130.log" && { echo "  sky130 LVS FAILED: $(grep '^asic: LVS' "$OUT/${m}_sky130.log")"; fail=1; }; }
+    # (Wide: 200-bit operands straight from 800 IO pins, its nets have no driver inside; the diodes take it
+    # from 82 pieces over the limit to a few, the rerouting after each round moving some wires over again)
+    ANTENNA_LEFT=" Wide "
+    if [[ "$ANTENNA_LEFT" == *" $m "* ]]; then grep -E "^asic: antenna" "$OUT/${m}_sky130.log" | sed 's/^/  sky130 (not required to be 0) /'
+    else grep -q "^asic: antenna .*: 0 violations" "$OUT/${m}_sky130.log" || { grep -q "^asic: antenna" "$OUT/${m}_sky130.log" && { echo "  sky130 antenna FAILED: $(grep '^asic: antenna' "$OUT/${m}_sky130.log")"; fail=1; }; }; fi
     # the GDS read back with KLayout: cells, shapes, labels, row overlaps, KLayout's own width / spacing checks
     if [ -f "$OUT/${m}.gds" ]; then
         set -- $(sed -nE 's/^wrote .*: ([0-9]+) cell instances, ([0-9]+) shapes, ([0-9]+) labels.*/\1 \2 \3/p' "$OUT/${m}_sky130.log")
         "$GDS_PY" "$ROOT/../tools/gds_check.py" "$OUT/${m}.gds" "$m" "$1" "$2" "$3" | sed 's/^/  /' || { echo "  GDS check FAILED"; fail=1; }
+        # KLayout's antenna check: the real gate areas from the cells' GDS, merged metal
+        "$GDS_PY" "$ROOT/../tools/antenna_check.py" "$OUT/${m}.gds" "$m" | sed 's/^/  /'
+        [ "${PIPESTATUS[0]}" = 0 ] || [[ "$ANTENNA_LEFT" == *" $m "* ]] || { echo "  KLayout antenna FAILED"; fail=1; }
         # (KLayout's LVS needs the PDK's cell subcircuits: sky130hd.cdl from tools/sky130.sh)
         if grep -q "^.INCLUDE" "$OUT/${m}.sp"; then
             "$GDS_PY" "$ROOT/../tools/lvs_check.py" "$OUT/${m}.gds" "$OUT/${m}.sp" "$m" | head -6 | sed 's/^/  /'

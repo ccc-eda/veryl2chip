@@ -53,7 +53,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.30 | 2026-10-28 | `62d3239` | 2.30.0：用鍵盤按開發板的按鈕 | |
 | v2.31 | 2026-10-28 | `a3083b9` | 2.31.0：切換專案不再掉回歡迎頁 | |
 | v2.32 | 2026-10-28 | `6d99a08` | 2.32.0：開發板範例：俄羅斯方塊 | |
-| v2.33 | 2026-10-28 | （本版） | 2.33.0：LVS、SPICE 網表、KLayout 獨立 LVS | |
+| v2.33 | 2026-10-28 | `71f5f97` | 2.33.0：LVS、SPICE 網表、KLayout 獨立 LVS | |
+| v2.34 | 2026-10-28 | （本版） | 2.34.0：天線規則與 diode 修正，KLayout 獨立天線檢查 | |
 
 ---
 
@@ -629,6 +630,29 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
 - 驗證：cargo test（`asic_flow_legal_sky130`：Ram、RiscvSoc LVS 乾淨，四種弄壞的版圖都抓到；`spice_pin_order_is_the_cdls`）；
   veryl-eda/test.sh 每個 SKY130 設計跑兩種 LVS（KLayout 26 個設計 match）；修正後重跑 cargo test、SKY130 流程與兩種 LVS、
   ECP5 的兩種檢查。網頁沒有重建（核心工作）。
+
+### v2.34：天線規則
+
+- LEF 讀進天線資料：tech LEF 每層的 `THICKNESS`、`ANTENNADIFFSIDEAREARATIO`（金屬）/ `ANTENNADIFFAREARATIO`（via）的 PWL 表，元件 LEF 腳位的
+  `ANTENNAGATEAREA` / `ANTENNADIFFAREA`。`asic/antenna.rs` 依製程順序一層一層蓋（同層相碰、cut 先接下層再接上層，2 µm 分格 union-find），
+  每一層每塊接到閘極的金屬：側面積（周長 × 厚度；cut：面積）/ 閘極面積 ≤ PWL(接到的擴散區面積)。
+- 一跑就有真的違規：Ram 7 塊（met2 / met3，最高到上限的 175 %），UartLoop 3 塊，都是只接閘極、還沒接到驅動輸出的那段長線。
+- 修正：違規的閘極旁插 `DIODE`（`sky130_fd_sc_hd__diode_2`；內建的 SKY130 子集用 `tools/sky130_subset.py` 加上它，只多不少），
+  放在離閘極最近的空位（避開 well tap），重新全域 / 細部繞線再檢查，最多十二輪（每次重繞可能讓別的線變成違規）；
+  繞線因此變差（rv32i 的 Alu：多了 2 個衝突）就把 diode 換到別的空位再試，最多三處。
+  DIODE 是沒有輸出的邏輯元件：`Cell::out` 給它一個沒人讀的網路 `NO_OUT`，netsim 與 gatesim 跳過它，時序、功耗照常。
+  Ram 插 15 個、UartLoop 4 個、Alu 11 個後都是 0，DRC、兩種 LVS 都乾淨，Fmax 幾乎不變（Ram 396.5 → 392.8 MHz）。
+  沒修完的：Wide（200 位元的運算元直接來自 800 多支 IO 腳，網路在晶片裡沒有驅動元件）82 → 2 塊。追查發現有些 diode 已經在網路上，
+  但繞線器經由較高的層接上它，蝕刻那一層時 diode 還不在閘極那一塊上；要讓繞線器用低層把 diode 直接接到閘極腳才能根治（之後再做）。
+  RiscvSoc（只在 cargo test 跑完整 SKY130 流程）8 塊：每次插 diode 都讓很密的細部繞線多出衝突（3、16、16），流程保留乾淨的繞線、
+  不拿短路換天線；要能只重繞受影響的網路（增量繞線）才能修。test.sh 只對 Wide、cargo test 只對 RiscvSoc 不要求 0。
+- `tools/antenna_check.py`：KLayout 從 GDS 獨立再算（閘極 = 元件版圖裡真正的 poly ∩ 擴散區，金屬 = 合併後的多邊形，一層一層建連接，
+  `antenna_check` 用周長 × 厚度），只看沒接到擴散區的塊（有接時上限 ≥ 2609，遠高於繞線會做出的）。Ram 不修時 KLayout 找到 6 塊
+  （以違規的多邊形計；改成以塊（網路）計後是 3），veryl2chip 7 塊；Wide 不修時 KLayout 72 塊（met2 3、met3 2、met4 67），veryl2chip
+  82 塊（4、5、73）：每一層 veryl2chip 都不比 KLayout 寬鬆（它把重疊形狀的周長直接加總，略保守）。修正後兩邊都是 0；把上限調到 1 時
+  KLayout 找到幾百塊，確認它真的在量。
+- 測試：`antenna_pwl`（PWL 內插、厚度、腳位面積）、`antenna_diodes_fix_ram`（不修有違規、修了 0 個且 DRC / LVS 乾淨）、
+  `asic_flow_legal_sky130` 要求 0；test.sh 每個 SKY130 設計檢查 `antenna` 一行與 KLayout 的天線檢查。網頁沒有重建。
 
 ---
 

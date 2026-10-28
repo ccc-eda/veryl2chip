@@ -226,6 +226,10 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
   （拿掉一個網路、接起兩個網路、對調標籤、換元件）確認抓得到。`--spice OUT.sp`（`src/asic/spice.rs`）寫出 CDL 式的網表
   （PDK 元件子電路的腳位順序由測試對照 `sky130hd.cdl`），`tools/lvs_check.py` 用 KLayout 從 GDS 獨立抽出接線比對（元件當黑盒子）。
   小晶粒以前會沒有電源帶（IO 腳擋住所有欄），各列的電源軌沒接在一起：SKY130 的 IO 腳現在避開第一對電源帶的欄位。
+- 天線規則（v2.34，`src/asic/antenna.rs`）：依製程順序一層一層蓋（金屬碰到的、cut 接上下層），每一層每塊接到閘極的金屬，側面積（cut 層：面積）
+  除以閘極面積不超過 tech LEF 的 `ANTENNADIFF(SIDE)AREARATIO`（依接到的擴散區面積內插）；閘極 / 擴散區面積來自元件 LEF。違規的閘極旁插
+  `DIODE`（`sky130_fd_sc_hd__diode_2`，沒有輸出、沒有功能的邏輯元件；`Cell::out` 給它一個沒人讀的網路 `NO_OUT`），重新繞線再檢查，最多十二輪，
+  繞線變差就把 diode 換位置再試（`VERYL_EDA_ANTENNA_FIX=0` 關掉）。`tools/antenna_check.py` 用 KLayout 從 GDS（真正的 poly ∩ 擴散區、合併的金屬）獨立再算。
 - GDSII（v1.7）：`--gds OUT.gds`（`src/asic/gds.rs`）寫出 PDK 自己的元件版圖（從它的 GDS 複製）以及一個頂層 cell：
   放置它們（FS 列鏡像），並以 SKY130 的層號（met1 68/20、via 68/44…）畫出繞線、via、電源網格與有標籤的 IO 腳。
   同一網路距離小於間距的 via 墊片之間會補上小塊金屬，金屬不會留下缺口。`tools/gds_check.py` 用 KLayout 的 Python 模組

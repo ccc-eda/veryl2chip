@@ -56,6 +56,8 @@ pub const EXTRA: &[StdCell] = &[
     StdCell { name: "AO21", ins: &["A", "B", "C"], width: 5, delay: 0.070, load: 0.010, setup: 0.0, verilog: "assign Y = (A & B) | C;" },
     StdCell { name: "OA21", ins: &["A", "B", "C"], width: 5, delay: 0.070, load: 0.010, setup: 0.0, verilog: "assign Y = (A | B) & C;" },
     StdCell { name: "OAI22", ins: &["A", "B", "C", "D"], width: 5, delay: 0.055, load: 0.020, setup: 0.0, verilog: "assign Y = ~((A | B) & (C | D));" },
+    // antenna diode: a diffusion on a net (no output, no function), added by the antenna fix
+    StdCell { name: "DIODE", ins: &["A"], width: 2, delay: 0.0, load: 0.0, setup: 0.0, verilog: "" },
 ];
 
 pub fn cell(name: &str) -> &'static StdCell {

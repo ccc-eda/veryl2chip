@@ -296,6 +296,45 @@ fn lvs_breaks(l: &crate::asic::layout::Layout, o: &crate::asic::Output, top: &st
 }
 
 #[test]
+fn antenna_diodes_fix_ram() {
+    // Ram on SKY130 has pieces of met2 / met3 over the limit without diodes (the KLayout check,
+    // tools/antenna_check.py, finds them too); with them, none, and DRC / LVS stay clean
+    let t = crate::pdk::sky130_builtin().unwrap();
+    crate::pdk::with_tech(t, || {
+        let path = format!("{}/../examples/src/ram.veryl", env!("CARGO_MANIFEST_DIR"));
+        let p = Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
+        let mut lib = Lib::new();
+        lib.add(&p.veryl);
+        let nl = synthesize(&lib, "Ram").unwrap().0;
+        let o = crate::asic::flow_opts(&nl, 1, 0.0, false).unwrap();
+        let a = crate::asic::antenna::check(&crate::asic::layout::build(&o).unwrap(), &o.mapped);
+        assert!(!a.violations.is_empty() && o.diodes == 0, "{} violations without diodes", a.violations.len());
+        assert!(a.violations.iter().all(|v| v.ratio > v.limit && v.cell < o.mapped.cells.len()));
+        let o = crate::asic::flow_opts(&nl, 1, 0.0, true).unwrap();
+        let l = crate::asic::layout::build(&o).unwrap();
+        let a = crate::asic::antenna::check(&l, &o.mapped);
+        assert!(a.violations.is_empty() && o.diodes > 0, "{} violations with {} diodes", a.violations.len(), o.diodes);
+        assert_eq!(o.mapped.cells.iter().filter(|c| c.typ == "DIODE").count(), o.diodes);
+        let d = crate::asic::drc::check(&l, &o.mapped);
+        assert_eq!(d.total(), 0, "{:?}", d.details);
+        assert_eq!(crate::asic::lvs::check(&l, &o).errors(), 0);
+    });
+}
+
+#[test]
+fn antenna_pwl() {
+    // SKY130's met1 limit: 400 with no diffusion, 2609 at 0.0225 µm², linear up to 11600 at 22.5
+    let t = crate::pdk::sky130_builtin().unwrap();
+    let m1 = t.lef.as_ref().unwrap().layer("met1").unwrap();
+    let f = |x: f64| crate::pdk::lef::Layer::pwl(&m1.antenna_side, x);
+    assert_eq!((f(0.0), f(0.0125), f(0.0225), f(22.5), f(100.0)), (400.0, 400.0, 2609.0, 11600.0, 11600.0));
+    assert!((f(11.26125) - 7104.5).abs() < 1e-6);
+    assert!((m1.thickness - 0.35).abs() < 1e-9 && !t.lef.as_ref().unwrap().layer("via").unwrap().antenna_area.is_empty());
+    let m = t.lef.as_ref().unwrap().macro_("sky130_fd_sc_hd__nand2_1").unwrap();
+    assert!((m.pin("A").unwrap().gate_area - 0.2475).abs() < 1e-9 && m.pin("Y").unwrap().diff_area > 0.0);
+}
+
+#[test]
 fn spice_pin_order_is_the_cdls() {
     // the CDL of the full PDK files (tools/sky130.sh), when it is there
     let Some(cdl) = crate::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists()) else { eprintln!("no sky130hd.cdl: skipped"); return };
@@ -346,6 +385,12 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
             assert_eq!(v.devices, o.mapped.cells.len());
             assert!(v.nets > 10 && v.floating == 0, "{}: {} nets, {} floating", top, v.nets, v.floating);
             lvs_breaks(&l, &o, top);
+            // antenna rules after the diodes: none on Ram; RiscvSoc keeps 8 (every placement of their diodes
+            // left the dense detailed routing with conflicts, so the flow keeps the clean routing instead)
+            let a = crate::asic::antenna::check(&l, &o.mapped);
+            assert!(a.checked > 0);
+            let allowed = if top == "RiscvSoc" { 8 } else { 0 };
+            assert!(a.violations.len() <= allowed, "{}: antenna {:?}", top, &a.violations[..a.violations.len().min(3)]);
             // GDS: the cells used and a top structure placing each instance (SREF) with the routing (BOUNDARY)
             let g = crate::asic::gds::write(&l, &o.mapped.name, crate::pdk::SKY130_GDS).unwrap();
             let st = crate::asic::gds::structures(&g);

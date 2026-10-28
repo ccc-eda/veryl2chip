@@ -8,6 +8,7 @@ use crate::netlist::{Bit, Dir, Netlist};
 use crate::pnr::place::Rng;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct Frame {
     pub temp: f64,
     pub cost: f64,
@@ -16,6 +17,7 @@ pub struct Frame {
     pub pos: Vec<(u32, u32)>,
 }
 
+#[derive(Clone)]
 pub struct Pin {
     pub name: String,
     pub dir: Dir,
@@ -24,6 +26,7 @@ pub struct Pin {
     pub bit: Bit,
 }
 
+#[derive(Clone)]
 pub struct RowPlacement {
     pub rows: u32,
     pub sites: u32,

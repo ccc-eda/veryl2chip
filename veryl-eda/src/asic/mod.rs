@@ -2,6 +2,7 @@
 //! row placement (wirelength, then timing-driven), clock tree synthesis,
 //! global routing, static timing with a propagated clock, hold fixing.
 
+pub mod antenna;
 pub mod cts;
 pub mod detail;
 pub mod drc;
@@ -35,15 +36,26 @@ pub struct Output {
     pub cts: cts::Cts,
     /// delay buffers inserted to fix hold
     pub hold_bufs: usize,
+    /// diodes inserted for the antenna rules
+    pub diodes: usize,
     pub detail: detail::Detail,
     pub pdn: pdn::Pdn,
     pub power: power::Power,
 }
 
+/// rounds of antenna fixing (each reroutes, which can bring new pieces over the limit)
+const ANTENNA_ROUNDS: usize = 12;
+
 pub fn flow(opt: &Netlist, seed: u64) -> Result<Output, String> { flow_with(opt, seed, 0.0) }
 
 /// `extra_hold` (ns) is added to every hold requirement (tests use it to force hold fixing)
 pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, String> {
+    // (VERYL_EDA_ANTENNA_FIX=0 leaves the antenna violations, to look at them or compare checkers)
+    flow_opts(opt, seed, extra_hold, std::env::var("VERYL_EDA_ANTENNA_FIX").map(|v| v != "0").unwrap_or(true))
+}
+
+/// `antenna_fix`: diodes for the antenna rules (a library technology with a diode cell)
+pub fn flow_opts(opt: &Netlist, seed: u64, extra_hold: f64, antenna_fix: bool) -> Result<Output, String> {
     let t = |what: &str, t0: f64| if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("{}: {:.2}s", what, now() - t0) };
     let t0 = now();
     let mapped0 = map::map(opt)?;
@@ -56,13 +68,54 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     let lib_tech = !crate::pdk::tech().is_vlib();
     let mut util = if lib_tech { 0.55 } else { 0.65 };
     let mut attempt = 0;
-    let (mapped, placement, mut routing, fmax_wl, fmax_ideal, cts, hold_bufs, pdn, detail) = loop {
+    let (mut mapped, mut placement, mut routing, fmax_wl, fmax_ideal, cts, hold_bufs, mut pdn, mut detail) = loop {
         // (each new try also a new placement seed)
         let r = physical(&mapped0, seed + attempt as u64, util, extra_hold)?;
         attempt += 1;
         if !lib_tech || (r.8.conflicts == 0 && r.8.opens == 0) || attempt >= 4 || r.9 < 0.2 { break (r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8); }
         util = r.9 * 0.85;
     };
+    // antenna rules (a library with a diode cell): a diode next to each gate whose piece of metal breaks
+    // them, then the routing again; a fix that leaves the detailed routing worse is not kept
+    let mut diodes = 0;
+    if lib_tech && antenna_fix && crate::pdk::tech().binding("DIODE").is_some() {
+        for _ in 0..ANTENNA_ROUNDS {
+            let t0 = now();
+            let l = layout::build_parts(&layout::Parts { mapped: &mapped, placement: &placement, pdn: &pdn, detail: &detail })?;
+            let a = antenna::check(&l, &mapped);
+            if a.violations.is_empty() { break; }
+            if std::env::var("VERYL_EDA_PROFILE").is_ok() && a.violations.iter().any(|v| v.cell >= mapped.cells.len()) { eprintln!("  antenna: {} violations without a cell gate", a.violations.iter().filter(|v| v.cell >= mapped.cells.len()).count()); }
+            let mut fixes: Vec<(usize, &'static str)> = a.violations.iter().filter(|v| v.cell < mapped.cells.len()).map(|v| (v.cell, v.lpin)).collect();
+            fixes.sort();
+            fixes.dedup();
+            if std::env::var("VERYL_EDA_PROFILE").is_ok() {
+                // gates that already have a diode on their net
+                for &(c, p) in &fixes {
+                    let b = mapped.cells[c].port(p);
+                    let k = mapped.cells.iter().filter(|x| x.typ == "DIODE" && x.port("A") == b).count();
+                    if k > 0 { let v = a.violations.iter().find(|v| v.cell == c).unwrap(); eprintln!("    again: c{}/{} on {} ({} diodes on its net; {} {:.0} > {:.0})", c, p, v.net, k, v.layer, v.ratio, v.limit); }
+                }
+            }
+            // a routing made worse by the diodes: the same diodes on other sites (up to three places each)
+            let mut avoid: Vec<(u32, u32)> = vec![];
+            let mut done = None;
+            for _ in 0..3 {
+                let (mut m2, mut p2) = (mapped.clone(), placement.clone());
+                let n = cts::add_diodes(&mut m2, &mut p2, &pdn.taps, &fixes, &avoid);
+                if n == 0 { break; }
+                let r2 = route::route(&m2, &p2);
+                let pdn2 = pdn::build(&m2, &p2, &pdn.taps);
+                let d2 = detail::route(&m2, &p2, &r2, &pdn2);
+                if std::env::var("VERYL_EDA_PROFILE").is_ok() { eprintln!("  antenna: {} violations, {} diodes; routing {} conflicts / {} opens (was {} / {})", a.violations.len(), n, d2.conflicts, d2.opens, detail.conflicts, detail.opens); }
+                if d2.conflicts <= detail.conflicts && d2.opens <= detail.opens { done = Some((m2, p2, r2, pdn2, d2, n)); break; }
+                avoid.extend(p2.pos[mapped.cells.len()..].iter().copied());
+            }
+            t("antenna diodes", t0);
+            let Some((m2, p2, r2, pdn2, d2, n)) = done else { break };
+            (mapped, placement, routing, pdn, detail) = (m2, p2, r2, pdn2, d2);
+            diodes += n;
+        }
+    }
     let dlen: std::collections::HashMap<crate::netlist::Bit, f64> = detail.nets.iter().map(|n| (n.bit, n.length)).collect();
     for n in routing.nets.iter_mut() { if let Some(l) = dlen.get(&n.bit) { n.length = *l; } }
     let timing = sta::analyze(&mapped, &placement, &routing, extra_hold);
@@ -77,7 +130,7 @@ pub fn flow_with(opt: &Netlist, seed: u64, extra_hold: f64) -> Result<Output, St
     for c in &mapped.cells { *m.entry(c.typ.clone()).or_default() += 1; }
     let mut counts: Vec<(String, usize)> = m.into_iter().collect();
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, detail, pdn, power })
+    Ok(Output { mapped, placement, routing, timing, area, counts, fmax_wl, fmax_ideal, cts, hold_bufs, diodes, detail, pdn, power })
 }
 
 /// placement, global routing, timing-driven refinement, clock tree, hold

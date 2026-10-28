@@ -21,6 +21,24 @@ pub struct Layer {
     pub edgecap: f64,
     /// cut layers: Ω per cut
     pub cut_r: f64,
+    /// µm (the side area of a wire is its perimeter times this)
+    pub thickness: f64,
+    /// antenna rules (OXIDE1): the largest side area (routing layers) or area (cut layers) of this
+    /// layer per unit of gate area, as a piecewise linear function of the diffusion area connected
+    pub antenna_side: Vec<(f64, f64)>,
+    pub antenna_area: Vec<(f64, f64)>,
+}
+
+impl Layer {
+    /// a PWL antenna limit at a diffusion area (beyond the table: its last value)
+    pub fn pwl(t: &[(f64, f64)], x: f64) -> f64 {
+        if t.is_empty() { return f64::INFINITY; }
+        if x <= t[0].0 { return t[0].1; }
+        for w in t.windows(2) {
+            if x <= w[1].0 { return w[0].1 + (w[1].1 - w[0].1) * (x - w[0].0) / (w[1].0 - w[0].0).max(1e-12); }
+        }
+        t[t.len() - 1].1
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,7 +48,15 @@ pub struct Via { pub name: String, pub rects: Vec<Rect> }
 pub struct Site { pub name: String, pub w: f64, pub h: f64 }
 
 #[derive(Debug, Clone, Default)]
-pub struct MacroPin { pub name: String, pub dir: String, pub usage: String, pub shapes: Vec<Rect> }
+pub struct MacroPin {
+    pub name: String,
+    pub dir: String,
+    pub usage: String,
+    pub shapes: Vec<Rect>,
+    /// µm² of transistor gate (inputs) and diffusion (outputs, diodes) behind the pin
+    pub gate_area: f64,
+    pub diff_area: f64,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Macro {
@@ -195,6 +221,16 @@ pub fn parse(src: &str) -> Result<Lef, String> {
                         "RESISTANCE" => { if s.get(1).map(|x| x == "RPERSQ") == Some(true) { l.rpersq = P::num(s.get(2)); } else { l.cut_r = P::num(s.get(1)); } }
                         "CAPACITANCE" => l.cpersq = P::num(s.get(2)),
                         "EDGECAPACITANCE" => l.edgecap = P::num(s.get(1)),
+                        "THICKNESS" => l.thickness = P::num(s.get(1)),
+                        // ANTENNADIFF(SIDE)AREARATIO PWL ( ( d r ) ( d r ) ... ); a constant ANTENNA(SIDE)AREARATIO r is ( ( 0 r ) )
+                        "ANTENNADIFFSIDEAREARATIO" | "ANTENNADIFFAREARATIO" | "ANTENNASIDEAREARATIO" | "ANTENNAAREARATIO" => {
+                            let nums: Vec<f64> = s[1..].iter().filter_map(|x| x.parse::<f64>().ok()).collect();
+                            let t: Vec<(f64, f64)> = if nums.len() == 1 { vec![(0.0, nums[0])] } else { nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect() };
+                            let side = k.contains("SIDE");
+                            // (the diffusion-dependent table wins over a constant)
+                            let dst = if side { &mut l.antenna_side } else { &mut l.antenna_area };
+                            if k.starts_with("ANTENNADIFF") || dst.is_empty() { *dst = t; }
+                        }
                         _ => {}
                     }
                 }
@@ -229,6 +265,8 @@ pub fn parse(src: &str) -> Result<Lef, String> {
                                     "END" => { if p.peek() == pn { p.i += 1; break; } }
                                     "DIRECTION" => pin.dir = p.stmt().first().cloned().unwrap_or_default(),
                                     "USE" => pin.usage = p.stmt().first().cloned().unwrap_or_default(),
+                                    "ANTENNAGATEAREA" => pin.gate_area += P::num(p.stmt().first()),
+                                    "ANTENNADIFFAREA" => pin.diff_area += P::num(p.stmt().first()),
                                     "PORT" => { let r = p.shapes(None); pin.shapes.extend(r); }
                                     _ => { p.stmt(); }
                                 }

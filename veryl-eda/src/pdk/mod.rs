@@ -324,6 +324,13 @@ pub fn sky130(lib: liberty::Library, lef: lef::Lef) -> Result<Tech, String> {
         let access = access_points(m, &pins, "li1", site.w, site.w / 2.0, site.h, tracks, ty0, 0.085)?;
         cells.insert(logical.to_string(), Binding { cell: full.clone(), pins, width: (m.w / site.w).round() as u32, access, area: lc.area });
     }
+    // the antenna diode (no function to check): only when the library has it
+    let diode = format!("{}diode_2", SKY130_PREFIX);
+    if let (Some(lc), Some(m)) = (lib.cell(&diode), lef.macro_(&diode)) {
+        let pins: Vec<(&'static str, String)> = vec![("A", "DIODE".into())];
+        let access = access_points(m, &pins, "li1", site.w, site.w / 2.0, site.h, tracks, ty0, 0.085)?;
+        cells.insert("DIODE".to_string(), Binding { cell: diode.clone(), pins, width: (m.w / site.w).round() as u32, access, area: lc.area });
+    }
     let fillers = [8u32, 4, 2, 1].iter().filter_map(|w| { let n = format!("{}fill_{}", SKY130_PREFIX, w); lef.macro_(&n).map(|_| (*w, n)) }).collect();
     let tap = lef.macro_(&format!("{}tapvpwrvgnd_1", SKY130_PREFIX)).map(|m| (m.name.clone(), (m.w / site.w).round() as u32, 14.0));
     Ok(Tech {
@@ -456,7 +463,9 @@ mod tests {
     #[test]
     fn sky130_builtin_subset() {
         let t = sky130_builtin().unwrap();
-        assert_eq!(t.cells.len(), SKY130_HD.len());
+        // the table's cells and the antenna diode
+        assert_eq!(t.cells.len(), SKY130_HD.len() + 1);
+        assert_eq!(t.binding("DIODE").map(|b| b.cell.as_str()), Some("sky130_fd_sc_hd__diode_2"));
         let m = with_tech(t, verilog_models);
         assert!(m.contains("module sky130_fd_sc_hd__dfrtp_1 (input CLK, input D, input RESET_B, output reg Q);"), "{}", m);
         assert!(m.contains("always @(posedge CLK or negedge RESET_B) if (!RESET_B) Q <= 1'b0; else Q <= D;"));

@@ -13,7 +13,8 @@ fn pin(b: Bit) -> Pin { match b { Bit::C0 => Pin::C0, Bit::C1 => Pin::C1, Bit::W
 pub fn to_gates(nl: &Netlist) -> GateNetlist {
     GateNetlist {
         ports: nl.ports.iter().map(|p| GPort { name: p.name.clone(), output: p.dir == Dir::Out, bits: p.bits.iter().map(|b| pin(*b)).collect() }).collect(),
-        cells: nl.cells.iter().map(|c| GCell {
+        // (antenna diodes have no function)
+        cells: nl.cells.iter().filter(|c| c.typ != "DIODE").map(|c| GCell {
             typ: c.typ.clone(),
             conns: c.conns.iter().map(|(p, b)| (p.to_string(), pin(*b))).collect(),
             params: c.params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),

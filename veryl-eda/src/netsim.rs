@@ -89,7 +89,7 @@ impl<'n> NetSim<'n> {
     pub fn settle(&mut self) {
         for _ in 0..4 {
             for c in &self.nl.cells {
-                if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" || c.typ == "DP16KD" { continue; }
+                if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" || c.typ == "DP16KD" || c.typ == "DIODE" { continue; }
                 if c.typ == "CCU2C" {
                     let (s0, s1, co) = crate::ecp5::ccu2c(c, |p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
                     for (p, v) in [("S0", s0), ("S1", s1), ("COUT", co)] {

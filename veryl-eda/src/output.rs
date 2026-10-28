@@ -93,7 +93,8 @@ pub fn to_verilog(nl: &Netlist) -> String {
     }
     for (i, c) in nl.cells.iter().enumerate() {
         let g = |p: &str| name(&c.port(p).unwrap());
-        let y = name(&c.out());
+        // (only the generic gates use it; an antenna diode has no output)
+        let y = if c.typ.starts_with("$_") { name(&c.out()) } else { String::new() };
         match c.typ.as_str() {
             "$_NOT_" => writeln!(s, "  assign {} = ~{};", y, g("A")),
             "$_AND_" => writeln!(s, "  assign {} = {} & {};", y, g("A"), g("B")),

@@ -268,6 +268,14 @@ pub fn main(all: Vec<String>) {
                     println!("asic: LVS {} nets, {} terminals, {} devices: {} opens, {} shorts, {} device errors{} ({} pieces, {} floating)",
                         v.nets, v.terminals, v.devices, v.opens, v.shorts, v.device_errors, if v.errors() == 0 { ", layout matches the netlist" } else { "" }, v.pieces, v.floating);
                     if verbose || v.errors() > 0 { for e in &v.details { println!("  {}", e); } }
+                    let a = asic::antenna::check(&l, &o.mapped);
+                    let mut per: Vec<(String, usize)> = vec![];
+                    for v in &a.violations { match per.iter_mut().find(|p| p.0 == v.layer) { Some(p) => p.1 += 1, None => per.push((v.layer.clone(), 1)) } }
+                    let per = if per.is_empty() { String::new() } else { format!(" ({})", per.iter().map(|p| format!("{} {}", p.0, p.1)).collect::<Vec<_>>().join(", ")) };
+                    println!("asic: antenna {} pieces with gates checked: {} violations{} (worst {:.0}% of its limit); {} diodes inserted", a.checked, a.violations.len(), per, a.worst * 100.0, o.diodes);
+                    if verbose || !a.violations.is_empty() {
+                        for v in a.violations.iter().take(12) { println!("  {} on {}: gate {}: ratio {:.0} > {:.0}", v.net, v.layer, v.pin, v.ratio, v.limit); }
+                    }
                 }
                 Err(e) => println!("asic: layout: {}", e),
             }

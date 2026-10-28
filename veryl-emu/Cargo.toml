@@ -1,6 +1,6 @@
 [package]
 name = "veryl2chip-emu"
-version = "2.33.0"
+version = "2.34.0"
 edition = "2021"
 description = "Compiles Veryl designs to WebAssembly for fast cycle-based simulation, part of veryl2chip"
 license = "MIT"
@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 veryl-parser = "0.22"
-veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "2.33.0" }
+veryl-sim = { package = "veryl2chip-sim", path = "../veryl-sim", version = "2.34.0" }
 
 [profile.release]
 debug = false

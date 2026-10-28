@@ -237,6 +237,13 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   the tests); `tools/lvs_check.py` extracts the connectivity from the GDS independently with KLayout (cells as black boxes).
   Small dies used to get no power straps (IO pins blocked every column), leaving the rows' rails apart: SKY130 IO pins now keep
   off the first strap pair's columns.
+- Antenna rules (v2.34, `src/asic/antenna.rs`): the layout built up in process order (metal joining what it touches, cuts the layers
+  below / above); on every layer each piece reaching gates keeps its side area (cut layers: area) per gate area under the tech
+  LEF's `ANTENNADIFF(SIDE)AREARATIO` (interpolated at the diffusion area it reaches), gate / diffusion areas from the cells' LEF.
+  A violating gate gets a `DIODE` beside it (`sky130_fd_sc_hd__diode_2`, a logical cell with no output or function; `Cell::out`
+  gives it the unread net `NO_OUT`), the routing is redone and checked again, up to twelve rounds, a worse routing retried with the diodes elsewhere
+  (`VERYL_EDA_ANTENNA_FIX=0` turns it off). `tools/antenna_check.py` recomputes it independently from the GDS in KLayout (the
+  real poly over diffusion, merged metal).
 - GDSII (v1.7): `--gds OUT.gds` (`src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
   places them (mirrored on the FS rows) and draws the routing, vias, power grid and labelled IO pins on SKY130's layer numbers
   (met1 68/20, via 68/44, ...). Same-net via pads closer than the spacing are joined by small fills, so the metal has no notches.

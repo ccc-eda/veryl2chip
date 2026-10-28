@@ -29,14 +29,18 @@ pub struct Cell {
     pub params: Vec<(&'static str, String)>,
 }
 
+/// the "output" of a cell that has none (`Cell::out`)
+pub const NO_OUT: Bit = Bit::W(u32::MAX);
+
 /// output pins (generic, iCE40, vlib cells; SKY130 X / LO / HI in exported netlists; ECP5 Z, S0, S1, COUT, DOA*, DOB*)
 pub fn is_out(p: &str) -> bool {
     matches!(p, "Y" | "Q" | "O" | "CO" | "X" | "LO" | "HI" | "Z" | "S0" | "S1" | "COUT") || p.starts_with("RDATA") || p.starts_with("DOA") || p.starts_with("DOB")
 }
 
 impl Cell {
+    /// the output; a cell without one (an antenna diode) drives NO_OUT, a net nothing reads
     pub fn out(&self) -> Bit {
-        self.conns.iter().find(|(p, _)| is_out(p)).map(|(_, b)| *b).unwrap()
+        self.conns.iter().find(|(p, _)| is_out(p)).map(|(_, b)| *b).unwrap_or(NO_OUT)
     }
     pub fn is_ff(&self) -> bool { self.conns.iter().any(|(p, _)| *p == "Q") }
     pub fn port(&self, name: &str) -> Option<Bit> {
