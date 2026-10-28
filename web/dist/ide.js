@@ -5396,6 +5396,7 @@ ${lines.join("\n")}
     $2("p-results").innerHTML = "";
     if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
+    reopenMain();
     renderProjects();
     showActive();
     changed();
@@ -5404,6 +5405,19 @@ ${lines.join("\n")}
   }
   function demoLink() {
     $2("demoLink").href = "demo.html" + (proj.from ? "#ex=" + proj.from : "");
+  }
+  function mainFile(p) {
+    const has = (n) => !!n && p.files.some((f) => f.name === n);
+    const ex = p.from ? examples().find((e) => e.id === p.from) : void 0;
+    if (has(ex?.files[0].name)) return ex.files[0].name;
+    return (p.files.find((f) => boardCmd(f.name)) ?? p.files.find((f) => f.name.endsWith(".veryl")) ?? p.files[0])?.name;
+  }
+  function reopenMain() {
+    if (openTabs().some((n) => file(n))) return;
+    const m = mainFile(proj);
+    if (!m) return;
+    openTabs().push(m);
+    if (!proj.active || proj.active === WELCOME) proj.active = m;
   }
   function openExample(ex) {
     const have = projects.find((p2) => p2.from === ex.id);
@@ -6834,6 +6848,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     }
     if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = void 0;
     proj.open = openTabs().filter((n) => n === WELCOME || file(n));
+    reopenMain();
     renderProjects();
     fillStages();
     showActive();

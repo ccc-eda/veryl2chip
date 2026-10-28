@@ -357,6 +357,7 @@ function switchProject(id: string): void {
   $('p-results').innerHTML = '';
   if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
+  reopenMain();
   renderProjects();
   showActive();
   changed();
@@ -366,6 +367,23 @@ function switchProject(id: string): void {
 
 function demoLink(): void {
   $<HTMLAnchorElement>('demoLink').href = 'demo.html' + (proj.from ? '#ex=' + proj.from : '');
+}
+
+/** the file a project opens on: its example's first file, else a program for the board, else the first .veryl file */
+function mainFile(p: Project): string | undefined {
+  const has = (n?: string) => !!n && p.files.some(f => f.name === n);
+  const ex = p.from ? examples().find(e => e.id === p.from) : undefined;
+  if (has(ex?.files[0].name)) return ex!.files[0].name;
+  return (p.files.find(f => boardCmd(f.name)) ?? p.files.find(f => f.name.endsWith('.veryl')) ?? p.files[0])?.name;
+}
+
+/** a project switched to with no file open (only the flow, board or emulator tab was, and those do not come back): its main file, not the welcome page */
+function reopenMain(): void {
+  if (openTabs().some(n => file(n))) return;
+  const m = mainFile(proj);
+  if (!m) return;
+  openTabs().push(m);
+  if (!proj.active || proj.active === WELCOME) proj.active = m;
 }
 
 function openExample(ex: Example): void {
@@ -1769,6 +1787,7 @@ async function boot(): Promise<void> {
   }
   if (proj.active === FLOW_TAB || proj.active === BOARD_TAB || proj.active === EMU_TAB) proj.active = undefined;
   proj.open = openTabs().filter(n => n === WELCOME || file(n));
+  reopenMain();
   renderProjects();
   fillStages();
   showActive();
