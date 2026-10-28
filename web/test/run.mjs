@@ -721,6 +721,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
       pi_reaction: [['micropython reaction.py', 'Round 1 : wait for green', true]],
       pi_breathe: [['./breathe', 'breathing: red, yellow, green', true]],
       pi_snake: [['./snake', 'snake: GPIO 6 turns left', true]],
+      pi_tetris: [['./tetris', 'tetris: GPIO 6 left, GPIO 13 right', true]],
       pi_sysmon: [['micropython sysmon.py', 'processes ', true]],
       pi_linux: [['sh hello.sh', 'Hello from Linux', false], ['sort -k3 -n fruits.txt | tail -1; sh count.sh 2', 'watermelon green 90', false]],
     };
@@ -750,7 +751,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
           if (!d.every((x) => x > 0.03 && x < 0.97)) fail ||= `${ex.id}: duty ${d.map((x) => x.toFixed(2))}`;
           else res.push(`PWM duty ${d.map((x) => x.toFixed(2)).join(' / ')}`);
         }
-        if ((ex.id === 'pi_snake' || ex.id === 'pi_sysmon') && lit() < 2000) fail ||= `${ex.id}: the screen is not drawn (${lit()} pixels, ${before} before)`;
+        if (['pi_snake', 'pi_tetris', 'pi_sysmon'].includes(ex.id) && lit() < 2000) fail ||= `${ex.id}: the screen is not drawn (${lit()} pixels, ${before} before)`;
         if (ex.id === 'pi_chaser' && cmd.startsWith('./')) {
           // the example's breadboard: the LED of a lit pin lights
           const on = [3, 4, 5, 7, 8, 9, 10, 11].filter((p) => r.g.duty[p] > 0.05);

@@ -302,7 +302,7 @@ linux/test.sh             # 自動：開機、打幾個指令（含 GPIO）、po
 
 ### 開發板的範例程式（v2.29）
 
-`board/` 是範例「RV64 開發板」的程式；`apps/` 是其他開發板範例（跑馬燈 `chaser`、反應時間 `reaction`、呼吸燈 `breathe`、貪食蛇 `snake`、
+`board/` 是範例「RV64 開發板」的程式；`apps/` 是其他開發板範例（跑馬燈 `chaser`、反應時間 `reaction`、呼吸燈 `breathe`、貪食蛇 `snake`、俄羅斯方塊 `tetris`、
 系統監視器 `sysmon`、Linux 指令入門 `linux`），IDE 裡各自是一個專案。命令列：`python3 linux/mkarea.py -o area.img apps/chaser/chaser.py`，
 再用 `rvemu -l 0x8F000000:area.img …fw_payload.bin` 開機。
 

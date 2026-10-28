@@ -160,6 +160,7 @@ riscv-emu / veryl-emu，第 15 章）。打開下面任何一個檔案按「▶ 
 | [pi_reaction](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_reaction) | 反應時間遊戲：綠燈亮就按按鈕，量毫秒；最佳成績存在 `best.txt`，`savefiles` 送回專案 | `reaction.py` | `micropython reaction.py` |
 | [pi_breathe](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_breathe) | 呼吸燈：軟體 PWM，工作週期決定亮度，三顆 LED 輪流變亮變暗 | `breathe.c` | `./breathe` |
 | [pi_snake](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_snake) | 貪食蛇：螢幕遊戲，兩個按鈕左轉 / 右轉（點一下螢幕後也可以用 ← →，空白鍵開始） | `snake.c` | `./snake` |
+| [pi_tetris](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_tetris) | 俄羅斯方塊（v2.32）：四個按鈕左移、右移、旋轉、加速落下；點一下螢幕後也可以用 ← → ↑ ↓，空白鍵開始 | `tetris.c` | `./tetris` |
 | [pi_sysmon](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_sysmon) | 系統監視器：讀 `/proc`，螢幕上顯示 CPU（含歷史圖）、記憶體、負載、開機時間、行程數 | `sysmon.py` | `micropython sysmon.py` |
 | [pi_linux](https://ccc-eda.github.io/veryl2chip/web/dist/index.html#ex=pi_linux) | Linux 指令入門：檔案、文字處理、管線、背景行程、`/proc`；照 `exercises.txt` 練習 | `exercises.txt`、`hello.sh`、`count.sh`、`fruits.txt` | `sh hello.sh`、`cat exercises.txt` |
 
