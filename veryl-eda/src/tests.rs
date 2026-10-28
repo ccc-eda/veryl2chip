@@ -5,6 +5,7 @@
 use crate::elab::{synthesize, Lib};
 use crate::netsim::NetSim;
 use veryl_parser::Parser;
+use std::collections::HashMap;
 
 /// synthesize `top` from the given files, then run `check` on the gate
 /// netlist, the iCE40- and ECP5-mapped netlists and the standard-cell netlist
@@ -257,6 +258,60 @@ fn asic_flow_legal_sky130() {
     crate::pdk::with_tech(t.clone(), || asic_legal(&[(&["ram.veryl"][..], "Ram"), (&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"][..], "RiscvSoc")]));
 }
 
+/// LVS on deliberately broken copies of a good layout: a net's routing taken out (open), two nets'
+/// wires joined (short), two IO labels swapped, a cell instance of the wrong type
+fn lvs_breaks(l: &crate::asic::layout::Layout, o: &crate::asic::Output, top: &str) {
+    use crate::asic::{layout::Shape, lvs};
+    let clone = || crate::asic::layout::Layout { layers: l.layers.clone(), shapes: l.shapes.clone(), insts: l.insts.clone(), nets: l.nets.clone(), net_of: l.net_of.clone(), labels: l.labels.clone(), die: l.die };
+    // the signal net with the most routed shapes
+    let mut count: HashMap<usize, usize> = HashMap::new();
+    for s in l.shapes.iter().filter(|s| s.net >= 2 && s.net < l.nets.len()) { *count.entry(s.net).or_default() += 1; }
+    let (&big, _) = count.iter().max_by_key(|x| (x.1, x.0)).unwrap();
+    let mut b = clone();
+    b.shapes.retain(|s| s.net != big);
+    let v = lvs::check(&b, o);
+    assert!(v.opens >= 1 && v.shorts == 0, "{}: net {} unrouted: {:?}", top, l.nets[big], (v.opens, v.shorts));
+    // a met2 bar from a wire of that net to the nearest met2 wire of another net
+    let m2 = crate::asic::layout::layer_index("met2").unwrap();
+    let a = *l.shapes.iter().find(|s| s.net == big && s.layer == m2).unwrap();
+    let c = *l.shapes.iter().filter(|s| s.layer == m2 && s.net >= 2 && s.net != big && s.net < l.nets.len()).min_by_key(|s| (s.x0 - a.x0).abs() + (s.y0 - a.y0).abs()).unwrap();
+    let mut b = clone();
+    b.shapes.push(Shape { layer: m2, x0: a.x0.min(c.x0), y0: a.y0.min(c.y0), x1: a.x1.max(c.x1), y1: a.y1.max(c.y1), net: big });
+    let v = lvs::check(&b, o);
+    assert!(v.shorts >= 1, "{}: {} joined to {}: {:?}", top, l.nets[big], l.nets[c.net], v.details);
+    // two IO pins' labels swapped
+    let io: Vec<usize> = (0..l.labels.len()).filter(|&k| !matches!(l.labels[k].3.as_str(), "VPWR" | "VGND")).collect();
+    if io.len() >= 2 {
+        let mut b = clone();
+        let (p, q) = (io[0], io[io.len() - 1]);
+        let t = b.labels[p].3.clone();
+        b.labels[p].3 = b.labels[q].3.clone();
+        b.labels[q].3 = t;
+        assert!(lvs::check(&b, o).errors() >= 1, "{}: labels {} and {} swapped", top, l.labels[p].3, l.labels[q].3);
+    }
+    // a cell of another type at an instance
+    let mut b = clone();
+    b.insts[0].cell = if b.insts[0].cell.ends_with("inv_1") { "sky130_fd_sc_hd__buf_1" } else { "sky130_fd_sc_hd__inv_1" }.into();
+    assert_eq!(lvs::check(&b, o).device_errors, 1, "{}", top);
+}
+
+#[test]
+fn spice_pin_order_is_the_cdls() {
+    // the CDL of the full PDK files (tools/sky130.sh), when it is there
+    let Some(cdl) = crate::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists()) else { eprintln!("no sky130hd.cdl: skipped"); return };
+    let text = std::fs::read_to_string(cdl).unwrap();
+    let subckt: HashMap<&str, Vec<&str>> = text.lines().filter_map(|l| l.strip_prefix(".SUBCKT ")).map(|l| { let mut w = l.split_whitespace(); (w.next().unwrap(), w.collect()) }).collect();
+    let t = crate::pdk::sky130_builtin().unwrap();
+    let lef = t.lef.as_ref().unwrap();
+    let mut n = 0;
+    for b in t.cells.values() {
+        let m = lef.macro_(&b.cell).unwrap();
+        assert_eq!(crate::asic::spice::pin_order(m), subckt[b.cell.as_str()], "{}", b.cell);
+        n += 1;
+    }
+    assert!(n > 20, "{} cells", n);
+}
+
 fn asic_legal(designs: &[(&[&str], &str)]) {
     let tech = crate::pdk::tech();
     for &(files, top) in designs {
@@ -285,6 +340,12 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
             let l = crate::asic::layout::build(&o).unwrap();
             let d = crate::asic::drc::check(&l, &o.mapped);
             assert_eq!((d.shorts, d.spacing, d.area, d.opens), (0, 0, 0, 0), "{}: DRC {:?}", top, d.details);
+            // LVS from the geometry alone: clean, and not the router checking itself (broken layouts fail)
+            let v = crate::asic::lvs::check(&l, &o);
+            assert_eq!(v.errors(), 0, "{}: LVS {:?}", top, v.details);
+            assert_eq!(v.devices, o.mapped.cells.len());
+            assert!(v.nets > 10 && v.floating == 0, "{}: {} nets, {} floating", top, v.nets, v.floating);
+            lvs_breaks(&l, &o, top);
             // GDS: the cells used and a top structure placing each instance (SREF) with the routing (BOUNDARY)
             let g = crate::asic::gds::write(&l, &o.mapped.name, crate::pdk::SKY130_GDS).unwrap();
             let st = crate::asic::gds::structures(&g);

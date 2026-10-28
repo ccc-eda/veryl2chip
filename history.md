@@ -52,7 +52,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.29 | 2026-10-28 | `063dd61` | 2.29.0：開發板的 6 個新範例 | |
 | v2.30 | 2026-10-28 | `62d3239` | 2.30.0：用鍵盤按開發板的按鈕 | |
 | v2.31 | 2026-10-28 | `a3083b9` | 2.31.0：切換專案不再掉回歡迎頁 | |
-| v2.32 | 2026-10-28 | （本版） | 2.32.0：開發板範例：俄羅斯方塊 | |
+| v2.32 | 2026-10-28 | `6d99a08` | 2.32.0：開發板範例：俄羅斯方塊 | |
+| v2.33 | 2026-10-28 | （本版） | 2.33.0：LVS、SPICE 網表、KLayout 獨立 LVS | |
 
 ---
 
@@ -600,6 +601,34 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   右邊顯示分數、列數、等級、最佳成績與下一個方塊；按按鈕才開始，結束後按按鈕重來。
 - 麵包板四個按鈕依欄排成左移（GPIO 6）、右移（GPIO 13）、旋轉（GPIO 5）、加速（GPIO 12），正好對上 v2.30 的鍵盤 ← → ↑ ↓。
 - 驗證：riscv-emu 上的螢幕存檔轉成圖檢查版面；瀏覽器實際玩（修掉提示文字在方塊間隙留下的殘影）；npm test 跑它並檢查有畫螢幕。
+
+### v2.33：LVS 與 SPICE 網表
+
+- 使用者問「完整的 EDA 還缺什麼」，選了 LVS / antenna（先）與時序約束 / 收斂（後），路線在 `web/PLAN.md`（v2.33–v2.36）。
+  又問要不要 SPICE：主流程不需要（Liberty 的時序表本來就是 SPICE 跑出來的），但輸出 SPICE 網表很划算，用來做 KLayout 的交叉檢查。
+- `asic/lvs.rs`：不用繞線器記在形狀上的網路（那只是拿繞線器檢查自己），所有繞線形狀、cut、元件 LEF 的腳位形狀都是導體；同層相碰為
+  一塊、cut 接起上下層與它重疊的金屬（2 µm 分格的 union-find）；端點是元件的腳（從網表與綁定表知道該接哪個網路，電源腳 = VDD /
+  VSS）與 IO / 電源標籤。報斷路、短路、元件型別不符、浮接的繞線。CLI 的 `asic: LVS` 一行，test.sh 檢查它。
+- LVS 一跑就找到真的錯：小晶粒（adder、seq101…）的電源網格沒有電源帶，因為上下邊的 IO 腳擋住了所有可以放電源帶的欄，每一列的
+  電源軌各自獨立（DRC 看不出來：它看的是同一個網路標記的形狀）。修正：SKY130 的 IO 腳避開第一對電源帶的欄位（`pdn::strap_columns`，
+  vlib 不變）；SKY130 的晶粒至少 32 個 site 寬（BitRev 這種沒有元件、只有連線的設計原本寬 16 個 site，放不下一對電源帶）。
+  現在每個設計都至少有一對電源帶。
+- `asic/spice.rs` + `--spice`：CDL 式網表，設計的子電路裡每個元件 `X` 呼叫 PDK 的子電路（腳位順序：輸入、VGND VNB VPB VPWR、輸出，
+  各自照字母，測試拿 `sky130hd.cdl` 逐一對照），well 接 VPWR / VGND；找得到完整檔案時 `.INCLUDE` 它。版圖在第一條電源帶上加上
+  VPWR / VGND 標籤，讓 LVS 認得電源。
+- `tools/lvs_check.py`：KLayout（pip 的 `klayout` 模組沒有 Ruby 的 LVS 執行器，所以用 Python API）從 GDS 的 li1、met1–met5 與
+  contact / via 及標籤階層式抽出接線，元件當黑盒子（只比腳；元件內部是 SkyWater 驗證過的），去掉 well 腳與只在版圖上的
+  填充 / tap 元件，和 SPICE 網表比對。故意改壞網表（對調腳、短路、斷路）都抓得到。adder、max3、alu_pkg、sevenseg、uart、ram
+  兩種 LVS 都乾淨、網路數相同。下載（使用者同意）：KLayout Python 模組裝在 `/Users/Shared/ccc/klayout-venv`、`sky130hd.cdl`
+  （ORFS，Apache-2.0，`tools/sky130.sh` 也會抓）。
+- veryl-eda/test.sh 順便修了兩個和這版無關、已經存在的問題：ECP5 繞線後網表的檢查用 PATH 上第一個 `yosys`（Homebrew 0.65 拒絕重讀
+  ECP5 元件庫），改用 `YOSYS_SLANG`（oss-cad-suite）；ECP5 有 block RAM 的設計（SyncRam、Bram2048x2、BramMix、Fifo、RvSocSmall）
+  從 v2.9 起形式驗證都失敗（yosys 的 DP16KD 只有宣告、沒有 SAT 模型），改讀 `fpga/ecp5_dp16kd.v`（Verilator 用的同一個模型），
+  四個都證明等價；RvSocSmall 的 12 個 2048 字 DP16KD 在證明裡展開成約 22 萬個正反器、yosys 撐不住，只略過它的 ECP5 證明（它的其他網表仍證明）。
+  形式驗證不在 CI 裡，所以之前沒發現。
+- 驗證：cargo test（`asic_flow_legal_sky130`：Ram、RiscvSoc LVS 乾淨，四種弄壞的版圖都抓到；`spice_pin_order_is_the_cdls`）；
+  veryl-eda/test.sh 每個 SKY130 設計跑兩種 LVS（KLayout 26 個設計 match）；修正後重跑 cargo test、SKY130 流程與兩種 LVS、
+  ECP5 的兩種檢查。網頁沒有重建（核心工作）。
 
 ---
 

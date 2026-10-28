@@ -8,6 +8,8 @@ pub mod drc;
 pub mod gds;
 pub mod layout;
 pub mod lib;
+pub mod lvs;
+pub mod spice;
 pub mod map;
 pub mod pdn;
 pub mod power;

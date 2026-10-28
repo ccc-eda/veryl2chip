@@ -221,6 +221,11 @@ RiscvCore（寄存器堆是 1056 个 DFF 加 5000 个 MUX2 的读取交叉开关
   电源网格周围净空。via 只放在路径换层的地方。密集的设计绕不干净时，流程会换更大的裸片再试。
   `--asic --pdk sky130` 打印 DRC 摘要（`-v`：例子）；`cargo test` 要求 Ram 与 RiscvSoc 都是 0
   （RiscvSoc：利用率 32 % 时短路 / 间距 / 面积 / 断路都是 0）。
+- LVS（v2.33，`src/asic/lvs.rs`）：不看布线器记在形状上的网络，只从几何（同层相碰、cut 接上下层、单元 LEF 的引脚形状）重建导体，
+  和网表比对断路、短路、单元类型，电源（VPWR / VGND 各一块）也算；IO 与电源的标签是端点。`cargo test` 要求干净，并把版图弄坏
+  （拿掉一个网络、接起两个网络、对调标签、换单元）确认抓得到。`--spice OUT.sp`（`src/asic/spice.rs`）写出 CDL 式的网表
+  （PDK 单元子电路的引脚顺序由测试对照 `sky130hd.cdl`），`tools/lvs_check.py` 用 KLayout 从 GDS 独立抽出连接比对（单元当黑盒子）。
+  小晶粒以前会没有电源带（IO 引脚挡住所有列），各行的电源轨没接在一起：SKY130 的 IO 引脚现在避开第一对电源带的列。
 - GDSII（v1.7）：`--gds OUT.gds`（`src/asic/gds.rs`）写出 PDK 自己的单元版图（从它的 GDS 拷贝）以及一个顶层 cell：
   放置它们（FS 列镜像），并以 SKY130 的层号（met1 68/20、via 68/44…）画出布线、via、电源网格与有标签的 IO 引脚。
   同一网络距离小于间距的 via 垫片之间会补上小块金属，金属不会留下缺口。`tools/gds_check.py` 用 KLayout 的 Python 模块

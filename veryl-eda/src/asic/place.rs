@@ -218,7 +218,8 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
         let ins = nl.ports.iter().filter(|p| p.dir == Dir::In).map(|p| p.bits.len()).sum::<usize>() as u32;
         let outs = nl.ports.iter().filter(|p| p.dir == Dir::Out).map(|p| p.bits.len()).sum::<usize>() as u32;
         while (sites / 2 + rows * super::detail::TRACKS / 2) < 2 * ins.max(outs) + 10 { sites += 2; rows += 1; }
-        sites = sites.max(16);
+        // (wide enough for a strap pair between the IO pins: it joins the rows' power rails)
+        sites = sites.max(32);
         rows = rows.max(2);
     }
     let (w, h) = (sites as f64 * site_w, rows as f64 * row_h);
@@ -243,6 +244,8 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
     let lib = !crate::pdk::tech().is_vlib();
     let (gx, gy) = if lib { ((sites - 1) & !1, (rows * super::detail::TRACKS - 1) & !1) } else { (sites, rows * super::detail::TRACKS) };
     let mut taken = std::collections::HashSet::new();
+    // a library technology keeps the first strap pair's columns free of pins on the top and bottom edges
+    let straps = if lib { super::pdn::strap_columns(sites) } else { 0..0 };
     // (vlib's grid is square and its pins already far enough apart: they stay where they are)
     for p in pins.iter_mut().filter(|_| !crate::pdk::tech().is_vlib()) {
         let (mut x, mut y) = (((p.x / px).round() as i64).min(gx as i64), ((p.y / py).round() as i64).min(gy as i64));
@@ -254,7 +257,7 @@ pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, st
             // (a library technology's pins are 0.8 µm deep: keep them off the corners)
             let (lo_x, hi_x, lo_y, hi_y) = if lib { (4, gx as i64 - 4, 4, gy as i64 - 4) } else { (0, gx as i64, 0, gy as i64) };
             let (tx, ty) = if vertical_edge { (x, (y + d).clamp(lo_y, hi_y.max(lo_y))) } else { ((x + d).clamp(lo_x, hi_x.max(lo_x)), y) };
-            if !taken.contains(&(tx, ty)) { x = tx; y = ty; break; }
+            if !taken.contains(&(tx, ty)) && (vertical_edge || !straps.contains(&(tx as u32))) { x = tx; y = ty; break; }
         }
         taken.insert((x, y));
         p.x = x as f64 * px;

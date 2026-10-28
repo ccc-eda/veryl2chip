@@ -229,6 +229,14 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   Vias are only where a path changes layer. Should a dense design not route clean, the flow tries again on a bigger die.
   `--asic --pdk sky130` prints the DRC summary (`-v`: examples); `cargo test` requires 0 for Ram and RiscvSoc
   (RiscvSoc: 0 shorts / spacing / area / opens at 32 % utilization).
+- LVS (v2.33, `src/asic/lvs.rs`): the router's net labels on the shapes are ignored; conductors are rebuilt from the geometry
+  alone (touching on a layer, cuts joining the layers, the cells' LEF pin shapes) and compared with the netlist for opens, shorts
+  and cell types, power included (VPWR and VGND one piece each); IO and power labels are terminals. `cargo test` requires a clean
+  result and breaks good layouts (a net removed, two nets joined, labels swapped, a cell replaced) to see each caught.
+  `--spice OUT.sp` (`src/asic/spice.rs`) writes a CDL-style netlist (the PDK cells' pin order checked against `sky130hd.cdl` by
+  the tests); `tools/lvs_check.py` extracts the connectivity from the GDS independently with KLayout (cells as black boxes).
+  Small dies used to get no power straps (IO pins blocked every column), leaving the rows' rails apart: SKY130 IO pins now keep
+  off the first strap pair's columns.
 - GDSII (v1.7): `--gds OUT.gds` (`src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
   places them (mirrored on the FS rows) and draws the routing, vias, power grid and labelled IO pins on SKY130's layer numbers
   (met1 68/20, via 68/44, ...). Same-net via pads closer than the spacing are joined by small fills, so the metal has no notches.

@@ -134,6 +134,20 @@ pub fn tap_violations(nl: &Netlist, pl: &RowPlacement, taps: &[(u32, u32)]) -> u
     v
 }
 
+/// where the strap pairs go on a die of `sites` sites (before moving off IO pins): one pair centred in every STRAP_PITCH
+pub fn strap_plan(sites: u32) -> Vec<u32> {
+    let nx = sites + 1;
+    let pairs = (nx / STRAP_PITCH).max(1);
+    (0..pairs).map(|k| (k * nx) / pairs + nx / pairs / 2).collect()
+}
+
+/// the columns a library technology keeps free of IO pins on the top and bottom edges: the planned
+/// strap pairs with their clearance, so that even a small die gets its straps (and its rails joined)
+pub fn strap_columns(sites: u32) -> std::ops::Range<u32> {
+    let x = strap_plan(sites)[0];
+    x.saturating_sub(3)..x + STRAP_W * 2 + 2 + 3
+}
+
 pub fn build(nl: &Netlist, pl: &RowPlacement, taps: &[(u32, u32)]) -> Pdn {
     let nx = pl.sites + 1;
     // IO pins sit on M5 at the die edge: keep straps off their columns
@@ -142,10 +156,9 @@ pub fn build(nl: &Netlist, pl: &RowPlacement, taps: &[(u32, u32)]) -> Pdn {
     let side = if crate::pdk::tech().is_vlib() { 0 } else { 3 };
     let clear = |x: u32| (0..STRAP_W * 2 + 2 + 2 * side).all(|d| !io_cols.contains(&(x + d).wrapping_sub(side)));
     let mut straps = vec![];
-    let pairs = (nx / STRAP_PITCH).max(1);
-    for k in 0..pairs {
+    for x in strap_plan(pl.sites) {
         // centre each pair in its pitch, shifted off IO pin columns
-        let mut x = (k * nx) / pairs + nx / pairs / 2;
+        let mut x = x;
         while x + 2 * STRAP_W + 2 < nx && !clear(x) { x += 1; }
         if x + 2 * STRAP_W + 2 >= nx { continue; }
         straps.push((x, true));

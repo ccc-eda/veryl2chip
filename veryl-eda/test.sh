@@ -34,9 +34,11 @@ sync_ram:SyncRam:bmc4 bram_tests:Bram2048x2:bmc4 bram_tests:BramMix:bmc12
 lang:Div:comb lang:HsTop:bmc24 lang:Wide:comb
 fifo:Fifo:bmc6 uart:UartLoop:bmc24 vga:VgaTiming:bmc8 vga:VgaDemo:bmc8 sevenseg:SevenSeg:bmc8 gates:Gates:comb
 button_counter:ButtonCounter:bmc8 traffic:TrafficLight:bmc8 rvsoc_small:RvSocSmall:bmc6"
-# a Python with KLayout's module (pip install klayout) checks the SKY130 GDS files
+# a Python with KLayout's module (pip install klayout) checks the SKY130 GDS files and runs an
+# independent LVS of each (tools/lvs_check.py: the GDS against the --spice netlist)
 GDS_PY=${GDS_PY:-}
 [ -z "$GDS_PY" ] && python3 -c "import klayout.db" 2>/dev/null && GDS_PY=python3
+[ -z "$GDS_PY" ] && [ -x /Users/Shared/ccc/klayout-venv/bin/python ] && GDS_PY=/Users/Shared/ccc/klayout-venv/bin/python
 # SKY130 has no SRAM macros yet: memories become flip-flops; these get only the
 # mapping (the formal check), not the whole flow, and the biggest no gate-level simulation
 SKY130_MAP_ONLY=" Bram2048x2 BramMix SyncRam Fifo RvSocSmall RiscvCore RegFile RiscvSoc "
@@ -64,14 +66,20 @@ for d in $DESIGNS; do
     # SKY130: the netlist without veryl-eda's cell models (the formal check reads the Liberty file instead)
     # SKY130: the whole flow on the smaller designs, the mapping alone on the big memories (flip-flops here)
     if [[ "$SKY130_MAP_ONLY" == *" $m "* ]]; then sky_opt=--map-only; else sky_opt=; fi
-    if [ -z "$sky_opt" ] && [ -n "$GDS_PY" ]; then sky_opt="--gds $OUT/${m}.gds"; fi
+    if [ -z "$sky_opt" ] && [ -n "$GDS_PY" ]; then sky_opt="--gds $OUT/${m}.gds --spice $OUT/${m}.sp"; fi
     "$BIN" --asic --pdk sky130 $sky_opt --top "$m" --verilog "$OUT/${m}_sky130.v" $files > "$OUT/${m}_sky130.log"
     grep -E "^timing" "$OUT/${m}_sky130.log" | sed 's/^/  sky130 /' || true
     grep -qE "DRC .* 0 shorts, 0 spacing, 0 min-area, 0 opens" "$OUT/${m}_sky130.log" || { grep -q "^asic: DRC" "$OUT/${m}_sky130.log" && { echo "  sky130 DRC FAILED: $(grep '^asic: DRC' "$OUT/${m}_sky130.log")"; fail=1; }; }
+    grep -q "^asic: LVS .*layout matches the netlist" "$OUT/${m}_sky130.log" || { grep -q "^asic: LVS" "$OUT/${m}_sky130.log" && { echo "  sky130 LVS FAILED: $(grep '^asic: LVS' "$OUT/${m}_sky130.log")"; fail=1; }; }
     # the GDS read back with KLayout: cells, shapes, labels, row overlaps, KLayout's own width / spacing checks
     if [ -f "$OUT/${m}.gds" ]; then
         set -- $(sed -nE 's/^wrote .*: ([0-9]+) cell instances, ([0-9]+) shapes, ([0-9]+) labels.*/\1 \2 \3/p' "$OUT/${m}_sky130.log")
         "$GDS_PY" "$ROOT/../tools/gds_check.py" "$OUT/${m}.gds" "$m" "$1" "$2" "$3" | sed 's/^/  /' || { echo "  GDS check FAILED"; fail=1; }
+        # (KLayout's LVS needs the PDK's cell subcircuits: sky130hd.cdl from tools/sky130.sh)
+        if grep -q "^.INCLUDE" "$OUT/${m}.sp"; then
+            "$GDS_PY" "$ROOT/../tools/lvs_check.py" "$OUT/${m}.gds" "$OUT/${m}.sp" "$m" | head -6 | sed 's/^/  /'
+            [ "${PIPESTATUS[0]}" = 0 ] || { echo "  KLayout LVS FAILED"; fail=1; }
+        fi
     fi
     sed -i.bak '/behavioural models from the Liberty functions/,$d' "$OUT/${m}_sky130.v" && rm -f "$OUT/${m}_sky130.v.bak"
     [[ " $FPGA_EQ " == *" $m "* ]] && "$BIN" --ice40 --top "$m" -o "$OUT/${m}_ice40.json" $files | grep -E "SB_RAM40_4K" 
@@ -121,7 +129,7 @@ if command -v nextpnr-ecp5 > /dev/null && command -v ecppack > /dev/null; then
         fi
     done
     echo "== ECP5: routed netlist (nextpnr-ecp5 --write) vs mapped netlist"
-    OUT="$OUT/ecp5_routed" ./fpga/ecp5_routed.sh || fail=1
+    YOSYS="$YOSYS_SLANG" OUT="$OUT/ecp5_routed" ./fpga/ecp5_routed.sh || fail=1
 else
     echo "== skipping the ECP5 flow: nextpnr-ecp5 / ecppack not installed"
 fi
@@ -140,6 +148,9 @@ for kind in gate asic sky130 ecp5 fpga; do
 for d in $DESIGNS; do
     IFS=: read -r f m mode <<< "$d"
     [ $kind = fpga ] && [[ " $FPGA_EQ " != *" $m "* ]] && continue
+    # (RvSocSmall's ECP5 netlist has 12 DP16KD of 2048 words: the model expands them into ~220k
+    # flip-flops for each of the proof's steps, more than yosys can hold; its other netlists are proven)
+    [ $kind = ecp5 ] && [ $m = RvSocSmall ] && continue
     case $mode in
         comb) prove="sat -verify -prove-asserts miter" ;;
         ind)  prove="sat -verify -prove-asserts -set-init-zero -tempinduct -seq 1 miter" ;;
@@ -158,7 +169,7 @@ $(case $kind in
     (gate) echo "read_json $OUT/$m.json" ;;
     (asic) echo "read_verilog $OUT/${m}_asic.v; hierarchy -top $m; proc; flatten; memory; opt_clean" ;;
     (sky130) echo "read_liberty $ROOT/pdk/sky130hd/sky130_fd_sc_hd__tt_025C_1v80.lib; read_verilog $OUT/${m}_sky130.v; hierarchy -top $m; proc; flatten; memory; opt_clean" ;;
-    (ecp5) echo "read_json $OUT/${m}_ecp5.json; read_verilog -lib +/ecp5/cells_sim.v; read_verilog +/ecp5/cells_sim.v; hierarchy -top $m; proc; flatten; memory; opt_clean; attrmap -remove init" ;;
+    (ecp5) echo "read_json $OUT/${m}_ecp5.json; read_verilog -lib +/ecp5/cells_sim.v; read_verilog +/ecp5/cells_sim.v; read_verilog -overwrite $ROOT/fpga/ecp5_dp16kd.v; hierarchy -top $m; proc; flatten; memory; opt_clean; attrmap -remove init" ;;
     (fpga) echo "read_json $OUT/${m}_ice40.json; read_verilog -lib -specify +/ice40/cells_sim.v; read_verilog -DNO_ICE40_DEFAULT_ASSIGNMENTS +/ice40/cells_sim.v; hierarchy -top $m; proc; flatten; memory; opt_clean" ;;
 esac)
 async2sync

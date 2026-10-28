@@ -75,6 +75,7 @@ v2c <子指令> [選項] FILE.veryl...
 | `--verilog F.v` | 標準元件網表（含元件模型） |
 | `--def F.def` | DEF |
 | `--gds F.gds` | GDSII（SKY130） |
+| `--spice F.sp` | SPICE 網表（SKY130）：給 KLayout 的 LVS（`tools/lvs_check.py`）、ngspice |
 | `--map-only` | 只做元件對應 |
 | `-v` | 關鍵路徑、DRC 違規例子 |
 

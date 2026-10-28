@@ -27,7 +27,7 @@ pub struct Layout {
     pub nets: Vec<String>,
     /// the net index of each signal
     pub net_of: HashMap<Bit, usize>,
-    /// IO pin labels: (layer, x, y, name)
+    /// labels: (layer, x, y, name): the IO pins, and VPWR / VGND on a power strap each
     pub labels: Vec<(u8, i64, i64, String)>,
     pub die: (i64, i64),
 }
@@ -113,9 +113,13 @@ pub fn build(o: &Output) -> Result<Layout, String> {
         shapes.push(Shape { layer: rail, x0: 0, y0: y - rail_w / 2, x1: nm(pl.w), y1: y + rail_w / 2, net });
     }
     let strap_w = nm(pdn::STRAP_W as f64 * sw - 0.06);
+    // the power nets are named by a label on their first strap (as IO pins are), for LVS
+    let mut power_labels = vec![];
     for &(x, vdd) in &o.pdn.straps {
         let cx = nm(x as f64 * sw + tech.track_x0 + (pdn::STRAP_W as f64 - 1.0) * sw / 2.0);
         shapes.push(Shape { layer: top, x0: cx - strap_w / 2, y0: 0, x1: cx + strap_w / 2, y1: nm(pl.h), net: if vdd { 0 } else { 1 } });
+        let name = if vdd { "VPWR" } else { "VGND" };
+        if !power_labels.iter().any(|l: &(u8, i64, i64, String)| l.3 == name) { power_labels.push((top, cx, nm(pl.h / 2.0), name.to_string())); }
     }
     for &(x, y, vdd) in &o.pdn.vias {
         let (px, py) = (ux(x), nm((y / TRACKS) as f64 * rh));
@@ -176,7 +180,7 @@ pub fn build(o: &Output) -> Result<Layout, String> {
     }
     shapes.extend(fills);
     // IO pins: a square on the top grid layer at the pin's node, with a label
-    let mut labels = vec![];
+    let mut labels = power_labels;
     for p in &pl.pins {
         let ni = *net_of.entry(p.bit).or_insert_with(|| { nets.push(p.name.clone()); nets.len() - 1 });
         let (x, y) = (nm(p.x + tech.track_x0), nm(p.y + tech.track_y0));

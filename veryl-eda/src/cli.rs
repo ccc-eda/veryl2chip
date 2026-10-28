@@ -17,7 +17,7 @@ fn usage() -> ! {
     eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
     eprintln!("                 [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf] [--config OUT.config] [--bit OUT.bit]]");
-    eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [--gds OUT.gds] [-v]] [--gatesim opt|ice40|asic|sky130]");
+    eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [--gds OUT.gds] [--spice OUT.sp] [-v]] [--gatesim opt|ice40|asic|sky130]");
     eprintln!("                 FILE.veryl...");
     eprintln!("       veryl-eda --pdk-check [DIR]   (read a SKY130 Liberty + LEF directory, check the cell bindings)");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
@@ -31,6 +31,7 @@ fn usage() -> ! {
     eprintln!("  places rows, routes and times them; --verilog / --def write the library's names;");
     eprintln!("  --map-only stops after the technology mapping (a netlist for --verilog);");
     eprintln!("  --gds OUT.gds writes the layout (SKY130: the PDK's cells + routing) as GDSII.");
+    eprintln!("  --spice OUT.sp writes the mapped netlist as SPICE (the PDK's cell subcircuits; for LVS in KLayout, ngspice).");
     eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
     eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
     std::process::exit(2);
@@ -127,6 +128,7 @@ pub fn main(all: Vec<String>) {
     let mut def_out: Option<String> = None;
     let mut map_only = false;
     let mut gds_out: Option<String> = None;
+    let mut spice_out: Option<String> = None;
     let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
     let mut program: Option<String> = None;
@@ -148,6 +150,7 @@ pub fn main(all: Vec<String>) {
             "--def" => def_out = a.next(),
             "--map-only" => map_only = true,
             "--gds" => gds_out = a.next(),
+            "--spice" => spice_out = a.next(),
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "--no-timing-driven" => timing_driven = false,
             "--pcf" => pcf = a.next(),
@@ -261,6 +264,10 @@ pub fn main(all: Vec<String>) {
                     let r = asic::drc::check(&l, &o.mapped);
                     println!("asic: DRC {} shapes: {} shorts, {} spacing, {} min-area, {} opens; {} taps ({} sites too far)", r.shapes, r.shorts, r.spacing, r.area, r.opens, o.pdn.taps.len(), o.pdn.tap_viol);
                     if verbose { for e in &r.details { println!("  {}", e); } }
+                    let v = asic::lvs::check(&l, o);
+                    println!("asic: LVS {} nets, {} terminals, {} devices: {} opens, {} shorts, {} device errors{} ({} pieces, {} floating)",
+                        v.nets, v.terminals, v.devices, v.opens, v.shorts, v.device_errors, if v.errors() == 0 { ", layout matches the netlist" } else { "" }, v.pieces, v.floating);
+                    if verbose || v.errors() > 0 { for e in &v.details { println!("  {}", e); } }
                 }
                 Err(e) => println!("asic: layout: {}", e),
             }
@@ -372,6 +379,14 @@ pub fn main(all: Vec<String>) {
         let g = asic::gds::write(&l, &o.mapped.name, crate::pdk::SKY130_GDS).unwrap_or_else(|e| { eprintln!("GDS: {}", e); std::process::exit(1) });
         std::fs::write(p, &g).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
         println!("wrote {} ({} bytes: {} cell instances, {} shapes, {} labels)", p, g.len(), l.insts.len(), l.shapes.len(), l.labels.len());
+    }
+    if let (Some(p), Some(o)) = (&spice_out, &asic_out) {
+        if tech.is_vlib() { eprintln!("--spice needs a PDK (--pdk sky130)"); std::process::exit(2); }
+        // the PDK's cell subcircuits, where the full SKY130 files are
+        let cdl = crate::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists());
+        let s = asic::spice::write(o, cdl.as_ref().and_then(|p| p.to_str())).unwrap_or_else(|e| { eprintln!("SPICE: {}", e); std::process::exit(1) });
+        std::fs::write(p, &s).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
+        println!("wrote {} ({} cells{})", p, o.mapped.cells.len(), if cdl.is_some() { "" } else { "; no sky130hd.cdl found: add the PDK's cell subcircuits yourself (tools/sky130.sh)" });
     }
     if let (Some(p), Some(o)) = (&def_out, &asic_out) {
         std::fs::write(p, asic::def(o)).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });

@@ -157,4 +157,9 @@ veryl-emu 模擬的是硬體：每一拍都要算整顆 Rv64Core 的訊號，瀏
 
 | v2.32 ✓ | **俄羅斯方塊**：開發板範例，C 畫在螢幕上，四個按鈕（或 ← → ↑ ↓）操作 | npm test；瀏覽器實際玩 |
 
+| v2.33 ✓ | **LVS + SPICE 網表**：只從版圖幾何重建導體、和網表比對（斷路、短路、元件、電源）；`--spice` 寫 CDL 式網表；`tools/lvs_check.py` 用 KLayout 從 GDS 獨立比對；小晶粒沒有電源帶的問題（LVS 找到的）修好 | cargo test（乾淨 + 故意弄壞的版圖）；test.sh 每個 SKY130 設計兩種 LVS |
+| v2.34 | **天線規則**：讀 LEF 的 antenna 欄位（閘極面積、各層的面積比），算每個閘極腳在繞線各層累積的金屬面積，報違規；違規的腳旁插 diode 元件（`sky130_fd_sc_hd__diode_2`）修正，修不好就不改 | 故意做長線的設計會違規、修正後通過；DRC / LVS 仍乾淨 |
+| v2.35 | **時序約束**：SDC 子集（`create_clock`、`set_input_delay` / `set_output_delay`、`set_false_path`、`set_multicycle_path`），STA 以目標時脈算 slack（WNS / TNS），FPGA 的 STA 也用；CLI `--sdc` / `--clock`；IDE 輸入時脈、顯示 slack | 已知路徑的手算 slack；約束改變結果的測試；npm test |
+| v2.36 | **時序收斂**：繞線後的寄生 RC 萃取取代估計；gate sizing（換驅動強度）與在關鍵長線上插緩衝器，改完重新合法化與繞線、重跑 STA，變差就退回；只在指定時脈目標時做（vlib 結果不變） | 有負 slack 的設計修到正（或報告改善多少）；DRC / LVS 乾淨 |
+
 每版 commit，版本號照 v2.3、v2.4… 遞增。
