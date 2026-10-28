@@ -21,6 +21,8 @@ export interface PnrResult {
   route_iters: number[];
   globals: { net: string; glb: number }[];
   timing: { period: number; fmax: number; endpoints: number; path: { what: string; delay: number; at: number }[]; crit_lcs: number[]; fmax_wl: number | null;
+    /** the target clock period (ns) of the constraints, when there are any */
+    target?: number | null;
     power: { freq: number; e_nets: number; e_clock: number; e_ram: number; dynamic: number; static: number; total: number } };
   pips: number;
   /** bitstream (base64), byte-identical to icepack's */

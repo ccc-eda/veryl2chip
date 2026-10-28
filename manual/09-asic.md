@@ -92,6 +92,40 @@ diode）時電荷有地方去，上限就大很多（SKY130：沒有擴散區 40
 一層一層蓋上去檢查（`python3 tools/antenna_check.py counter.gds`）。兩邊的結果一致於「veryl2chip 不會比較寬鬆」：
 不修的 Wide，KLayout 在 met2 / met3 / met4 找到 3 / 2 / 67 塊，veryl2chip 找到 4 / 5 / 73 塊（它把重疊形狀的周長直接加總，略為保守）。
 
+### 時序約束（v2.35）
+
+沒有約束時，STA 只回答「最快能跑多少 MHz」（Fmax）。給了時序約束，它回答的是「在我要的頻率下，每條路徑還差多少」：
+
+```sh
+v2c asic --pdk sky130 --clock 300 uart.veryl          # 一個 300 MHz 的時脈，套用到全部
+v2c asic --pdk sky130 --sdc uart.sdc uart.veryl       # 完整的約束檔
+```
+
+`uart.sdc`（SDC 的常用子集，時間單位 ns）：
+
+```
+create_clock -name clk -period 2 [get_ports i_clk]
+set_input_delay 0.5 -clock clk [all_inputs]
+set_output_delay 0.5 -clock clk [all_outputs]
+set_false_path -from [get_ports i_rst]
+```
+
+報告多一行：
+
+```
+timing: constraints clk 2.000 ns (500.0 MHz, 61 endpoints): WNS -1.752 ns, TNS -38.383 ns, 61 of 72 endpoints failing (worst: DFFR D (c380))
+```
+
+- **餘裕（slack）** = 要求的時間 − 實際到達的時間；負的就是沒達成。正反器的要求是「接收時脈 + 週期 − setup」，輸出腳是「週期 − 輸出延遲」。
+- **WNS**（worst negative slack）：最差的那個端點；**TNS**（total）：所有負餘裕加總，看得出問題是一條路徑還是一大片。
+- `set_input_delay` 讓輸入晚一點才到（外面的電路用掉的時間）；`set_output_delay` 讓輸出早一點要交（外面還需要的時間）。
+- `set_false_path -from` 的輸入不算時序（例如非同步的 reset 按鈕）；`-to` 的輸出不檢查。
+  `set_multicycle_path N -from/-to` 給那些路徑 N 個週期。
+- 每個正反器依它的時脈腳追回 `create_clock` 指定的腳（經過時脈樹的緩衝器），用那個時脈的週期；沒有腳的 `create_clock` 是給 IO 用的虛擬時脈。
+
+限制：例外（false path、multicycle）只能指定輸入腳、輸出腳。合成與對應之後的網表已經攤平、改了名字，沒有暫存器名稱可以指定暫存器之間的路徑。
+約束只用來報告，不改變佈局繞線（讓工具依約束修時序是下一版的事）。
+
 ## 流程做了什麼
 
 1. **對應**：在多扇出點把網表切成樹，以最小面積覆蓋（反相器併入 NAND / NOR / AOI / OAI…）；SKY130 還會用

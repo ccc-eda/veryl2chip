@@ -56,7 +56,9 @@ iCEBreaker 常用的腳（`tutorial/icebreaker.pcf` 有完整清單）：
 
 ## 時序
 
-`Fmax` 是電路能跑的最高頻率，要**高於 12 MHz** 才能在 iCEBreaker 上正常工作。不夠時：
+`Fmax` 是電路能跑的最高頻率，要**高於 12 MHz** 才能在 iCEBreaker 上正常工作。加上 `--clock 12`（或 `--sdc`，見第 9 章）
+會再報告對這個目標的餘裕，例如教學的 Blinky：`timing: target 83.333 ns (12.00 MHz): slack +53.656 ns, met`；用 nextpnr 時也會把目標頻率
+（`--freq`）交給它。不夠時：
 
 - 把長的組合邏輯切成兩拍（加暫存器）；
 - 試試不同的 `--seed`，或另一個佈局繞線工具；

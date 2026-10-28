@@ -469,6 +469,23 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   console.log(`${lossy || !tagged || !taggedC ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files (Veryl, C, assembly)${lossy ? ': changes ' + lossy : ''}${tagged && taggedC ? '' : ': tokens not tagged'}`);
 }
 
+// timing constraints (sdc): with one clock and no IO delays the worst slack is the target period minus the
+// critical path (ASIC), and P&R reports the target; a broken .sdc is an error
+{
+  const ex = vfiles(ctx.VERYL_EXAMPLES.find((e) => e.id === 'counter'));
+  const sdc = 'create_clock -name clk -period 2 [get_ports i_clk]\n';
+  const a = core.call({ cmd: 'asic', files: ex, top: 'Counter', seed: 1, sdc });
+  const s = a.timing.slack;
+  const p = core.call({ cmd: 'pnr', files: ex, top: 'Counter', pcf: null, seed: 1, sdc });
+  const plain = core.call({ cmd: 'asic', files: ex, top: 'Counter', seed: 1 });
+  let err = '';
+  try { core.call({ cmd: 'asic', files: ex, top: 'Counter', seed: 1, sdc: 'set_max_delay 1' }); } catch (e) { err = String(e.message ?? e); }
+  const ok = s && Math.abs(s.wns - (2 - a.timing.period)) < 1e-9 && s.checked === a.timing.endpoints && s.clocks[0]?.name === 'clk'
+    && p.timing.target === 2 && plain.timing.slack == null && /not supported/.test(err);
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} sdc      Counter at 500 MHz: WNS ${s?.wns.toFixed(3)} ns (critical path ${a.timing.period.toFixed(3)} ns), ${s?.failing} of ${s?.checked} failing; P&R target ${p.timing.target} ns, Fmax ${p.timing.fmax.toFixed(1)} MHz${err ? '' : '; a broken .sdc was accepted'}`);
+}
+
 // interface languages: every tr('繁體', 'English') pair in the sources has
 // Chinese-free English, and its Simplified form keeps no Traditional-only character
 {

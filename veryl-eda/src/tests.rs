@@ -322,6 +322,38 @@ fn antenna_diodes_fix_ram() {
 }
 
 #[test]
+fn sdc_slack() {
+    // vlib Adder (combinational, IO only): slack = period - (input delay + path + output delay); a false
+    // path from every input leaves nothing to check; a multicycle path to the outputs doubles the budget
+    let path = format!("{}/../examples/src/adder.veryl", env!("CARGO_MANIFEST_DIR"));
+    let p = Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
+    let mut lib = Lib::new();
+    lib.add(&p.veryl);
+    let nl = synthesize(&lib, "Adder").unwrap().0;
+    let run = |sdc: &str| {
+        crate::sdc::set(Some(crate::sdc::parse(sdc).unwrap()));
+        let o = crate::asic::flow(&nl, 1).unwrap();
+        crate::sdc::set(None);
+        o.timing
+    };
+    let t = run("create_clock -name v -period 5\nset_input_delay 2 -clock v [all_inputs]\nset_output_delay 1 -clock v [all_outputs]\n");
+    let s = t.slack.unwrap();
+    // the critical path includes both delays
+    assert!((s.wns - (5.0 - t.period)).abs() < 1e-9 && t.period > 3.0, "{} {}", s.wns, t.period);
+    assert_eq!((s.checked, s.failing), (8, 0));
+    let t = run("create_clock -period 0.5\nset_false_path -from [get_ports i_a]\nset_false_path -from [get_ports i_b]\n");
+    // (only false paths reach the outputs: unconstrained, not checked)
+    assert_eq!(t.slack.unwrap().checked, 0);
+    let base = run("create_clock -period 0.5\n");
+    let mc = run("create_clock -period 0.5\nset_multicycle_path 2 -setup -to [all_outputs]\n");
+    let (b, m) = (base.slack.unwrap(), mc.slack.unwrap());
+    assert!(b.failing > 0 && b.wns < 0.0 && (m.wns - (1.0 - mc.period)).abs() < 1e-9, "{:?} {:?}", b, m);
+    let none = run("create_clock -period 5\nset_false_path -to [all_outputs]\n");
+    assert_eq!(none.slack.unwrap().checked, 0);
+    assert!(crate::sdc::current().is_none());
+}
+
+#[test]
 fn antenna_pwl() {
     // SKY130's met1 limit: 400 with no diffusion, 2609 at 0.0225 µm², linear up to 11600 at 22.5
     let t = crate::pdk::sky130_builtin().unwrap();

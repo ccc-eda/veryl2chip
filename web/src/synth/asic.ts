@@ -34,7 +34,9 @@ export interface AsicResult {
     cell: number[]; ir: number[];
   };
   cts: { buffers: number; hold_bufs: number; trees: { net: string; sinks: number; buffers: number; levels: number }[] };
-  timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[] };
+  timing: { period: number; fmax: number; fmax_wl: number; fmax_ideal: number; insertion: number; skew: number; hold_slack: number; endpoints: number; path: { what: string; delay: number; at: number }[];
+    /** against the timing constraints (.sdc / the target clock), when there are any */
+    slack?: { wns: number; tns: number; failing: number; checked: number; worst: string; clocks: { name: string; period: number; endpoints: number }[] } | null };
   verilog: string;
   def: string;
   /** the technology ("vlib", "sky130_fd_sc_hd"), its four routing layers, and (a PDK) the design rule check */

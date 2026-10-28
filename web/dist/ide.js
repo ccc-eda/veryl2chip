@@ -1431,6 +1431,8 @@
       __publicField(this, "edges", true);
       __publicField(this, "files", []);
       __publicField(this, "pcf");
+      /** timing constraints (SDC text: the project's .sdc, or a target clock) */
+      __publicField(this, "sdc");
       __publicField(this, "anim", 0);
       __publicField(this, "gen", 0);
       __publicField(this, "target", "fpga");
@@ -1477,9 +1479,10 @@
       });
       this.chips();
     }
-    open(files, top, pcf, target, stage) {
+    open(files, top, pcf, target, stage, sdc) {
       this.files = files;
       this.pcf = pcf;
+      this.sdc = sdc;
       if (target) this.setTarget(target, false);
       if (stage) this.stage = stage;
       $("synOverlay").classList.remove("hidden");
@@ -1550,7 +1553,7 @@
       try {
         this.note(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\uFF08IceStorm chipdb-5k\uFF0C4 MB\uFF09\u2026", "Loading the chip database (IceStorm chipdb-5k, 4 MB)\u2026"));
         await this.core.chipdb();
-        const r = await this.core.call({ cmd: "pnr", files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
+        const r = await this.core.call({ cmd: "pnr", files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1, sdc: this.sdc ?? null });
         if (gen !== this.gen) return;
         this.pnr = r;
         this.pnrMs = performance.now() - t0;
@@ -1564,6 +1567,17 @@
       this.stats(this.synMs);
       this.buttons();
       if (PNR.has(this.stage) || this.stage === "cmp") this.show(this.stage);
+    }
+    /** new timing constraints: place and route and the ASIC flow run again (the synthesis stays) */
+    setSdc(sdc) {
+      if (sdc === this.sdc) return;
+      this.sdc = sdc;
+      this.gen++;
+      this.pnr = null;
+      this.pnrErr = null;
+      this.asic = null;
+      this.asicErr = null;
+      if (this.res) this.show(this.stage);
     }
     /** the ASIC technology (a change runs the ASIC flow again) */
     setPdk(p) {
@@ -1594,7 +1608,7 @@
         if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC \u6D41\u7A0B\u4E2D\uFF1A\u6A19\u6E96\u5143\u4EF6\u5C0D\u61C9 \u2192 \u5217\u5F0F\u4F48\u5C40\u9000\u706B \u2192 \u5168\u57DF\u7E5E\u7DDA \u2192 STA\u2026\uFF08${((performance.now() - t0) / 1e3).toFixed(1)} s\uFF09`, `ASIC flow: standard-cell mapping \u2192 row placement \u2192 global routing \u2192 STA\u2026 (${((performance.now() - t0) / 1e3).toFixed(1)} s)`));
       }, 200);
       try {
-        const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1, pdk });
+        const r = await this.core.call({ cmd: "asic", files: this.files, top: this.res.top, seed: 1, pdk, sdc: this.sdc ?? null });
         if (gen !== this.gen || pdk !== this.pdk) return;
         this.asic = r;
         this.asicMs = performance.now() - t0;
@@ -1911,6 +1925,10 @@
           `\u95DC\u9375\u8DEF\u5F91 ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz\uFF08${t.endpoints} \u500B\u7AEF\u9EDE\uFF09\uFF1B\u7D05\u7DDA\uFF1D\u95DC\u9375\u8DEF\u5F91\uFF0CLC \u984F\u8272\uFF1D\u5230\u9054\u6642\u9593\uFF08\u7DA0\u65E9\u7D05\u665A\uFF09`,
           `Critical path ${t.period.toFixed(2)} ns \u2192 Fmax ${t.fmax.toFixed(2)} MHz (${t.endpoints} endpoints); red = critical path, LC color = arrival time (green early, red late)`
         ),
+        ...t.target ? [tr(
+          `\u6642\u5E8F\u76EE\u6A19 ${(1e3 / t.target).toFixed(2)} MHz\uFF08\u9031\u671F ${t.target.toFixed(3)} ns\uFF09\uFF1A\u9918\u88D5 ${(t.target - t.period >= 0 ? "+" : "") + (t.target - t.period).toFixed(3)} ns\uFF0C${t.period <= t.target ? "\u9054\u6210" : "\u672A\u9054\u6210"}`,
+          `Target ${(1e3 / t.target).toFixed(2)} MHz (period ${t.target.toFixed(3)} ns): slack ${(t.target - t.period >= 0 ? "+" : "") + (t.target - t.period).toFixed(3)} ns, ${t.period <= t.target ? "met" : "VIOLATED"}`
+        )] : [],
         tr(
           `\u529F\u8017\u4F30\u8A08\uFF08\u96A8\u6A5F\u8F38\u5165\u6A21\u64EC\u7684\u7FFB\u8F49\u7387\uFF1Bnet \u96FB\u5BB9 \u2248 5 fF \xD7 \u8CA0\u8F09 + 8 fF \xD7 \u7E5E\u7DDA\u6BB5\uFF0C\u5168\u57DF\u6642\u8108\u7DB2\u8DEF\u6BCF\u62CD\uFF0Cblock RAM \u6BCF\u6B21\u5B58\u53D6 \u2248 24 pJ\uFF0C\u975C\u614B \u2248 75 \xB5A\uFF09\uFF1A\u5728 ${t.fmax.toFixed(1)} MHz \u7D04 ${t.power.total.toFixed(3)} mW\uFF08\u52D5\u614B ${t.power.dynamic.toFixed(3)} + \u975C\u614B ${t.power.static.toFixed(3)}\uFF1B\u6BCF\u9031\u671F ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ\uFF09`,
           `Power estimate (toggle rates from a random-input simulation; net capacitance \u2248 5 fF \xD7 loads + 8 fF \xD7 routing segments, the global clock network every cycle, \u2248 24 pJ per block RAM access, static \u2248 75 \xB5A): about ${t.power.total.toFixed(3)} mW at ${t.fmax.toFixed(1)} MHz (dynamic ${t.power.dynamic.toFixed(3)} + static ${t.power.static.toFixed(3)}; ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ per cycle)`
@@ -2152,7 +2170,8 @@
         tr(
           `Hold \u6AA2\u67E5\uFF08\u6700\u77ED\u8DEF\u5F91\uFF1A\u6700\u65E9\u5230\u9054 \u2265 \u63A5\u6536\u6642\u8108 + hold\uFF09\uFF1A\u6700\u5DEE\u9918\u88D5 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `\uFF0C\u63D2\u5165 ${a.cts.hold_bufs} \u500B\u5EF6\u9072 BUF \u4FEE\u6B63` : "\uFF0C\u6C92\u6709\u9055\u898F"}\u3002`,
           `Hold check (shortest paths: earliest arrival \u2265 capture clock + hold): worst slack ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `, fixed by inserting ${a.cts.hold_bufs} delay BUFs` : ", no violations"}.`
-        )
+        ),
+        ...t.slack ? [slackText(t.slack)] : []
       ];
     }
     asicSide(key) {
@@ -2517,6 +2536,14 @@
   }
   function fmtArea(um2) {
     return um2 >= 1e5 ? `${(um2 / 1e6).toFixed(3)} mm\xB2` : `${um2.toFixed(0)} \xB5m\xB2`;
+  }
+  function slackText(s) {
+    const ck = s.clocks.map((c) => `${c.name} ${c.period.toFixed(3)} ns (${(1e3 / c.period).toFixed(1)} MHz)`).join(", ");
+    const sign = (x) => (x >= 0 ? "+" : "") + x.toFixed(3);
+    return tr(
+      `\u6642\u5E8F\u7D04\u675F\uFF08${ck || "\u53EA\u6709 IO"}\uFF09\uFF1A\u6700\u5DEE\u9918\u88D5 WNS ${sign(s.wns)} ns\u3001\u7E3D\u8CA0\u9918\u88D5 TNS ${s.tns.toFixed(3)} ns\uFF1B${s.checked} \u500B\u7AEF\u9EDE\u4E2D ${s.failing} \u500B\u672A\u9054\u6210${s.failing ? `\uFF08\u6700\u5DEE\uFF1A${s.worst}\uFF09` : "\uFF0C\u5168\u90E8\u9054\u6210"}`,
+      `Timing constraints (${ck || "IO only"}): worst slack WNS ${sign(s.wns)} ns, total negative slack TNS ${s.tns.toFixed(3)} ns; ${s.failing} of ${s.checked} endpoints failing${s.failing ? ` (worst: ${s.worst})` : ", all met"}`
+    );
   }
 
   // src/templates.ts
@@ -5183,6 +5210,7 @@ ${lines.join("\n")}
     $2("boardPane").classList.toggle("hidden", a !== BOARD_TAB);
     $2("emuPane").classList.toggle("hidden", a !== EMU_TAB);
     document.body.classList.toggle("tab-flow", a === FLOW_TAB);
+    syncClock();
     if (boardCmd(a) && file(a)) boardFile = a;
     const onBoard = !!(machineCfg()?.files && boardCmd(a));
     $2("cmdRun").textContent = onBoard ? tr("\u25B6 \u57F7\u884C", "\u25B6 Run") : tr("\u25B6 \u6E2C\u8A66", "\u25B6 Test");
@@ -5948,6 +5976,21 @@ int main(void) {
     sel.innerHTML = vcds.map((v) => `<option>${esc4(v.top)}</option>`).join("");
     sel.classList.toggle("hidden", vcds.length < 2 || curPanel !== "wave");
   }
+  function sdcOf(p) {
+    const f = p.files.find((x) => x.name.endsWith(".sdc"));
+    if (f) return f.src;
+    return p.clockMhz ? `create_clock -name clk -period ${(1e3 / p.clockMhz).toFixed(4)}
+` : void 0;
+  }
+  function syncClock() {
+    const el2 = document.getElementById("synClock");
+    if (!el2) return;
+    const file2 = proj.files.find((x) => x.name.endsWith(".sdc"));
+    el2.disabled = !!file2;
+    el2.value = file2 ? "" : proj.clockMhz ? String(proj.clockMhz) : "";
+    el2.placeholder = file2 ? file2.name : tr("\u76EE\u6A19 MHz", "target MHz");
+    el2.title = file2 ? tr(`\u6642\u5E8F\u7D04\u675F\u4F86\u81EA ${file2.name}`, `The timing constraints come from ${file2.name}`) : tr("\u6642\u5E8F\u76EE\u6A19\uFF08MHz\uFF09\uFF1A\u5408\u6210\u6D41\u7A0B\u4EE5\u5B83\u5831\u544A\u9918\u88D5\uFF08slack\uFF09\uFF1B\u7A7A\u767D\uFF1D\u53EA\u7B97 Fmax\u3002\u4E5F\u53EF\u4EE5\u5728\u5C08\u6848\u88E1\u52A0\u4E00\u500B .sdc \u6A94", "Target clock (MHz): the flows report the slack against it; empty = Fmax only. A project .sdc file can give full constraints");
+  }
   function runSynth(stage) {
     if (!synth) return;
     const top = synthTop();
@@ -5960,14 +6003,14 @@ int main(void) {
       return;
     }
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
-    const key = JSON.stringify([files, top, pcfOf(proj)]);
+    const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
     openFile(FLOW_TAB);
     if (window.innerHeight < 900) $2("panel").classList.add("collapsed");
     synth.setPdk(flowPdk());
     if (key !== synthKey || !synth.synthesized) {
       synthKey = key;
       const target = stage && isAsicStage(stage) ? "asic" : stage && isFpgaStage(stage) ? "fpga" : void 0;
-      synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage);
+      synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage, sdcOf(proj));
     } else if (stage) synth.showStage(stage);
   }
   var synthTarget = "fpga";
@@ -6707,6 +6750,14 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("cmdRun").onclick = () => runKey();
     $2("cmdVerify").onclick = () => act("verify", $2("cmdVerify"));
     $2("mainBtn").onclick = () => mainClick();
+    const clockEl = document.getElementById("synClock");
+    if (clockEl) clockEl.onchange = () => {
+      const v = parseFloat(clockEl.value);
+      proj.clockMhz = v > 0 ? v : void 0;
+      persist();
+      synthKey = JSON.stringify([proj.files.filter((f) => f.name.endsWith(".veryl")), synthTop(), pcfOf(proj), sdcOf(proj)]);
+      synth?.setSdc(sdcOf(proj));
+    };
     $2("mainMore").onclick = () => $2("mainMenu").classList.contains("hidden") ? showMenu() : hideMenu();
     $2("modeBtn").onclick = () => setMode(uiMode === "basic" ? "full" : "basic");
     $2("cmdBoard").onclick = () => act("board", $2("cmdBoard"));

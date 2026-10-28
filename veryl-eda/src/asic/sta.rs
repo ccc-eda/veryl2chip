@@ -42,6 +42,73 @@ pub struct Timing {
     /// worst hold slack, and the violating endpoints (cell, pin, slack)
     pub hold_slack: f64,
     pub hold_viol: Vec<(usize, &'static str, f64)>,
+    /// against the timing constraints (`sdc::current`), when there are any
+    pub slack: Option<Slack>,
+}
+
+/// setup slack against the constraints: worst (WNS) and total negative (TNS) slack, the endpoints that
+/// fail and those checked (false paths are not), the clocks with the endpoints each captures
+#[derive(Debug, Clone, Default)]
+pub struct Slack {
+    pub wns: f64,
+    pub tns: f64,
+    pub failing: usize,
+    pub checked: usize,
+    pub clocks: Vec<(String, f64, usize)>,
+    /// the endpoint with the worst slack
+    pub worst: String,
+}
+
+/// the constraints applied to a netlist: per input bit its launch shift (input delay, a multicycle's
+/// earlier launch, or None: a false path), per output bit its output delay and allowed periods
+/// (None: a false path), each flip-flop clock net's period
+pub(crate) struct Applied {
+    pub input: HashMap<Bit, Option<f64>>,
+    pub output: HashMap<Bit, Option<(f64, f64)>>,
+    pub clock_of: HashMap<Bit, (String, f64)>,
+    pub default: (String, f64),
+}
+
+pub(crate) fn apply(nl: &Netlist, c: &crate::sdc::Constraints) -> Applied {
+    use crate::sdc::matches;
+    let default = c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| (k.name.clone(), k.period)).unwrap_or(("clk".into(), 0.0));
+    let period_of = |name: &Option<String>| name.as_ref().and_then(|n| c.clocks.iter().find(|k| &k.name == n)).map(|k| k.period).unwrap_or(default.1);
+    let mut input = HashMap::new();
+    let mut output = HashMap::new();
+    for p in &nl.ports {
+        let is_in = p.dir == Dir::In;
+        for (k, b) in p.bits.iter().enumerate() {
+            let bit = if p.bits.len() > 1 { Some(k) } else { None };
+            let m = |pats: &[String]| pats.iter().any(|x| matches(x, &p.name, bit, is_in));
+            if is_in {
+                let mut shift = c.input_delay.iter().filter(|d| m(&d.2)).map(|d| d.0).fold(0.0f64, f64::max);
+                // a multicycle path from here: launched n - 1 periods early
+                for (n, from, to) in &c.multicycle { if m(from) && to.is_empty() { shift -= (*n as f64 - 1.0) * default.1; } }
+                let fp = c.false_paths.iter().any(|(from, to)| m(from) && to.is_empty());
+                input.insert(*b, if fp { None } else { Some(shift) });
+            } else {
+                let (d, ck) = c.output_delay.iter().filter(|d| m(&d.2)).map(|d| (d.0, period_of(&d.1))).fold((0.0f64, default.1), |a, x| if x.0 >= a.0 { x } else { a });
+                let mut periods = ck;
+                for (n, from, to) in &c.multicycle { if m(to) && from.is_empty() { periods = ck * *n as f64; } }
+                let fp = c.false_paths.iter().any(|(from, to)| m(to) && from.is_empty());
+                output.insert(*b, if fp { None } else { Some((d, periods)) });
+            }
+        }
+    }
+    // clock nets: the clock ports, through the clock tree's buffers (parent first)
+    let mut clock_of: HashMap<Bit, (String, f64)> = HashMap::new();
+    for k in &c.clocks {
+        let Some(port) = &k.port else { continue };
+        for p in nl.ports.iter().filter(|p| p.dir == Dir::In) {
+            for (j, b) in p.bits.iter().enumerate() {
+                if matches(port, &p.name, if p.bits.len() > 1 { Some(j) } else { None }, true) { clock_of.insert(*b, (k.name.clone(), k.period)); }
+            }
+        }
+    }
+    for cl in nl.cells.iter().filter(|x| x.typ == "CLKBUF" || x.typ == "BUF") {
+        if let Some(v) = cl.port("A").and_then(|a| clock_of.get(&a).cloned()) { clock_of.insert(cl.out(), v); }
+    }
+    Applied { input, output, clock_of, default }
 }
 
 /// `extra_hold`: added to every hold requirement (to exercise hold fixing)
@@ -120,7 +187,21 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
     // inputs are launched and outputs captured at that time
     let io_clk = if cks.is_empty() { 0.0 } else { cks.iter().sum::<f64>() / cks.len() as f64 };
     let mut min_at: HashMap<Bit, f64> = HashMap::new();
-    for (b, _) in &input_name { net_at.insert(*b, io_clk); min_at.insert(*b, io_clk); }
+    // timing constraints: inputs launch after their input delay (a false path's never: far in the past)
+    let sdc = crate::sdc::current().map(|c| apply(nl, &c));
+    const NEVER: f64 = -1.0e9;
+    for (b, _) in &input_name {
+        let shift = match sdc.as_ref().and_then(|a| a.input.get(b)) { Some(Some(s)) => *s, Some(None) => NEVER, None => 0.0 };
+        net_at.insert(*b, io_clk + shift);
+        min_at.insert(*b, io_clk + shift.max(0.0));
+    }
+    let mut sl = Slack::default();
+    let mut clock_count: HashMap<String, (f64, usize)> = HashMap::new();
+    let note = |sl: &mut Slack, slack: f64, what: &str| {
+        sl.checked += 1;
+        if slack < 0.0 { sl.failing += 1; sl.tns += slack; }
+        if sl.checked == 1 || slack < sl.wns { sl.wns = slack; sl.worst = what.to_string(); }
+    };
     // flip-flop outputs first (the netlist keeps them last), then gates in order
     let mut pred: Vec<Option<Bit>> = vec![None; n];
     for &i in &seq {
@@ -176,6 +257,15 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
             } else { (cell(&c.typ).setup, super::lib::HOLD) };
             let w = wire(*d, at(i));
             let t = net_at.get(d).unwrap_or(&0.0) + w + su - ck;
+            if let Some(a) = &sdc {
+                // its capture clock's period (a clock net the constraints do not name: the main clock)
+                let (name, per) = c.port("CK").and_then(|k| a.clock_of.get(&k).cloned()).unwrap_or_else(|| a.default.clone());
+                if t > NEVER / 2.0 {
+                    note(&mut sl, per - t, &format!("{} {} (c{})", c.typ, p, i));
+                    let e = clock_count.entry(name).or_insert((per, 0));
+                    e.1 += 1;
+                }
+            }
             if t > worst.0 {
                 worst = (t, Some(*d), if is_macro(i) { format!("SRAM {} (setup)", p) } else { format!("{} {} (setup)", c.typ, p) }, su);
                 end_at = at(i);
@@ -190,9 +280,17 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
     for p in nl.ports.iter().filter(|p| p.dir == Dir::Out) {
         for (k, b) in p.bits.iter().enumerate() {
             if b.is_const() { continue; }
+            // (a false path to it: not an endpoint)
+            let con = sdc.as_ref().map(|a| a.output.get(b).copied().unwrap_or(Some((0.0, a.default.1))));
+            if con == Some(None) { continue; }
             endpoints += 1;
             let pa = pin_at.get(b).copied().unwrap_or((0.0, 0.0));
-            let t = *net_at.get(b).unwrap_or(&0.0) + wire(*b, pa) - io_clk;
+            let out_delay = con.flatten().map(|x| x.0).unwrap_or(0.0);
+            let t = *net_at.get(b).unwrap_or(&0.0) + wire(*b, pa) - io_clk + out_delay;
+            if let Some(Some((_, per))) = con {
+                let name = if p.bits.len() > 1 { format!("output {}[{}]", p.name, k) } else { format!("output {}", p.name) };
+                if t > NEVER / 2.0 { note(&mut sl, per - t, &name); }
+            }
             if t > worst.0 { end_at = pa; cap_ck = io_clk; worst = (t, Some(*b), if p.bits.len() > 1 { format!("output {}[{}]", p.name, k) } else { format!("output {}", p.name) }, 0.0); }
         }
     }
@@ -260,7 +358,13 @@ pub fn analyze(nl: &Netlist, pl: &RowPlacement, rt: &Routing, extra_hold: f64) -
     let sources: Vec<Bit> = nl.cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| is_out(p)).map(|x| x.1)).chain(input_name.keys().copied()).collect();
     for b in sources {
         let t = match tail.get(&b) { Some(t) => *t, None => tail_of(b, &tail) };
-        net_crit.insert(b, ((net_at.get(&b).copied().unwrap_or(0.0) + t) / period).min(1.0) as f32);
+        net_crit.insert(b, ((net_at.get(&b).copied().unwrap_or(0.0) + t) / period).clamp(0.0, 1.0) as f32);
     }
-    Timing { period, fmax: 1000.0 / period, path: steps, crit_cells, crit_nets, arrival, endpoints, net_crit, insertion, skew, hold_slack, hold_viol }
+    let slack = sdc.map(|_| {
+        let mut v: Vec<(String, f64, usize)> = clock_count.into_iter().map(|(k, (p, n))| (k, p, n)).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        sl.clocks = v;
+        sl
+    });
+    Timing { period, fmax: 1000.0 / period, path: steps, crit_cells, crit_nets, arrival, endpoints, net_crit, insertion, skew, hold_slack, hold_viol, slack }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "veryl2chip-riscv-emu"
-version = "2.34.0"
+version = "2.35.0"
 edition = "2021"
 description = "An RV64IMAC instruction-set emulator of veryl2chip's Rv64Soc (runs its OpenSBI + Linux)"
 license = "MIT"

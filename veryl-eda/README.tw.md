@@ -230,6 +230,10 @@ RiscvCore（暫存器檔是 1056 個 DFF 加 5000 個 MUX2 的讀取交叉開關
   除以閘極面積不超過 tech LEF 的 `ANTENNADIFF(SIDE)AREARATIO`（依接到的擴散區面積內插）；閘極 / 擴散區面積來自元件 LEF。違規的閘極旁插
   `DIODE`（`sky130_fd_sc_hd__diode_2`，沒有輸出、沒有功能的邏輯元件；`Cell::out` 給它一個沒人讀的網路 `NO_OUT`），重新繞線再檢查，最多十二輪，
   繞線變差就把 diode 換位置再試（`VERYL_EDA_ANTENNA_FIX=0` 關掉）。`tools/antenna_check.py` 用 KLayout 從 GDS（真正的 poly ∩ 擴散區、合併的金屬）獨立再算。
+- 時序約束（v2.35，`src/sdc.rs`）：SDC 子集（`create_clock`、`set_input_delay` / `set_output_delay`、`set_false_path` / `set_multicycle_path`，
+  物件是腳位、`all_inputs` / `all_outputs`、萬用字元），`--sdc FILE` 或 `--clock MHZ`。ASIC 的 STA 據此報告 WNS / TNS / 沒達成的端點
+  （輸入延遲與 `-from` 例外改變輸入的出發時間，所以單一到達時間的傳遞仍是精確的；正反器依時脈腳追回時脈埠），FPGA 報告對目標的餘裕、
+  nextpnr 拿到 `--freq`。wasm `asic` / `pnr` 接受 `sdc`，IDE 有目標 MHz 方框或專案的 `.sdc`。
 - GDSII（v1.7）：`--gds OUT.gds`（`src/asic/gds.rs`）寫出 PDK 自己的元件版圖（從它的 GDS 複製）以及一個頂層 cell：
   放置它們（FS 列鏡像），並以 SKY130 的層號（met1 68/20、via 68/44…）畫出繞線、via、電源網格與有標籤的 IO 腳。
   同一網路距離小於間距的 via 墊片之間會補上小塊金屬，金屬不會留下缺口。`tools/gds_check.py` 用 KLayout 的 Python 模組

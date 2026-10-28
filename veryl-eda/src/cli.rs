@@ -18,6 +18,7 @@ fn usage() -> ! {
     eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
     eprintln!("                 [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf] [--config OUT.config] [--bit OUT.bit]]");
     eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [--gds OUT.gds] [--spice OUT.sp] [-v]] [--gatesim opt|ice40|asic|sky130]");
+    eprintln!("                 [--sdc PINS.sdc | --clock MHZ]");
     eprintln!("                 FILE.veryl...");
     eprintln!("       veryl-eda --pdk-check [DIR]   (read a SKY130 Liberty + LEF directory, check the cell bindings)");
     eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
@@ -32,9 +33,20 @@ fn usage() -> ! {
     eprintln!("  --map-only stops after the technology mapping (a netlist for --verilog);");
     eprintln!("  --gds OUT.gds writes the layout (SKY130: the PDK's cells + routing) as GDSII.");
     eprintln!("  --spice OUT.sp writes the mapped netlist as SPICE (the PDK's cell subcircuits; for LVS in KLayout, ngspice).");
+    eprintln!("  --sdc FILE: timing constraints (create_clock, set_input_delay / set_output_delay,");
+    eprintln!("  set_false_path / set_multicycle_path on ports); --clock MHZ: one clock for everything.");
+    eprintln!("  With them the timing report gives the slack (WNS, TNS, failing endpoints).");
     eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
     eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
     std::process::exit(2);
+}
+
+/// the constraint report: per clock its period and endpoints, WNS / TNS, the failing endpoints
+pub fn slack_line(s: &crate::asic::sta::Slack) -> String {
+    let clocks: Vec<String> = s.clocks.iter().map(|(n, p, e)| format!("{} {:.3} ns ({:.1} MHz, {} endpoints)", n, p, 1000.0 / p, e)).collect();
+    format!("timing: constraints {}: WNS {:+.3} ns, TNS {:.3} ns, {} of {} endpoints failing{}{}",
+        if clocks.is_empty() { "(IO only)".to_string() } else { clocks.join(", ") }, s.wns, s.tns, s.failing, s.checked,
+        if s.failing == 0 { ", met" } else { "" }, if s.failing > 0 { format!(" (worst: {})", s.worst) } else { String::new() })
 }
 
 /// `veryl-eda --cc prog.c [-o prog.bin] [-S prog.s] [-L prog.lst] [--run [N]]`: compile C for RvSoc
@@ -129,6 +141,7 @@ pub fn main(all: Vec<String>) {
     let mut map_only = false;
     let mut gds_out: Option<String> = None;
     let mut spice_out: Option<String> = None;
+    let mut sdc: Option<crate::sdc::Constraints> = None;
     let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
     let mut program: Option<String> = None;
@@ -151,6 +164,15 @@ pub fn main(all: Vec<String>) {
             "--map-only" => map_only = true,
             "--gds" => gds_out = a.next(),
             "--spice" => spice_out = a.next(),
+            "--sdc" => {
+                let f = a.next().unwrap_or_else(|| usage());
+                let text = std::fs::read_to_string(&f).unwrap_or_else(|e| { eprintln!("{}: {}", f, e); std::process::exit(1) });
+                sdc = Some(crate::sdc::parse(&text).unwrap_or_else(|e| { eprintln!("{}: {}", f, e); std::process::exit(2) }));
+            }
+            "--clock" => {
+                let mhz: f64 = a.next().and_then(|s| s.parse().ok()).filter(|m: &f64| *m > 0.0).unwrap_or_else(|| usage());
+                sdc = Some(crate::sdc::Constraints { clocks: vec![crate::sdc::Clock { name: "clk".into(), period: 1000.0 / mhz, port: None }], ..Default::default() });
+            }
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "--no-timing-driven" => timing_driven = false,
             "--pcf" => pcf = a.next(),
@@ -170,6 +192,9 @@ pub fn main(all: Vec<String>) {
     if files.is_empty() { usage(); }
     let tech = crate::pdk::by_name(&pdk_name).unwrap_or_else(|e| { eprintln!("--pdk: {}", e); std::process::exit(2) });
     crate::pdk::set_tech(Some(tech.clone()));
+    // the target clock (the first constrained one) for nextpnr and the FPGA timing report
+    let target = sdc.as_ref().and_then(|c| c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| k.period));
+    crate::sdc::set(sdc);
 
     let mut parsers = vec![];
     for f in &files {
@@ -286,6 +311,7 @@ pub fn main(all: Vec<String>) {
         println!("asic: clock tree {} buffers ({}), insertion {:.3} ns, skew {:.3} ns; hold: worst slack {:.3} ns, {} delay buffers",
             o.cts.buffers, o.cts.trees.iter().map(|t| format!("{} sinks / {} levels", t.1, t.3)).collect::<Vec<_>>().join(", "), tm.insertion, tm.skew, tm.hold_slack, o.hold_bufs);
         println!("timing: critical path {:.3} ns, Fmax {:.1} MHz ({} endpoints; ideal clock {:.1} MHz, wirelength-only placement {:.1} MHz)", tm.period, tm.fmax, tm.endpoints, o.fmax_ideal, o.fmax_wl);
+        if let Some(s) = &tm.slack { println!("{}", slack_line(s)); }
         if verbose { for s in &tm.path { println!("  {:8.3} {:+7.3}  {}", s.at, s.delay, s.what); } }
     }
 
@@ -314,6 +340,7 @@ pub fn main(all: Vec<String>) {
                 pw.total, pw.freq_mhz, pw.dynamic, pw.static_mw, pw.e_nets + pw.e_clock + pw.e_ram, pw.e_nets, pw.e_clock, pw.e_ram);
             println!("  timing: critical path {:.2} ns, Fmax {:.2} MHz{}", out.timing.period, out.timing.fmax,
                 out.fmax_wl.map(|f| format!(" (wirelength-only pass {:.2} MHz)", f)).unwrap_or_default());
+            if let Some(p) = target { println!("  timing: target {:.3} ns ({:.2} MHz): slack {:+.3} ns, {}", p, 1000.0 / p, p - out.timing.period, if out.timing.period <= p { "met" } else { "VIOLATED" }); }
             if verbose { for st in &out.timing.path { println!("    {:7.3} {:6.3}  {}", st.at, st.delay, st.what); } }
             std::fs::write(&asc_path, &out.asc).unwrap();
             std::fs::write(asc_path.with_extension("pcf"), &out.pcf).unwrap();
@@ -328,6 +355,7 @@ pub fn main(all: Vec<String>) {
         let mut cmd = std::process::Command::new("nextpnr-ice40");
         cmd.arg(format!("--{}", device)).args(["--package", &package, "--json"]).arg(&mapped).arg("--asc").arg(&asc_path);
         match &pcf { Some(p) => { cmd.args(["--pcf", p]); } None => { cmd.arg("--pcf-allow-unconstrained"); } }
+        if let Some(p) = target { cmd.args(["--freq", &format!("{:.3}", 1000.0 / p)]); }
         println!("running {:?}", cmd);
         let out = cmd.output().unwrap_or_else(|e| { eprintln!("cannot run nextpnr-ice40: {}", e); std::process::exit(1) });
         let log = String::from_utf8_lossy(&out.stderr);
@@ -353,6 +381,7 @@ pub fn main(all: Vec<String>) {
         let mut cmd = std::process::Command::new("nextpnr-ecp5");
         cmd.arg(format!("--{}", device)).args(["--package", &package, "--seed", &seed.to_string(), "--json"]).arg(&mapped).arg("--textcfg").arg(&cfg);
         match &lpf { Some(p) => { cmd.args(["--lpf", p]); } None => { cmd.arg("--lpf-allow-unconstrained"); } }
+        if let Some(p) = target { cmd.args(["--freq", &format!("{:.3}", 1000.0 / p)]); }
         println!("running {:?}", cmd);
         let out = cmd.output().unwrap_or_else(|e| { eprintln!("cannot run nextpnr-ecp5: {}", e); std::process::exit(1) });
         let log = String::from_utf8_lossy(&out.stderr);

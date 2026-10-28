@@ -50,6 +50,8 @@ body:not(.basic) #titlebar .tb-group select { max-width: 150px; }
 #capPop p { margin: 6px 0 8px; color: #c5c5c5; }
 #capPop .fixes { display: flex; flex-wrap: wrap; gap: 6px; }
 /* the suggested steps above the editor */
+#synClock { width: 84px; background: #3c3c3c; border: 1px solid #4a4a4a; border-radius: 3px; color: var(--fg); padding: 2px 6px; font-size: 12px; margin-right: 6px; }
+#synClock:disabled { opacity: .6; }
 #guide { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 5px 10px; background: #1f2a36; border-bottom: 1px solid var(--line); font-size: 12px; }
 #guide .lbl { color: var(--dim); margin-right: 2px; }
 #guide .step { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: transparent; border: 1px solid #3c4a5a; border-radius: 4px; padding: 3px 9px; color: var(--fg); cursor: pointer; text-align: left; font: inherit; }

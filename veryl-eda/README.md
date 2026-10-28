@@ -244,6 +244,11 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   gives it the unread net `NO_OUT`), the routing is redone and checked again, up to twelve rounds, a worse routing retried with the diodes elsewhere
   (`VERYL_EDA_ANTENNA_FIX=0` turns it off). `tools/antenna_check.py` recomputes it independently from the GDS in KLayout (the
   real poly over diffusion, merged metal).
+- Timing constraints (v2.35, `src/sdc.rs`): an SDC subset (`create_clock`, `set_input_delay` / `set_output_delay`, `set_false_path` /
+  `set_multicycle_path`, on ports, `all_inputs` / `all_outputs`, wildcards), `--sdc FILE` or `--clock MHZ`. The ASIC STA reports WNS / TNS /
+  failing endpoints (input delays and `-from` exceptions move an input's launch, so propagating one arrival per net stays exact;
+  flip-flops find their clock through the clock pin back to the clock port); the FPGA flows report the slack to the target and give
+  nextpnr `--freq`. The wasm `asic` / `pnr` take `sdc`; the IDE has a target MHz box or the project's `.sdc`.
 - GDSII (v1.7): `--gds OUT.gds` (`src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
   places them (mirrored on the FS rows) and draws the routing, vias, power grid and labelled IO pins on SKY130's layer numbers
   (met1 68/20, via 68/44, ...). Same-net via pads closer than the spacing are joined by small fills, so the metal has no notches.

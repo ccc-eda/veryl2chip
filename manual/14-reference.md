@@ -76,6 +76,8 @@ v2c <子指令> [選項] FILE.veryl...
 | `--def F.def` | DEF |
 | `--gds F.gds` | GDSII（SKY130） |
 | `--spice F.sp` | SPICE 網表（SKY130）：給 KLayout 的 LVS（`tools/lvs_check.py`）、ngspice |
+| `--sdc F.sdc` | 時序約束（SDC 子集）：報告餘裕 WNS / TNS（第 9 章） |
+| `--clock MHZ` | 一個目標時脈套用到全部（`--sdc` 的簡寫）；FPGA 也交給 nextpnr |
 | `--map-only` | 只做元件對應 |
 | `-v` | 關鍵路徑、DRC 違規例子 |
 

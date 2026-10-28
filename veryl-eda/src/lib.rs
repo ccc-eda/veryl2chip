@@ -19,6 +19,7 @@ pub mod pdk;
 pub mod pnr;
 pub mod power;
 pub mod rv;
+pub mod sdc;
 pub mod value;
 
 #[cfg(test)]

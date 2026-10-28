@@ -59,6 +59,8 @@ export class SynthOverlay {
   private edges = true;
   private files: VFile[] = [];
   private pcf: string | undefined;
+  /** timing constraints (SDC text: the project's .sdc, or a target clock) */
+  private sdc: string | undefined;
   private anim = 0;
   private gen = 0;
   private target: 'fpga' | 'asic' = 'fpga';
@@ -96,9 +98,10 @@ export class SynthOverlay {
     this.chips();
   }
 
-  open(files: VFile[], top?: string, pcf?: string, target?: 'fpga' | 'asic', stage?: string): void {
+  open(files: VFile[], top?: string, pcf?: string, target?: 'fpga' | 'asic', stage?: string, sdc?: string): void {
     this.files = files;
     this.pcf = pcf;
+    this.sdc = sdc;
     if (target) this.setTarget(target, false);
     if (stage) this.stage = stage;
     $('synOverlay').classList.remove('hidden');
@@ -166,7 +169,7 @@ export class SynthOverlay {
     try {
       this.note(tr('載入晶片資料庫（IceStorm chipdb-5k，4 MB）…', 'Loading the chip database (IceStorm chipdb-5k, 4 MB)…'));
       await this.core.chipdb();
-      const r = await this.core.call<PnrResult>({ cmd: 'pnr', files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1 });
+      const r = await this.core.call<PnrResult>({ cmd: 'pnr', files: this.files, top: this.res.top, pcf: this.pcf ?? null, seed: 1, sdc: this.sdc ?? null });
       if (gen !== this.gen) return;
       this.pnr = r;
       this.pnrMs = performance.now() - t0;
@@ -184,6 +187,18 @@ export class SynthOverlay {
 
   private pnrMs = 0;
   private synMs = 0;
+
+  /** new timing constraints: place and route and the ASIC flow run again (the synthesis stays) */
+  setSdc(sdc: string | undefined): void {
+    if (sdc === this.sdc) return;
+    this.sdc = sdc;
+    this.gen++;
+    this.pnr = null;
+    this.pnrErr = null;
+    this.asic = null;
+    this.asicErr = null;
+    if (this.res) this.show(this.stage);
+  }
 
   /** the ASIC technology (a change runs the ASIC flow again) */
   setPdk(p: 'vlib' | 'sky130'): void {
@@ -216,7 +231,7 @@ export class SynthOverlay {
       if (gen === this.gen && ASIC.has(this.stage)) this.note(tr(`ASIC 流程中：標準元件對應 → 列式佈局退火 → 全域繞線 → STA…（${((performance.now() - t0) / 1000).toFixed(1)} s）`, `ASIC flow: standard-cell mapping → row placement → global routing → STA… (${((performance.now() - t0) / 1000).toFixed(1)} s)`));
     }, 200);
     try {
-      const r = await this.core.call<AsicResult>({ cmd: 'asic', files: this.files, top: this.res.top, seed: 1, pdk });
+      const r = await this.core.call<AsicResult>({ cmd: 'asic', files: this.files, top: this.res.top, seed: 1, pdk, sdc: this.sdc ?? null });
       if (gen !== this.gen || pdk !== this.pdk) return;
       this.asic = r;
       this.asicMs = performance.now() - t0;
@@ -495,6 +510,8 @@ export class SynthOverlay {
       '',
       tr(`關鍵路徑 ${t.period.toFixed(2)} ns → Fmax ${t.fmax.toFixed(2)} MHz（${t.endpoints} 個端點）；紅線＝關鍵路徑，LC 顏色＝到達時間（綠早紅晚）`,
         `Critical path ${t.period.toFixed(2)} ns → Fmax ${t.fmax.toFixed(2)} MHz (${t.endpoints} endpoints); red = critical path, LC color = arrival time (green early, red late)`),
+      ...(t.target ? [tr(`時序目標 ${(1000 / t.target).toFixed(2)} MHz（週期 ${t.target.toFixed(3)} ns）：餘裕 ${(t.target - t.period >= 0 ? '+' : '') + (t.target - t.period).toFixed(3)} ns，${t.period <= t.target ? '達成' : '未達成'}`,
+        `Target ${(1000 / t.target).toFixed(2)} MHz (period ${t.target.toFixed(3)} ns): slack ${(t.target - t.period >= 0 ? '+' : '') + (t.target - t.period).toFixed(3)} ns, ${t.period <= t.target ? 'met' : 'VIOLATED'}`)] : []),
       tr(`功耗估計（隨機輸入模擬的翻轉率；net 電容 ≈ 5 fF × 負載 + 8 fF × 繞線段，全域時脈網路每拍，block RAM 每次存取 ≈ 24 pJ，靜態 ≈ 75 µA）：在 ${t.fmax.toFixed(1)} MHz 約 ${t.power.total.toFixed(3)} mW（動態 ${t.power.dynamic.toFixed(3)} + 靜態 ${t.power.static.toFixed(3)}；每週期 ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ）`,
         `Power estimate (toggle rates from a random-input simulation; net capacitance ≈ 5 fF × loads + 8 fF × routing segments, the global clock network every cycle, ≈ 24 pJ per block RAM access, static ≈ 75 µA): about ${t.power.total.toFixed(3)} mW at ${t.fmax.toFixed(1)} MHz (dynamic ${t.power.dynamic.toFixed(3)} + static ${t.power.static.toFixed(3)}; ${(t.power.e_nets + t.power.e_clock + t.power.e_ram).toFixed(1)} pJ per cycle)`),
       ...(t.fmax_wl ? [tr(`時序導向：第一輪只看線長 ${t.fmax_wl.toFixed(2)} MHz；再以每條 net 的關鍵度（經過它的最長路徑 / 關鍵路徑）加權重新佈局，繞線時關鍵 net 優先走快的線 → ${t.fmax.toFixed(2)} MHz（取較快的一輪）`,
@@ -691,6 +708,7 @@ export class SynthOverlay {
         `With the clock tree (propagated clock): paths start at the launching flip-flop's clock arrival and check setup against the capturing clock → ${t.fmax.toFixed(1)} MHz; skew ${(t.skew * 1000).toFixed(0)} ps.`),
       tr(`Hold 檢查（最短路徑：最早到達 ≥ 接收時脈 + hold）：最差餘裕 ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `，插入 ${a.cts.hold_bufs} 個延遲 BUF 修正` : '，沒有違規'}。`,
         `Hold check (shortest paths: earliest arrival ≥ capture clock + hold): worst slack ${t.hold_slack.toFixed(3)} ns${a.cts.hold_bufs ? `, fixed by inserting ${a.cts.hold_bufs} delay BUFs` : ', no violations'}.`),
+      ...(t.slack ? [slackText(t.slack)] : []),
     ];
   }
 
@@ -1024,4 +1042,12 @@ function download(name: string, data: string | Uint8Array): void {
 
 function fmtArea(um2: number): string {
   return um2 >= 1e5 ? `${(um2 / 1e6).toFixed(3)} mm²` : `${um2.toFixed(0)} µm²`;
+}
+
+/** the timing constraints' result: per clock its period, WNS / TNS, the failing endpoints */
+function slackText(s: NonNullable<AsicResult['timing']['slack']>): string {
+  const ck = s.clocks.map(c => `${c.name} ${c.period.toFixed(3)} ns (${(1000 / c.period).toFixed(1)} MHz)`).join(', ');
+  const sign = (x: number) => (x >= 0 ? '+' : '') + x.toFixed(3);
+  return tr(`時序約束（${ck || '只有 IO'}）：最差餘裕 WNS ${sign(s.wns)} ns、總負餘裕 TNS ${s.tns.toFixed(3)} ns；${s.checked} 個端點中 ${s.failing} 個未達成${s.failing ? `（最差：${s.worst}）` : '，全部達成'}`,
+    `Timing constraints (${ck || 'IO only'}): worst slack WNS ${sign(s.wns)} ns, total negative slack TNS ${s.tns.toFixed(3)} ns; ${s.failing} of ${s.checked} endpoints failing${s.failing ? ` (worst: ${s.worst})` : ', all met'}`);
 }

@@ -48,6 +48,8 @@ interface Project {
   emuEngine?: 'veryl' | 'riscv';
   /** the suggested steps bar was closed */
   guideOff?: boolean;
+  /** the target clock (MHz) of the synthesis flows, when the project has no .sdc file */
+  clockMhz?: number;
 }
 
 const KEY = 'veryl2chip-ide:';
@@ -168,6 +170,7 @@ function showActive(): void {
   $('boardPane').classList.toggle('hidden', a !== BOARD_TAB);
   $('emuPane').classList.toggle('hidden', a !== EMU_TAB);
   document.body.classList.toggle('tab-flow', a === FLOW_TAB);
+  syncClock();
   if (boardCmd(a) && file(a)) boardFile = a;
   // ▶ runs a script open in a board project on the board
   const onBoard = !!(machineCfg()?.files && boardCmd(a));
@@ -914,13 +917,32 @@ function fillWaveTops(): void {
 
 // ---------------------------------------------------------------- synthesis
 
+/** the timing constraints: the project's .sdc file, else one clock at its target (none: Fmax only) */
+function sdcOf(p: Project): string | undefined {
+  const f = p.files.find(x => x.name.endsWith('.sdc'));
+  if (f) return f.src;
+  return p.clockMhz ? `create_clock -name clk -period ${(1000 / p.clockMhz).toFixed(4)}\n` : undefined;
+}
+
+/** the target clock box: the project's value; off (with a note) when its .sdc file sets the constraints */
+function syncClock(): void {
+  const el = document.getElementById('synClock') as HTMLInputElement | null;
+  if (!el) return;
+  const file = proj.files.find(x => x.name.endsWith('.sdc'));
+  el.disabled = !!file;
+  el.value = file ? '' : proj.clockMhz ? String(proj.clockMhz) : '';
+  el.placeholder = file ? file.name : tr('目標 MHz', 'target MHz');
+  el.title = file ? tr(`時序約束來自 ${file.name}`, `The timing constraints come from ${file.name}`)
+    : tr('時序目標（MHz）：合成流程以它報告餘裕（slack）；空白＝只算 Fmax。也可以在專案裡加一個 .sdc 檔', 'Target clock (MHz): the flows report the slack against it; empty = Fmax only. A project .sdc file can give full constraints');
+}
+
 function runSynth(stage?: string): void {
   if (!synth) return;
   const top = synthTop();
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能合成）', 'No synthesizable module (#[test] modules cannot be synthesized)')); return; }
   if (machineCfg()?.top === top) { alert(tr(`${top} 是模擬機（machine.json），太大不能合成：請選它裡面的模組，或按「🖥 模擬機」`, `${top} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "🖥 Emulator"`)); return; }
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
-  const key = JSON.stringify([files, top, pcfOf(proj)]);
+  const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
   openFile(FLOW_TAB);
   // the chip views need the room on small screens; the panel comes back with the next run
   if (window.innerHeight < 900) $('panel').classList.add('collapsed');
@@ -928,7 +950,7 @@ function runSynth(stage?: string): void {
   if (key !== synthKey || !synth.synthesized) {
     synthKey = key;
     const target = stage && isAsicStage(stage) ? 'asic' : stage && isFpgaStage(stage) ? 'fpga' : undefined;
-    synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage);
+    synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage, sdcOf(proj));
   } else if (stage) synth.showStage(stage);
 }
 
@@ -1665,6 +1687,14 @@ function wire(): void {
   $('cmdRun').onclick = () => runKey();
   $('cmdVerify').onclick = () => act('verify', $('cmdVerify'));
   $('mainBtn').onclick = () => mainClick();
+  const clockEl = document.getElementById('synClock') as HTMLInputElement | null;
+  if (clockEl) clockEl.onchange = () => {
+    const v = parseFloat(clockEl.value);
+    proj.clockMhz = v > 0 ? v : undefined;
+    persist();
+    synthKey = JSON.stringify([proj.files.filter(f => f.name.endsWith('.veryl')), synthTop(), pcfOf(proj), sdcOf(proj)]);
+    synth?.setSdc(sdcOf(proj));
+  };
   $('mainMore').onclick = () => $('mainMenu').classList.contains('hidden') ? showMenu() : hideMenu();
   $('modeBtn').onclick = () => setMode(uiMode === 'basic' ? 'full' : 'basic');
   $('cmdBoard').onclick = () => act('board', $('cmdBoard'));

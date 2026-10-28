@@ -54,7 +54,8 @@ ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWa
 | v2.31 | 2026-10-28 | `a3083b9` | 2.31.0：切換專案不再掉回歡迎頁 | |
 | v2.32 | 2026-10-28 | `6d99a08` | 2.32.0：開發板範例：俄羅斯方塊 | |
 | v2.33 | 2026-10-28 | `71f5f97` | 2.33.0：LVS、SPICE 網表、KLayout 獨立 LVS | |
-| v2.34 | 2026-10-28 | （本版） | 2.34.0：天線規則與 diode 修正，KLayout 獨立天線檢查 | |
+| v2.34 | 2026-10-28 | `2ab6b2c` | 2.34.0：天線規則與 diode 修正，KLayout 獨立天線檢查 | |
+| v2.35 | 2026-10-28 | （本版） | 2.35.0：時序約束（SDC 子集）與餘裕報告 | |
 
 ---
 
@@ -653,6 +654,21 @@ v1.5 到 v2.0 的目標是讓同一套流程能用**真實、公開**的 PDK—�
   KLayout 找到幾百塊，確認它真的在量。
 - 測試：`antenna_pwl`（PWL 內插、厚度、腳位面積）、`antenna_diodes_fix_ram`（不修有違規、修了 0 個且 DRC / LVS 乾淨）、
   `asic_flow_legal_sky130` 要求 0；test.sh 每個 SKY130 設計檢查 `antenna` 一行與 KLayout 的天線檢查。網頁沒有重建。
+
+### v2.35：時序約束
+
+- `src/sdc.rs`：SDC 的常用子集（`create_clock` 有腳或虛擬、`set_input_delay` / `set_output_delay`、`set_false_path` / `set_multicycle_path`
+  的 `-from` / `-to`，物件是腳位、bus 名、`name[k]`、`all_inputs` / `all_outputs`、萬用字元 `*`）；不支援的指令報錯（例如 `set_max_delay`）。
+  測試時抓到一個真的錯：`i_b[1]` 被當成指令方括號切開，改成名字裡的 `[` 屬於名字。
+- ASIC STA（`asic::sta::analyze`，`sdc::current()`）：輸入的出發時間加上輸入延遲；false path 的輸入不出發、multicycle 的輸入早 n − 1 個週期出發
+  ——每條 net 只傳一個最晚到達時間，這兩種例外仍是精確的。正反器依時脈腳經過時脈樹的緩衝器追回 `create_clock` 的腳，用那個週期；輸出腳減去
+  輸出延遲、multicycle 給 n 個週期、false path 不檢查。報告 WNS、TNS、沒達成的端點數與最差的端點。暫存器之間的例外做不到：對應後的網表沒有暫存器名稱。
+- 手算對照：Adder（組合邏輯）5 ns、輸入延遲 2、輸出延遲 1 → +0.744（路徑 1.256 ns，約束改變了時序導向佈局的結果 6 ps）；`--clock 2000` →
+  −0.750 = 0.5 − 1.250；UartLoop 在 SKY130 2 ns → −1.752 = 2 − 3.752、300 MHz → −0.446。
+- CLI `--sdc FILE` / `--clock MHZ`；FPGA（自己的 P&R）報告對目標的餘裕，nextpnr（iCE40、ECP5）拿到 `--freq`。wasm `asic` / `pnr` 接受 `sdc`，
+  回傳 `timing.slack` / `timing.target`；IDE 合成流程分頁的目標 MHz 方框（`Project.clockMhz`）或專案的 `.sdc` 檔，STA 階段多一行餘裕。
+- 測試：`sdc::tests::parse_subset`、`sdc_slack`（輸入 / 輸出延遲、false path、multicycle 的關係）、npm test 的 `sdc`（wasm 與 CLI 同樣的關係、
+  壞的 `.sdc` 報錯）。網頁重建。
 
 ---
 

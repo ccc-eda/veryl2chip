@@ -104,11 +104,28 @@ fn asic_gds(_v: &Value) -> R<Value> {
     })
 }
 
+/// the timing constraints of a request (`sdc`: SDC text), for the length of `f`
+fn with_sdc<T>(v: &Value, f: impl FnOnce() -> R<T>) -> R<T> {
+    let c = match v.get("sdc").and_then(|s| s.as_str()).filter(|s| !s.trim().is_empty()) {
+        Some(t) => Some(veryl_eda::sdc::parse(t).map_err(|e| format!("timing constraints (.sdc): {}", e))?),
+        None => None,
+    };
+    veryl_eda::sdc::set(c);
+    let r = f();
+    veryl_eda::sdc::set(None);
+    r
+}
+
+/// the first clock's period (the FPGA's target), when there are constraints
+fn target_period() -> Option<f64> {
+    veryl_eda::sdc::current().and_then(|c| c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| k.period))
+}
+
 /// the ASIC flow on the vlib standard cells, or a PDK's (`pdk`: "sky130")
 fn asic(v: &Value) -> R<Value> {
     let pdk = v.get("pdk").and_then(|p| p.as_str()).unwrap_or("vlib").to_string();
     let tech = veryl_eda::pdk::by_name(&pdk)?;
-    veryl_eda::pdk::with_tech(tech, || asic_in(v))
+    veryl_eda::pdk::with_tech(tech, || with_sdc(v, || asic_in(v)))
 }
 
 fn asic_in(v: &Value) -> R<Value> {
@@ -210,13 +227,18 @@ fn asic_in(v: &Value) -> R<Value> {
             "buffers": o.cts.buffers, "hold_bufs": o.hold_bufs,
             "trees": o.cts.trees.iter().map(|(b, sinks, bufs, levels)| json!({ "net": names.get(b).cloned().unwrap_or_else(|| "?".into()), "sinks": sinks, "buffers": bufs, "levels": levels })).collect::<Vec<_>>(),
         },
-        "timing": { "period": tm.period, "fmax": tm.fmax, "fmax_wl": o.fmax_wl, "fmax_ideal": o.fmax_ideal, "insertion": tm.insertion, "skew": tm.skew, "hold_slack": tm.hold_slack, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>() },
+        "timing": { "period": tm.period, "fmax": tm.fmax, "fmax_wl": o.fmax_wl, "fmax_ideal": o.fmax_ideal, "insertion": tm.insertion, "skew": tm.skew, "hold_slack": tm.hold_slack, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>(),
+            "slack": tm.slack.as_ref().map(|s| json!({ "wns": s.wns, "tns": s.tns, "failing": s.failing, "checked": s.checked, "worst": s.worst,
+                "clocks": s.clocks.iter().map(|(n, p, e)| json!({ "name": n, "period": p, "endpoints": e })).collect::<Vec<_>>() })) },
+        "antenna": { "diodes": o.diodes },
         "verilog": verilog,
         "def": asic::def(&o),
     }))
 }
 
-fn pnr(v: &Value) -> R<Value> {
+fn pnr(v: &Value) -> R<Value> { with_sdc(v, || pnr_in(v)) }
+
+fn pnr_in(v: &Value) -> R<Value> {
     let (top, lib_out) = synth_netlists(v)?;
     let (st, mapped) = lib_out;
     let pcf = v.get("pcf").and_then(|p| p.as_str()).map(veryl_eda::pnr::parse_pcf).unwrap_or_default();
@@ -316,6 +338,7 @@ fn pnr(v: &Value) -> R<Value> {
             "globals": out.globals.iter().map(|(n, g)| json!({ "net": n, "glb": g })).collect::<Vec<_>>(),
             "timing": {
                 "period": out.timing.period, "fmax": out.timing.fmax, "endpoints": out.timing.endpoints,
+                "target": target_period(),
                 "path": out.timing.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>(),
                 "crit_lcs": out.timing.crit_lcs,
                 "fmax_wl": out.fmax_wl,

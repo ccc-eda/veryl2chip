@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "veryl2chip-emu"
-version = "2.34.0"
+version = "2.35.0"
 dependencies = [
  "veryl-parser",
  "veryl2chip-sim",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "veryl2chip-sim"
-version = "2.34.0"
+version = "2.35.0"
 dependencies = [
  "veryl-parser",
 ]
